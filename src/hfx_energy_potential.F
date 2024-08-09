@@ -88,8 +88,18 @@ MODULE hfx_energy_potential
                                    qs_environment_type
    USE qs_ks_types, ONLY: get_ks_env, &
                           qs_ks_env_type
-   USE t_c_g0, ONLY: init
+   USE t_c_g0, ONLY: init, C0
    USE util, ONLY: sort
+
+   !!!!!!!!!!!!!!!!!!!!!!!
+   
+   use libGint, only : libgint_init,libgint_set_Potential_Truncated, &
+                       libgint_set_P, libgint_set_P_polarized, libgint_set_K, libgint_set_K_polarized, &
+                       libgint_get_K, libgint_get_K_polarized, libgint_set_Atom, libgint_set_Atom_L, libgint_set_cell, &
+                       libgint_set_max_n_cell, libgint_add_prm, libgint_add_shell, libgint_add_cell, libgint_add_qrt, &
+                       libgint_add_qrtt, libgint_add_set, libgint_memory_needed, libgint_dispatch
+
+   !!!!!!!!!!!!!!!!!!!!!!!
 
 !$ USE OMP_LIB, ONLY: omp_get_max_threads, omp_get_thread_num, omp_get_num_threads
 
@@ -153,7 +163,7 @@ CONTAINS
       INTEGER :: act_atomic_block_offset, act_set_offset, atomic_offset_ac, atomic_offset_ad, &
                  atomic_offset_bc, atomic_offset_bd, bin, bits_max_val, buffer_left, buffer_size, &
                  buffer_start, cache_size, current_counter, handle, handle_bin, handle_dist_ks, &
-                 handle_getP, handle_load, handle_main, i, i_list_ij, i_list_kl, i_set_list_ij, &
+                 handle_getP, handle_load, handle_main, i, l, inla, nla, i_list_ij, i_list_kl, i_set_list_ij, &
                  i_set_list_ij_start, i_set_list_ij_stop, i_set_list_kl, i_set_list_kl_start, &
                  i_set_list_kl_stop, i_thread, iatom, iatom_block, iatom_end, iatom_start, ikind, img, &
                  iset, iw, j, jatom, jatom_block, jatom_end, jatom_start, jkind, jset, katom, katom_block, &
@@ -176,7 +186,7 @@ CONTAINS
                         tmp_i8(8)
       INTEGER(int_8), ALLOCATABLE, DIMENSION(:)          :: tmp_task_list_cost
       INTEGER, ALLOCATABLE, DIMENSION(:)                 :: kind_of, last_sgf_global, nimages, &
-                                                            tmp_index
+                                                            tmp_index, first_set_of_atom
       INTEGER, DIMENSION(:), POINTER :: la_max, la_min, lb_max, lb_min, lc_max, lc_min, ld_max, &
                                         ld_min, npgfa, npgfb, npgfc, npgfd, nsgfa, nsgfb, nsgfc, nsgfd, shm_block_offset
       INTEGER, DIMENSION(:, :), POINTER :: first_sgfb, nsgfl_a, nsgfl_b, nsgfl_c, nsgfl_d, &
@@ -201,11 +211,12 @@ CONTAINS
       REAL(dp), DIMENSION(:), POINTER                    :: p_work
       REAL(dp), DIMENSION(:, :), POINTER :: full_density_alpha, full_density_beta, full_ks_alpha, &
                                             full_ks_beta, max_contraction, ptr_p_1, ptr_p_2, ptr_p_3, ptr_p_4, shm_pmax_atom, &
-                                            shm_pmax_block, sphi_b, zeta, zetb, zetc, zetd
+                                            shm_pmax_block, sphi_b, zeta, zetb, zetc, zetd, full_ks_alpha_from_gpu
       REAL(dp), DIMENSION(:, :, :), POINTER              :: sphi_a_ext_set, sphi_b_ext_set, &
                                                             sphi_c_ext_set, sphi_d_ext_set
       REAL(dp), DIMENSION(:, :, :, :), POINTER           :: sphi_a_ext, sphi_b_ext, sphi_c_ext, &
                                                             sphi_d_ext
+      REAL(dp), DIMENSION(:, :, : ), POINTER             :: gcc
       REAL(KIND=dp)                                      :: coeffs_kind_max0
       TYPE(atomic_kind_type), DIMENSION(:), POINTER      :: atomic_kind_set
       TYPE(cell_type), POINTER                           :: cell
@@ -245,6 +256,17 @@ CONTAINS
          DIMENSION(:)                                    :: set_list_ij, set_list_kl
       TYPE(particle_type), DIMENSION(:), POINTER         :: particle_set
       TYPE(qs_ks_env_type), POINTER                      :: ks_env
+
+      logical, save :: first_call = .true.
+      integer :: offset_ac_L_set, offset_ad_L_set, offset_bc_L_set, offset_bd_L_set
+      integer :: la,lb,lc,ld, ld_bd_set,ld_bc_set,ld_ad_set,ld_ac_set,inlb,inlc,inld
+      integer :: nlb,nlc,nld
+      logical(1) :: Tbd,Tbc,Tad,Tac ! logical(1) for C-compatibility
+      logical :: screened
+      integer :: s_offset_a_l,s_offset_b_l,s_offset_c_l,s_offset_d_l
+      integer :: s_offset_a,s_offset_b,s_offset_c,s_offset_d,s_offset_ac,s_offset_ad,s_offset_bc,s_offset_bd
+      real(dp) :: max_abs_delta_KS
+
 
       NULLIFY (dft_control, matrix_ks_aux_fit_hfx)
 
@@ -324,6 +346,7 @@ CONTAINS
 
 !$OMP PARALLEL DEFAULT(OMP_DEFAULT_NONE_WITH_OOP) &
 !$OMP SHARED(qs_env,&
+!$OMP                                  first_call,&
 !$OMP                                  x_data,&
 !$OMP                                  ks_matrix,&
 !$OMP                                  ehfx,&
@@ -339,6 +362,7 @@ CONTAINS
 !$OMP                                  nso,&
 !$OMP                                  nco,&
 !$OMP                                  full_ks_alpha,&
+!$OMP                                  full_ks_alpha_from_gpu,&
 !$OMP                                  full_ks_beta,&
 !$OMP                                  n_threads,&
 !$OMP                                  full_density_alpha,&
@@ -374,6 +398,7 @@ CONTAINS
 !$OMP                                  shm_pmax_block,&
 !$OMP                                  shm_atomic_pair_list,&
 !$OMP                                  shm_mem_compression_counter,&
+!$OMP                                  C0,&
 !$OMP                                  do_print_load_balance_info) &
 !$OMP PRIVATE(ln_10,i_thread,actual_x_data,do_periodic,screening_parameter,potential_parameter,&
 !$OMP         general_parameter,load_balance_parameter,memory_parameter,cache_size,bits_max_val,&
@@ -404,7 +429,11 @@ CONTAINS
 !$OMP         tmp_screen_pgf1,tmp_screen_pgf2,cartesian_estimate,bintime_stop,iw,memsize_after,storage_counter_integrals,&
 !$OMP         stor_count_int_disk,stor_count_max_val,ene_x_aa,ene_x_bb,mb_size_p,mb_size_f,mb_size_buffers,afac,ene_x_aa_diag,&
 !$OMP         ene_x_bb_diag,act_atomic_block_offset,act_set_offset,j,handle_dist_ks,tmp_i8,tmp_i4,dft_control,&
-!$OMP         etmp,nkimages,img,bin,eps_scaling_str,eps_schwarz_min_str)
+!$OMP         etmp,nkimages,img,bin,eps_scaling_str,eps_schwarz_min_str,i,inla,nla,gcc,first_set_of_atom,max_abs_delta_KS, &
+!$OMP         offset_ac_L_set, offset_ad_L_set, offset_bc_L_set, offset_bd_L_set,inlb,inlc,inld, &
+!$OMP         la,lb,lc,ld, ld_bd_set,ld_bc_set,ld_ad_set,ld_ac_set,Tbd,Tbc,Tad,Tac,nlb,nlc,nld,screened, &
+!$OMP         s_offset_a_l,s_offset_b_l,s_offset_c_l,s_offset_d_l, &
+!$OMP         s_offset_a,s_offset_b,s_offset_c,s_offset_d,s_offset_ac,s_offset_ad,s_offset_bc,s_offset_bd )
 
       ln_10 = LOG(10.0_dp)
       i_thread = 0
@@ -415,6 +444,7 @@ CONTAINS
       shm_master_x_data => x_data(irep, 1)
 !$OMP END MASTER
 !$OMP BARRIER
+
 
       do_periodic = actual_x_data%periodic_parameter%do_periodic
 
@@ -737,6 +767,8 @@ CONTAINS
          END IF
          CALL timestop(handle_getP)
 
+
+
          !! Calculate the max values of the density matrix actual_pmax stores the data from the actual density matrix
          !! and x_data%initial_p stores the same for the initial guess. The initial guess is updated only in the case of
          !! a changed geometry
@@ -805,13 +837,14 @@ CONTAINS
          END IF
       END IF
 
+
+!$OMP END MASTER
+!$OMP BARRIER
+
       !! Initialize schwarz screening matrices for near field estimates and boxing screening matrices
       !! for far field estimates. The update is only performed if the geomtry of the system changed.
       !! If the system is periodic, then the corresponding routines are called and some variables
       !! are initialized
-
-!$OMP END MASTER
-!$OMP BARRIER
 
       IF (.NOT. shm_master_x_data%screen_funct_is_initialized) THEN
          CALL calc_pair_dist_radii(qs_env, basis_parameter, &
@@ -873,6 +906,77 @@ CONTAINS
       CALL timestop(handle_load)
 !$OMP END MASTER
 !$OMP BARRIER
+
+      !!!
+
+      if (first_call) then
+         write(*,*) " FIRST CALL "
+         call libgint_init()
+         potential_parameter = actual_x_data%potential_parameter
+         if (potential_parameter%potential_type == do_potential_truncated .or. &
+             potential_parameter%potential_type == do_potential_mix_cl_trunc) then
+            write (*,*) " Setting TruncCol: Rcut = ", potential_parameter%cutoff_radius
+            write (*,*) " C0 = " , shape(C0)
+            write (*,*) " C0 = " , C0(1,1)
+            do iatom=1, 207
+               write (*,*) iatom, C0(:,iatom)
+            end do
+            call libgint_set_Potential_Truncated( potential_parameter%cutoff_radius, C0(:,:) )
+         end if
+         first_call = .false.
+
+         do iatom=1, size(full_density_alpha, 1)
+            full_density_alpha(iatom,1) = 1.0_dp * iatom / size(full_density_alpha, 1)
+         end do
+
+      else
+         write(*,*) " NOT FIRST CALL "
+      end if
+
+
+      write (*,*) " CAll to set P K "
+      call libgint_set_P( full_density_alpha(:, 1) )
+      call libgint_set_K( full_ks_alpha(:, 1), fac )
+
+      jset = 1
+      allocate(first_set_of_atom(natom) )
+      do iatom = 1, natom
+         ikind = kind_of(iatom)
+         ra = particle_set(iatom)%r(:)
+         nseta = basis_parameter(ikind)%nset
+         npgfa => basis_parameter(ikind)%npgf
+         la_min => basis_parameter(ikind)%lmin
+         la_max => basis_parameter(ikind)%lmax
+         zeta => basis_parameter(ikind)%zet
+         nsgfa => basis_parameter(ikind)%nsgf
+         nsgfl_a => basis_parameter(ikind)%nsgfl
+         gcc => basis_parameter(ikind)%gcc
+         first_set_of_atom(iatom) = jset
+         do iset = 1, nseta
+!            ncoset(la_max(iset))
+!            nsgfa(iset)
+            call libgint_set_Atom( jset-1 , ra, zeta(:,iset), npgfa(iset) )
+            inla = 1
+            do l = la_min( iset ) , la_max(iset)
+               nla = nsgfl_a(l,iset)
+
+               write (*,*) " CP2K setting atom set L ", jset ,l, nla,  gcc(1:npgfa(iset),inla:inla+nla-1,iset)
+               write (*,*) "    note sphi is : " ,  basis_parameter(ikind)%sphi_ext(:, :, :, :)
+               call libgint_set_Atom_L( jset-1, l, nla, gcc(1:npgfa(iset),inla:inla+nla-1,iset) )
+
+               inla = inla + nla
+            end do
+            jset = jset + 1
+         
+         end do 
+      end do
+
+
+      call libgint_set_max_n_cell( 27 )
+      write(*,*) " PK set "
+
+      !!!
+
 
       !! Start caluclating integrals of the form (ab|cd) or (ij|kl)
       !! In order to do so, there is a main four-loop structure that takes into account the two symmetries
@@ -1539,7 +1643,149 @@ CONTAINS
                                          sphi_c_ext_set, &
                                          sphi_d_ext_set, &
                                          ee_work, ee_work2, ee_buffer1, ee_buffer2, ee_primitives_tmp, &
-                                         nimages, do_periodic, p_work)
+                                         nimages, do_periodic, p_work,screened)
+                           !!!
+                           ! WRONG ! add shell and cell should be inside a double loop over R1 (AB->AB+R1) and R2(CD+R2)
+                           if ( .not. screened ) then
+                              call libgint_add_shell( first_set_of_atom(iatom)+iset-2, first_set_of_atom(jatom)+jset-2, &
+                                                      first_set_of_atom(katom)+kset-2, first_set_of_atom(latom)+lset-2, 0, 0 )
+                              call libgint_add_cell( )
+                        
+
+                              ! CHANGE! 
+                              !
+                              if ( jatom >= latom ) then 
+                                offset_bd_L_set = offset_bd_set(jset, lset) + atomic_offset_bd - 2
+                                ld_bd_set = nsgfb(jset)
+                                Tbd = .false.
+                              else
+                                offset_bd_L_set = offset_bd_set(lset, jset) + atomic_offset_bd - 2
+                                ld_bd_set = nsgfd(lset)
+                                Tbd = .true.
+                              end if
+
+                              if ( jatom >= katom ) then 
+                                offset_bc_L_set = offset_bc_set(jset, kset) + atomic_offset_bc - 2
+                                ld_bc_set = nsgfb(jset)
+                                Tbc = .false.
+                              else
+                                offset_bc_L_set = offset_bc_set(kset, jset) + atomic_offset_bc - 2
+                                ld_bc_set = nsgfc(kset)
+                                Tbc = .true.
+                              end if
+
+                              if ( iatom >= latom ) then 
+                                offset_ad_L_set = offset_ad_set(iset, lset) + atomic_offset_ad - 2
+                                ld_ad_set = nsgfa(iset)
+                                Tad = .false.
+                              else
+                                offset_ad_L_set = offset_ad_set(lset, iset) + atomic_offset_ad - 2
+                                ld_ad_set = nsgfd(lset)
+                                Tad = .true.
+                              end if
+
+                              if ( iatom >= katom ) then 
+                                offset_ac_L_set = offset_ac_set(iset, kset) + atomic_offset_ac - 2
+                                ld_ac_set = nsgfa(iset)
+                                Tac = .false.
+                              else
+                                offset_ac_L_set = offset_ac_set(kset, iset) + atomic_offset_ac - 2
+                                ld_ac_set = nsgfc(kset)
+                                Tac = .true.
+                              end if
+
+                              write (*,*) "atoms:" , iatom,jatom,katom,latom
+                              write (*,*) " offsets ac ad bc bd: ", offset_ac_L_set, &
+                                                      offset_ad_L_set, offset_bc_L_set, offset_bd_L_set
+                              write (*,*) " ld      ac ad bc bd: ",       ld_ac_set, &
+                                                       ld_ad_set,      ld_bc_set,       ld_bd_set
+
+                              ! MEGACHANGE! !!
+
+                              !! (Hyp)   
+                              ! Let a be a set composed of 2 s and 1 p function.
+                              ! Let c be a set composed of 1 s and 2 p function.
+                              ! (1) The density matrix for the ac pair is a 5 x 7 matrix organized as 
+                              !
+                              !    / -------------------------------------------------------------------------------------------------------------------\
+                              !    |   a_s1_0@c_s1_0  || a_s1_0@c_p1_0 | a_s1_0@c_p1_1 | a_s1_0@c_p1_2 || a_s1_0@c_p2_0 | a_s1_0@c_p2_1 | a_s1_0@c_p2_2 |
+                              !    |   a_s2_0@c_s1_0  || a_s2_0@c_p1_0 | a_s2_0@c_p1_1 | a_s2_0@c_p1_2 || a_s2_0@c_p2_0 | a_s2_0@c_p2_1 | a_s2_0@c_p2_2 |
+                              !    |   a_p1_0@c_s1_0  || a_p1_0@c_p1_0 | a_p1_0@c_p1_1 | a_p1_0@c_p1_2 || a_p1_0@c_p2_0 | a_p1_0@c_p2_1 | a_p1_0@c_p2_2 |
+                              !    |   a_p1_1@c_s1_0  || a_p1_1@c_p1_0 | a_p1_1@c_p1_1 | a_p1_1@c_p1_2 || a_p1_1@c_p2_0 | a_p1_1@c_p2_1 | a_p1_1@c_p2_2 |
+                              !    |   a_p1_2@c_s1_0  || a_p1_2@c_p1_0 | a_p1_2@c_p1_1 | a_p1_2@c_p1_2 || a_p1_2@c_p2_0 | a_p1_2@c_p2_1 | a_p1_2@c_p2_2 |
+                              !    \ -------------------------------------------------------------------------------------------------------------------/
+                              !    
+                              ! (2) This matrix is contigous in memory, in fortran column major order
+
+                              s_offset_a_l = 0
+                              DO la = la_min(iset), la_max(iset)
+                                 nla = nsgfl_a(la,iset)
+                                 s_offset_b_l = 0
+                                 DO lb = lb_min(jset), lb_max(jset)
+                                    nlb = nsgfl_b(lb,jset)
+                                    s_offset_c_l = 0
+                                    DO lc = lc_min(kset), lc_max(kset)
+                                       nlc = nsgfl_c(lc,kset)
+                                       s_offset_d_l = 0
+                                       ld_loop: DO ld = ld_min(lset), ld_max(lset)
+                                          nld = nsgfl_d(ld,lset)
+                                          call libgint_add_qrt(la,lb,lc,ld,  nla,nlb,nlc,nld )                                         
+
+                                          do inla=1, nla
+                                             s_offset_a = s_offset_a_l + (inla-1) * ( 2 * la + 1 )
+                                             do inlb=1, nlb
+                                                s_offset_b = s_offset_b_l + (inlb-1) * ( 2 * lb + 1 )
+                                                do inlc=1, nlc
+                                                   s_offset_c = s_offset_c_l + (inlc-1) * ( 2 * lc + 1 )
+                                                   do inld=1, nld
+                                                      s_offset_d = s_offset_d_l + (inld-1) * ( 2 * ld + 1 )
+
+                                                      if (.not. Tac) then
+                                                         s_offset_ac = offset_ac_L_set + s_offset_c * ld_ac_set + s_offset_a
+                                                      else
+                                                         s_offset_ac = offset_ac_L_set + s_offset_a * ld_ac_set + s_offset_c
+                                                      end if
+
+                                                      if (.not. Tad) then
+                                                         s_offset_ad = offset_ad_L_set + s_offset_d * ld_ad_set + s_offset_a
+                                                      else
+                                                         s_offset_ad = offset_ad_L_set + s_offset_a * ld_ad_set + s_offset_d
+                                                      end if
+
+                                                      if (.not. Tbc) then
+                                                         s_offset_bc = offset_bc_L_set + s_offset_c * ld_bc_set + s_offset_b
+                                                      else
+                                                         s_offset_bc = offset_bc_L_set + s_offset_b * ld_bc_set + s_offset_c
+                                                      end if
+
+                                                      if (.not. Tbd) then
+                                                         s_offset_bd = offset_bd_L_set + s_offset_d * ld_bd_set + s_offset_b
+                                                      else
+                                                         s_offset_bd = offset_bd_L_set + s_offset_b * ld_bd_set + s_offset_d
+                                                      end if
+
+                                                      write (*,*) " Adding qrtt ", la,lb,lc,ld, inla-1,inlb-1,inlc-1,inld-1 
+                                                      call libgint_add_qrtt( symm_fac, &
+                                                            la,lb,lc,ld, inla-1,inlb-1,inlc-1,inld-1, &
+                                                            ld_ac_set, ld_ad_set,ld_bc_set,ld_bd_set, &
+                                                            s_offset_ac,s_offset_ad,s_offset_bc,s_offset_bd,&
+                                                            Tac,Tad,Tbc,Tbd )
+                                                   end do
+                                                end do
+                                             end do
+                                          end do
+                                          s_offset_d_l = s_offset_d_l + nld * ( 2 * ld + 1 )
+                                       end do ld_loop
+                                       s_offset_c_l = s_offset_c_l + nlc * ( 2 * lc + 1 )
+                                    end do
+                                    s_offset_b_l = s_offset_b_l + nlb * ( 2 * lb + 1 )
+                                 end do
+                                 s_offset_a_l = s_offset_a_l + nla * ( 2 * la + 1 )
+                              end do
+
+                              call libgint_add_set()
+                              !!!!
+                           end if ! if not screened
 
                            nints = nsgfa(iset)*nsgfb(jset)*nsgfc(kset)*nsgfd(lset)
                            neris_total = neris_total + nints
@@ -1671,6 +1917,7 @@ CONTAINS
                         END IF
                         IF (.NOT. is_anti_symmetric) THEN
                            !! Update Kohn-Sham matrix
+!                           write (*,*) " Adding ", primitive_integrals, " to K "
                            CALL update_fock_matrix( &
                               nsgfa(iset), nsgfb(jset), nsgfc(kset), nsgfd(lset), &
                               fac, symm_fac, full_density_alpha(:, 1), full_ks_alpha(:, 1), &
@@ -1729,6 +1976,32 @@ CONTAINS
          CALL timestop(handle_bin)
 !$OMP END MASTER
       END DO !bin
+
+      !!!
+
+      call libgint_dispatch()
+      write (*,*) " Dispatch returned "
+
+      write (*,*) " P from CPU calculations before symmetrization " 
+      write (*,*) full_density_alpha(:,1)
+
+      write (*,*) " K from CPU calculations before symmetrization " 
+      allocate( full_ks_alpha_from_gpu, Mold = full_ks_alpha )
+      call libgint_get_K( full_ks_alpha_from_gpu(:,1) )
+      max_abs_delta_KS = 0.0_dp
+      do  inla=1, size(full_ks_alpha)
+         write (*,*) inla, full_ks_alpha(inla,1), full_ks_alpha_from_gpu(inla,1), &
+                           full_ks_alpha(inla,1) - full_ks_alpha_from_gpu(inla,1)
+         max_abs_delta_KS = max( max_abs_delta_ks, abs(  full_ks_alpha(inla,1) - full_ks_alpha_from_gpu(inla,1) ) )
+      end do
+      write(*,*) " ------------------------------------ "
+      write(*,*) " |                                   |" 
+      write(*,*) " |         ", max_abs_delta_KS
+      write(*,*) " |                                   |"
+      write(*,*) " ------------------------------------ "
+
+      !!!
+
 
 !$OMP MASTER
       logger => cp_get_default_logger()
@@ -2260,7 +2533,7 @@ CONTAINS
                        nsgfl_d, &
                        sphi_a_ext, sphi_b_ext, sphi_c_ext, sphi_d_ext, &
                        ee_work, ee_work2, ee_buffer1, ee_buffer2, ee_primitives_tmp, &
-                       nimages, do_periodic, p_work)
+                       nimages, do_periodic, p_work, screened )
 
       TYPE(cp_libint_t)                                  :: lib
       REAL(dp), INTENT(IN)                               :: ra(3), rb(3), rc(3), rd(3)
@@ -2301,6 +2574,9 @@ CONTAINS
                  nsob, nsoc, nsod, s_offset_a, s_offset_b, s_offset_c, s_offset_d
       REAL(dp)                                           :: EtaInv, tmp_max, ZetaInv
 
+      integer :: pgf_index
+      logical, intent(out) :: screened
+
       CALL build_pair_list_pgf(npgfa, npgfb, pgf_list_ij, zeta, zetb, screen1, screen2, &
                                pgf1, R1_pgf, log10_pmax, log10_eps_schwarz, ra, rb, &
                                nelements_ij, &
@@ -2314,6 +2590,11 @@ CONTAINS
       neris_tmp = 0
       primitive_integrals = 0.0_dp
       max_l = la_max + lb_max + lc_max + ld_max
+
+      screened = .true.
+
+      write (*,*) " CP2K C4 L0 adding ", nelements_ij, " x ", nelements_kl, " gaussian quartets to libGint " 
+
       DO list_ij = 1, nelements_ij
          ZetaInv = pgf_list_ij(list_ij)%ZetaInv
          ipgf = pgf_list_ij(list_ij)%ipgf
@@ -2324,9 +2605,25 @@ CONTAINS
             kpgf = pgf_list_kl(list_kl)%ipgf
             lpgf = pgf_list_kl(list_kl)%jpgf
 
+            write (*,*) " CP2K C4 L1 ", list_ij, " x ", list_kl, " are adding ", &
+                                       pgf_list_ij(list_ij)%nimages, "x", pgf_list_kl(list_kl)%nimages, " cells to libGint " 
+
             CALL build_pgf_product_list(pgf_list_ij(list_ij), pgf_list_kl(list_kl), pgf_product_list, &
                                         nproducts, log10_pmax, log10_eps_schwarz, neighbor_cells, cell, &
                                         potential_parameter, max_l, do_periodic)
+
+            !!!!
+!            call libgint_add_prm( ipgf-1, jpgf-1, kpgf-1, lpgf-1, 0, 0, 0 )
+           ! periodic one
+            do pgf_index=1, nproducts
+               write (*,*) " CP2K C4 L2 adding PRM ", ipgf-1, jpgf-1, kpgf-1, lpgf-1, 0, 0, 0, " : " , & 
+                                       pgf_index-1, " / ", nproducts, list_ij, list_kl
+               call libgint_add_prm( ipgf-1, jpgf-1, kpgf-1, lpgf-1, 0, 0,0 )
+               screened = .false.
+            end do
+!            write (*,*) " End do over n3 "
+
+            !!!!
 
             s_offset_a = 0
             DO la = la_min, la_max
@@ -2474,6 +2771,8 @@ CONTAINS
       INTEGER                                            :: i, j, ma, mb, mc, md, offset_ac, &
                                                             offset_ad, offset_bc, offset_bd
       REAL(dp)                                           :: ki
+
+      write(*,*) "KS Adding I: ", prim , " @@ P ", density, " to KS " , ks, " for atoms ", iatom, jatom, katom,latom
 
       IF (jatom >= latom) THEN
          i = 1
