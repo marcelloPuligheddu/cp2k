@@ -275,6 +275,7 @@ MODULE hfx_types
       INTEGER, DIMENSION(:), POINTER           :: nshell => NULL()
       REAL(dp), DIMENSION(:, :, :, :), POINTER &
          :: sphi_ext => NULL()
+      REAL(dp), DIMENSION(:, :, : ), POINTER   :: gcc => NULL()
       REAL(dp), DIMENSION(:), POINTER          :: set_radius => NULL()
       REAL(dp), DIMENSION(:, :), POINTER        :: pgf_radius => NULL()
       REAL(dp)                                 :: kind_radius = 0.0_dp
@@ -1692,6 +1693,7 @@ CONTAINS
                                 nsgf_set=basis_parameter(ikind)%nsgf, &
                                 first_sgf=basis_parameter(ikind)%first_sgf, &
                                 sphi=basis_parameter(ikind)%sphi, &
+                                gcc=basis_parameter(ikind)%gcc, &
                                 nsgf=basis_parameter(ikind)%nsgf_total, &
                                 l=basis_parameter(ikind)%nl, &
                                 nshell=basis_parameter(ikind)%nshell, &

@@ -296,7 +296,10 @@ CONTAINS
                tmp = (Pi*ZetapEtaInv)**3
                factor = factor*S1234*SQRT(tmp)
 
+
+
                DO l = 1, m_max + 1
+                  write (*,*) " Fm[",l,"] = " , product_list(nproducts)%Fm(l), " * " , factor
                   product_list(nproducts)%Fm(l) = product_list(nproducts)%Fm(l)*factor
                END DO
 
