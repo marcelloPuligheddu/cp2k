@@ -489,15 +489,14 @@ __device__ void execute_CP2S_gpu(
    const int NcoA = NLco_dev(AL);
    const int NcoC = NLco_dev(CL);
    const int NcoAC = NcoA*NcoC;
-   for( int i=my_vrr_rank; i < NcoAC; i+=vrr_team_size){
-      // must be block atomic 
+
+//   for( int i=my_vrr_rank; i < NcoAC; i+=vrr_team_size){
+//      // must be block atomic 
 //      double tmp = K * pr_mem[i];
 //      printf( " CP2S at i: %d.%d.%d | %d %d %d %d | Adding : %4.10lg = %4.10lg * %4.10lg * to %4.10lg \n ", blockIdx.x, threadIdx.x, i, ipa,ipb,ipc,ipd, tmp, K, pr_mem[i], sh_mem[i] );
-      atomicAdd( &sh_mem[ i ] , K * pr_mem[i]);
-   }
-
-/*
-
+//      atomicAdd( &sh_mem[ i ] , K * pr_mem[i]);
+//   }
+   
    const unsigned int nl___d = nld;
    const unsigned int nl__cd = nlc*nl___d;
    const unsigned int nl_bcd = nlb*nl__cd;
@@ -518,7 +517,6 @@ __device__ void execute_CP2S_gpu(
         atomicAdd( &sh_mem[ ilabcd*hrr_blocksize + i ] , K * pr_mem[i]);
       }
    }
-*/
 }
 
 
