@@ -1,0 +1,119 @@
+MPI is detected and it appears to be OpenMPI
+Compiling with 16 processes for target native.
+==================== Finding GCC from system paths ====================
+path to gcc is /usr/bin/gcc
+path to g++ is /usr/bin/g++
+path to gfortran is /usr/bin/gfortran
+Found include directory /usr/include
+Step gcc took 0.00 seconds.
+Step intel took 0.00 seconds.
+==================== Getting proc arch info using OpenBLAS tools ====================
+OpenBLAS detected LIBCORE = skylakex
+OpenBLAS detected ARCH    = x86_64
+==================== Finding CMake from system paths ====================
+path to cmake is /home/qjn24437/.local/bin/cmake
+Step cmake took 0.00 seconds.
+==================== Finding Ninja from system paths ====================
+path to ninja is /usr/bin/ninja
+Step ninja took 0.00 seconds.
+==================== Finding OpenMPI from system paths ====================
+path to mpiexec is /usr/bin/mpiexec
+path to mpicc is /usr/bin/mpicc
+path to mpic++ is /usr/bin/mpic++
+path to mpifort is /usr/bin/mpifort
+Step openmpi took 0.00 seconds.
+==================== Finding LAPACK from system paths ====================
+libopenblas is found in ld search path
+Step openblas took 0.00 seconds.
+==================== Finding FFTW from system paths ====================
+libfftw3 is found in ld search path
+libfftw3_omp is found in ld search path
+libfftw3_mpi is found in ld search path
+Found include directory /usr/include
+Step fftw took 0.00 seconds.
+==================== Installing LIBINT ====================
+libint-2.6.0 is already installed, skipping it.
+Step libint took 0.00 seconds.
+==================== Installing LIBXC ====================
+libxc-6.2.2 is already installed, skipping it.
+Step libxc took 0.00 seconds.
+==================== Installing LIBGRPP ====================
+libgrpp-main-20231225 is already installed, skipping it.
+Step libgrpp took 0.00 seconds.
+==================== Installing Libxsmm ====================
+libxsmm-1.17 is already installed, skipping it.
+Step libxsmm took 0.00 seconds.
+==================== Installing ScaLAPACK ====================
+wget  --quiet https://www.cp2k.org/static/downloads/scalapack-2.2.1.tgz
+scalapack-2.2.1.tgz: OK
+Checksum of scalapack-2.2.1.tgz Ok
+Installing from scratch into /home/qjn24437/cp2k/tools/toolchain/install/scalapack-2.2.1
+Step scalapack took 19.00 seconds.
+Step cosma took 0.00 seconds.
+Step elpa took 0.00 seconds.
+Step ptscotch took 0.00 seconds.
+Step superlu took 0.00 seconds.
+Step pexsi took 0.00 seconds.
+Step quip took 0.00 seconds.
+Step gsl took 0.00 seconds.
+Step plumed took 0.00 seconds.
+Step deepmd took 0.00 seconds.
+Step hdf5 took 0.00 seconds.
+Step libvdwxc took 0.00 seconds.
+==================== Installing spglib ====================
+wget  --quiet https://www.cp2k.org/static/downloads/spglib-2.3.1.tar.gz
+spglib-2.3.1.tar.gz: OK
+Checksum of spglib-2.3.1.tar.gz Ok
+Installing from scratch into /home/qjn24437/cp2k/tools/toolchain/install/spglib-2.3.1
+Step spglib took 1.00 seconds.
+Step libvori took 0.00 seconds.
+Step libtorch took 0.00 seconds.
+Step spfft took 0.00 seconds.
+Step spla took 0.00 seconds.
+Step sirius took 0.00 seconds.
+Step dftd4 took 0.00 seconds.
+==================== generating arch files ====================
+arch files can be found in the /home/qjn24437/cp2k/tools/toolchain/install/arch subdirectory
+path to nvcc is /usr/local/cuda-12.6/bin/nvcc
+libcudart is found in ld search path
+libnvrtc is found in ld search path
+libcuda is found in ld search path
+libcufft is found in ld search path
+libcublasLt is found in ld search path
+libcublas is found in ld search path
+Found include directory /usr/include
+Wrote /home/qjn24437/cp2k/tools/toolchain/install/arch/local.ssmp
+Wrote /home/qjn24437/cp2k/tools/toolchain/install/arch/local_static.ssmp
+Wrote /home/qjn24437/cp2k/tools/toolchain/install/arch/local.sdbg
+Wrote /home/qjn24437/cp2k/tools/toolchain/install/arch/local_asan.ssmp
+Wrote /home/qjn24437/cp2k/tools/toolchain/install/arch/local_coverage.sdbg
+Wrote /home/qjn24437/cp2k/tools/toolchain/install/arch/local.psmp
+Wrote /home/qjn24437/cp2k/tools/toolchain/install/arch/local.pdbg
+Wrote /home/qjn24437/cp2k/tools/toolchain/install/arch/local_asan.psmp
+Wrote /home/qjn24437/cp2k/tools/toolchain/install/arch/local_static.psmp
+Wrote /home/qjn24437/cp2k/tools/toolchain/install/arch/local_warn.psmp
+Wrote /home/qjn24437/cp2k/tools/toolchain/install/arch/local_coverage.pdbg
+Wrote /home/qjn24437/cp2k/tools/toolchain/install/arch/local_cuda.ssmp
+Wrote /home/qjn24437/cp2k/tools/toolchain/install/arch/local_cuda.sdbg
+Wrote /home/qjn24437/cp2k/tools/toolchain/install/arch/local_cuda.psmp
+Wrote /home/qjn24437/cp2k/tools/toolchain/install/arch/local_cuda.pdbg
+Wrote /home/qjn24437/cp2k/tools/toolchain/install/arch/local_cuda_warn.psmp
+Wrote /home/qjn24437/cp2k/tools/toolchain/install/arch/local_coverage_cuda.pdbg
+========================== usage =========================
+Done!
+Now copy:
+  cp /home/qjn24437/cp2k/tools/toolchain/install/arch/* to the cp2k/arch/ directory
+To use the installed tools and libraries and cp2k version
+compiled with it you will first need to execute at the prompt:
+  source /home/qjn24437/cp2k/tools/toolchain/install/setup
+To build CP2K you should change directory:
+  cd cp2k/
+  make -j 16 ARCH=local VERSION="ssmp sdbg psmp pdbg"
+
+arch files for GPU enabled CUDA versions are named "local_cuda.*"
+arch files for GPU enabled HIP versions are named "local_hip.*"
+arch files for OpenCL (GPU) versions are named "local_opencl.*"
+arch files for coverage versions are named "local_coverage.*"
+
+Note that these pre-built arch files are for the GNU compiler, users have to adapt them for other compilers.
+It is possible to use the provided CP2K arch files as guidance.

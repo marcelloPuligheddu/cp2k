@@ -44,13 +44,18 @@ ar -rcs libcp2kGint.a ${OBJECTS_1} ${OBJECTS_2}
 #mpifort fortran_try.F90 -L. -lcp2kGint -lstdc++ -lcudart -lcublas -lblas
 
 CP2K_LIB_DIR="/home/qjn24437/cp2k/lib/local_cuda/psmp/"
-CP2K_SRC_DIR="/home/qjn24437/cp2k/src/Gint/"
+CP2K_PKG_DIR="/home/qjn24437/cp2k/src/Gint/"
 
-cp src/*.cpp ${CP2K_SRC_DIR}
+cp src/*.cpp ${CP2K_PKG_DIR}
 cp libcp2kGint.a ${CP2K_LIB_DIR}
-cp libgint.mod ${CP2K_SRC_DIR}
-touch ${CP2K_SRC_DIR}libGint_unlinked.cpp
-touch ${CP2K_SRC_DIR}libgint.F
+cp libgint.mod ${CP2K_PKG_DIR}
+touch ${CP2K_PKG_DIR}libGint_unlinked.cpp
+touch ${CP2K_PKG_DIR}libgint.F
+
+echo "{
+   \"description\": \"interface for the calculation of 4 centres 2 electrons integrals\",
+      \"requires\": [\"../base\"],
+}" > ${CP2K_PKG_DIR}/PACKAGE
 
 ## remove the cp2k.o file
 ## recompile cp2k
