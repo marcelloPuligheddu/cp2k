@@ -49,6 +49,90 @@ MODULE hfx_pair_list_methods
 
 CONTAINS
 
+#if false
+
+   SUBROUTINE build_pbc_pair_list(npgfa, npgfb, list, zeta, zetb, screen1, screen2, pgf, R_pgf, &
+                                log10_pmax, log10_eps_schwarz, ra, rb, nelements, &
+                                neighbor_cells, nimages, do_periodic)
+
+      INTEGER, INTENT(IN)                                :: npgfa, npgfb
+      TYPE(hfx_pgf_list), DIMENSION(npgfa*npgfb)         :: list
+      REAL(dp), DIMENSION(1:npgfa), INTENT(IN)           :: zeta
+      REAL(dp), DIMENSION(1:npgfb), INTENT(IN)           :: zetb
+      REAL(dp), INTENT(IN)                               :: screen1(2), screen2(2)
+      TYPE(hfx_screen_coeff_type), DIMENSION(:, :), &
+         POINTER                                         :: pgf, R_pgf
+      REAL(dp), INTENT(IN)                               :: log10_pmax, log10_eps_schwarz, ra(3), &
+                                                            rb(3)
+      INTEGER, INTENT(OUT)                               :: nelements
+      TYPE(hfx_cell_type), DIMENSION(:), POINTER         :: neighbor_cells
+      INTEGER                                            :: nimages(npgfa*npgfb)
+      LOGICAL, INTENT(IN)                                :: do_periodic
+
+      INTEGER                                            :: element_counter, i, ipgf, j, jpgf
+      REAL(dp)                                           :: AB(3), im_B(3), pgf_max, rab2, Zeta1, &
+                                                            Zeta_A, Zeta_B, ZetaInv
+
+
+      nimages = 0
+      element_idx = 0
+      element_off = 0
+      DO cell_idx = 1, SIZE(neighbor_cells)
+         ! move B to this cell while keeping A fixed
+         ! NOTE rb has already been moved by build_pair_list
+         !      so that when cell is (000) AB is in the pbc cell
+         ! HYP: This means that AB is at a minimum at the (000) cell.
+         !      This means that if the first screening cycles for the (000) cell,
+         !      Then EVERY other screening will cycle and we could exit early
+         IF (do_periodic) THEN
+            im_B = rb + neighbor_cells(cell_idx)%cell_r(:)
+         ELSE
+            im_B = rb
+         END IF
+         AB = ra - im_B
+         rab2 = AB(1)**2 + AB(2)**2 + AB(3)**2
+         ! First screening on the most diffuse AB gaussians along with the most diffuse CD gaussian
+         IF (screen1(1)*rab2 + screen1(2) + screen2(2) + log10_pmax < log10_eps_schwarz) CYCLE
+
+         element_cnt = 0
+         DO ipgf = 1, npgfa
+            DO jpgf = 1, npgfb
+               element_idx = element_idx + 1
+               ! Second screening on this actual AB pair and the same CD from before
+               pgf_max = pgf(jpgf, ipgf)%x(1)*rab2 + pgf(jpgf, ipgf)%x(2)
+               IF (pgf_max + screen2(2) + log10_pmax < log10_eps_schwarz) CYCLE
+               ! This pair passed screening. Add it to the bra
+               bra%prms(element_idx) = (/ ipgf, jpgf, cell_idx /)
+               bra%scrf(element_idx) = (/ pgf_max /)
+               element_cnt = element_ctr + 1
+               element_idx = element_idx + 1
+
+         ! If this cell produced any pair, add this cell to the bra
+         if ( element_cnt == 0 ) cycle
+         bra%cell(cell_cnt) = (/ cell_idx, element_cnt, element_off /)
+         element_off = element_off + element_cnt
+
+
+   END SUBROUTINE build_pbc_pair_list
+
+
+
+
+
+#endif
+
+
+
+
+
+
+
+
+
+
+
+
+
 ! **************************************************************************************************
 !> \brief ...
 !> \param list1 ...

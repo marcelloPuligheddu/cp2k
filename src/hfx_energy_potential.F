@@ -1647,9 +1647,9 @@ CONTAINS
                            !!!
                            ! WRONG ! add shell and cell should be inside a double loop over R1 (AB->AB+R1) and R2(CD+R2)
                            if ( .not. screened ) then
-                              call libgint_add_shell( first_set_of_atom(iatom)+iset-2, first_set_of_atom(jatom)+jset-2, &
-                                                      first_set_of_atom(katom)+kset-2, first_set_of_atom(latom)+lset-2, 0, 0 )
-                              call libgint_add_cell( )
+!                              call libgint_add_shell( first_set_of_atom(iatom)+iset-2, first_set_of_atom(jatom)+jset-2, &
+!                                                      first_set_of_atom(katom)+kset-2, first_set_of_atom(latom)+lset-2, 0, 0 )
+!                              call libgint_add_cell( )
                         
 
                               ! CHANGE! 
@@ -1996,7 +1996,7 @@ CONTAINS
       end do
       write(*,*) " ------------------------------------ "
       write(*,*) " |                                   |" 
-      write(*,*) " |         ", max_abs_delta_KS
+      write(*,*) " |  max abs dif: ", max_abs_delta_KS
       write(*,*) " |                                   |"
       write(*,*) " ------------------------------------ "
 
@@ -2586,6 +2586,61 @@ CONTAINS
                                nelements_kl, &
                                neighbor_cells, nimages, do_periodic)
 
+
+#if false
+
+      CALL build_pbc_pair_list( ... AB ..., bra )
+      CALL build_pbc_pair_list( ... CD ..., ket )
+
+      iatom_set = first_set_of_atom(iatom)+iset-2
+      jatom_set = first_set_of_atom(jatom)+jset-2
+      katom_set = first_set_of_atom(katom)+kset-2
+      latom_set = first_set_of_atom(latom)+lset-2
+
+      do n1 = 1, bra%ncells
+
+         o_ij = bra%cell(n1)%element_off
+         n_ij = bra%cell(n1)%element_cnt
+
+         do n2 = 1, ket%ncells
+
+            o_kl = ket%cell(n2)%element_off
+            n_kl = ket%cell(n2)%element_cnt
+
+            do idx_ij = o_ij, o_ij+n_ij
+
+               ipgf = bra%prms(idx_ij)%ipgf
+               jpgf = bra%prms(idx_ij)%jpgf
+               pgf_max_1 = bra%scrf(idx_ij)
+
+               do idx_kl = o_kl, o_kl+n_kl
+
+                  kpgf = ket%prms(idx_kl)%ipgf
+                  lpgf = ket%prms(idx_kl)%jpgf
+                  pgf_max_2 = ket%scrf(idx_kl)
+
+                  IF (pgf_max_1 + pgf_max_2 + log10_pmax < log10_eps_schwarz) CYCLE
+
+                  do n3 = 1, SIZE(neighbor_cells)
+
+                     cell_was_screened = .false.
+                     call libGint_add_prm( ipgf-1,jpgf-1,kpgf-1,lpgf-1, n1,n2,n3 )
+
+                  end do
+               end do
+            end do
+
+            if ( .not. cell_was_screened ) then
+                    call libgint_add_shell( iatom_set, jatom_set, katom_set, latom_set, n1, n2 )
+            end if
+            call libGint_add_cell() ! ??
+
+         end do
+      end do
+
+
+#endif
+
       cart_estimate = 0.0_dp
       neris_tmp = 0
       primitive_integrals = 0.0_dp
@@ -2772,7 +2827,7 @@ CONTAINS
                                                             offset_ad, offset_bc, offset_bd
       REAL(dp)                                           :: ki
 
-      write(*,*) "KS Adding I: ", prim , " @@ P ", density, " to KS " , ks, " for atoms ", iatom, jatom, katom,latom
+!      write(*,*) "KS Adding I: ", prim , " @@ P ", density, " to KS " , ks, " for atoms ", iatom, jatom, katom,latom
 
       IF (jatom >= latom) THEN
          i = 1

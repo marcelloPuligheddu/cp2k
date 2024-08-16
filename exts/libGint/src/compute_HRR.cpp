@@ -222,6 +222,9 @@ __global__ void compute_HRR_batched_gpu_low(
       const double * const D =  &data[idx_D];
       const double CD[3] = { C[0]-D[0], C[1]-D[1], C[2]-D[2] };
 
+      // TODO // ABSOLUTELY
+      // add CELL[n1] to pbc(AB) and CELL[n2] to pbc(CD)
+
       double* sh_mem = &ABCD[ Og * hrr_blocksize ];
 
       for ( unsigned int ilabcd=0 ; ilabcd < nlabcd; ilabcd++ ){
@@ -230,6 +233,7 @@ __global__ void compute_HRR_batched_gpu_low(
             ABCD0[ s0_st + i ] = 0. ;
          }
       }
+
       __syncthreads();
 
       const int tid = threadIdx.x;

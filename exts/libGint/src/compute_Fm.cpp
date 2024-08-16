@@ -86,11 +86,17 @@ __device__ __host__ void compute_Fm_batched_single( int p,
    double Q[3];
    compute_weighted_distance( Q, C,D,zc,zd,zcd );
    
-   if (periodic){
-      Q[0] += n1 * cell[0*3+0] + n2 * cell[1*3+0] + n3 * cell[2*3+0];
-      Q[1] += n1 * cell[0*3+1] + n2 * cell[1*3+1] + n3 * cell[2*3+1];
-      Q[2] += n1 * cell[0*3+2] + n2 * cell[1*3+2] + n3 * cell[2*3+2];
-   }
+   // TODO // ABSOLUTELY
+   // add n1 to pbc(AB)
+   // add n2 to pbc(CD)
+   // add n3 to pbc(QP)
+
+   // WRONG ! n1,n2 and n3 changed meaning from \"n123 of G3\" to \"idx of pbc cells for AB,CD and PQ \"
+//   if (periodic){
+//      Q[0] += n1 * cell[0*3+0] + n2 * cell[1*3+0] + n3 * cell[2*3+0];
+//      Q[1] += n1 * cell[0*3+1] + n2 * cell[1*3+1] + n3 * cell[2*3+1];
+//      Q[2] += n1 * cell[0*3+2] + n2 * cell[1*3+2] + n3 * cell[2*3+2];
+//   }
    double z = zab + zcd;
    double inv_z = 1./z;
    double W[3];
