@@ -58,7 +58,11 @@
     &END CELL
     &COORD
       H 0 0 0
+      H 0 1 0
       Li 2.0 1.0 0
+      H 0 0 1
+      H 0 1 1
+      Li 1.0 1.0 0.5
    &END COORD
     &KIND H
       BASIS_SET MP1
