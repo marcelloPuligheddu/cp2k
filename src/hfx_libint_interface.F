@@ -1885,7 +1885,7 @@ CONTAINS
             CALL build_quartet_data(libint, A, B, C, D, & !todo: check
                                     ZetaInv, EtaInv, ZetapEtaInv, Rho, &
                                     P, Q, W, m_max, F)
-            write (*,*) " Contract s is adding ", F(1) , " to ", work
+!            write (*,*) " Contract s is adding ", F(1) , " to ", work
             work(1) = work(1) + F(1)
             neris = neris + mysize
          END DO
@@ -1897,7 +1897,7 @@ CONTAINS
       IF (tmp_max < eps_schwarz) RETURN
       primitives_tmp = 0.0_dp
 
-      write (*,*) " Primitives before contract: ", work2
+!      write (*,*) " Primitives before contract: ", work2
       
       CALL contract(ncoa, ncob, ncoc, ncod, nsoa, nsob, nsoc, nsod, &
                     n_a, n_b, n_c, n_d, nl_a, nl_b, nl_c, nl_d, work2, &
@@ -1908,7 +1908,7 @@ CONTAINS
                     primitives_tmp, &
                     buffer1, buffer2)
 
-      write (*,*) " Primitives after contract: ", primitives_tmp
+!      write (*,*) " Primitives after contract: ", primitives_tmp
 
       primitives(s_offset_a + 1:s_offset_a + nsoa*nl_a, &
                  s_offset_b + 1:s_offset_b + nsob*nl_b, &
