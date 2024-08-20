@@ -55,7 +55,9 @@ MODULE hfx_energy_potential
                                     build_pair_list, &
                                     build_pair_list_pgf, &
                                     build_pgf_product_list, &
-                                    pgf_product_list_size
+                                    pgf_product_list_size, &
+                                    build_pair_list_pbc_pgf, &
+                                    bra_t, allocate_bra
    USE hfx_screening_methods, ONLY: calc_pair_dist_radii, &
                                     calc_screening_functions, &
                                     update_pmax_mat
@@ -68,6 +70,8 @@ MODULE hfx_energy_potential
       log_zero, pair_list_type, pair_set_list_type
    USE input_constants, ONLY: do_potential_mix_cl_trunc, &
                               do_potential_truncated, &
+                              do_potential_TShPSC, &
+                              do_potential_short, &
                               hfx_do_eval_energy
    USE input_section_types, ONLY: section_vals_type
    USE kinds, ONLY: default_string_length, &
@@ -266,6 +270,10 @@ CONTAINS
       integer :: s_offset_a_l,s_offset_b_l,s_offset_c_l,s_offset_d_l
       integer :: s_offset_a,s_offset_b,s_offset_c,s_offset_d,s_offset_ac,s_offset_ad,s_offset_bc,s_offset_bd
       real(dp) :: max_abs_delta_KS
+
+      type(bra_t) :: bra, ket
+      integer :: iatom_set, jatom_set, katom_set, latom_set
+
 
 
       NULLIFY (dft_control, matrix_ks_aux_fit_hfx)
@@ -571,6 +579,7 @@ CONTAINS
             max_pgf = MAX(max_pgf, npgfb(jset))
          END DO
       END DO
+
 
       ! ** Allocate buffers for pgf_lists
       nneighbors = SIZE(actual_x_data%neighbor_cells)
@@ -933,6 +942,9 @@ CONTAINS
          write(*,*) " NOT FIRST CALL "
       end if
 
+      ! TODO is it possible for nneighbors to change when the cell is resized ?
+      call allocate_bra( bra, max_pgf, nneighbors )
+      call allocate_bra( ket, max_pgf, nneighbors )
 
       write (*,*) " CAll to set P K "
       call libgint_set_P( full_density_alpha(:, 1) )
@@ -978,7 +990,7 @@ CONTAINS
       !!!
 
 
-      !! Start caluclating integrals of the form (ab|cd) or (ij|kl)
+      !! Start calculating integrals of the form (ab|cd) or (ij|kl)
       !! In order to do so, there is a main four-loop structure that takes into account the two symmetries
       !!
       !!   (ab|cd) = (ba|cd) = (ab|dc) = (ba|dc)
@@ -1644,15 +1656,35 @@ CONTAINS
                                          sphi_d_ext_set, &
                                          ee_work, ee_work2, ee_buffer1, ee_buffer2, ee_primitives_tmp, &
                                          nimages, do_periodic, p_work,screened)
+
                            !!!
+
+                           iatom_set = first_set_of_atom(iatom)+iset-2
+                           jatom_set = first_set_of_atom(jatom)+jset-2
+                           katom_set = first_set_of_atom(katom)+kset-2
+                           latom_set = first_set_of_atom(latom)+lset-2
+
+                           call coulomb_4_gpu( iatom_set, jatom_set, katom_set, latom_set, ra, rb, rc, rd, &
+                                               npgfa(iset), npgfb(jset), npgfc(kset), npgfd(lset), &
+                                               zeta(1:npgfa(iset), iset), zetb(1:npgfb(jset), jset), &
+                                               zetc(1:npgfc(kset), kset), zetd(1:npgfd(lset), lset), &
+                                               potential_parameter, &
+                                               screen_coeffs_set(jset, iset, jkind, ikind)%x, &
+                                               screen_coeffs_set(lset, kset, lkind, kkind)%x, &
+                                               log10_pmax, log10_eps_schwarz, &
+                                               tmp_R_1, tmp_R_2, tmp_screen_pgf1, tmp_screen_pgf2, &
+                                               bra, ket, & 
+                                               actual_x_data%neighbor_cells, cell, do_periodic, screened )
+
                            ! WRONG ! add shell and cell should be inside a double loop over R1 (AB->AB+R1) and R2(CD+R2)
                            if ( .not. screened ) then
+
 !                              call libgint_add_shell( first_set_of_atom(iatom)+iset-2, first_set_of_atom(jatom)+jset-2, &
 !                                                      first_set_of_atom(katom)+kset-2, first_set_of_atom(latom)+lset-2, 0, 0 )
 !                              call libgint_add_cell( )
-                        
 
                               ! CHANGE! 
+                              ! TODO maybe put inside coulomb_4_gpu ?
                               !
                               if ( jatom >= latom ) then 
                                 offset_bd_L_set = offset_bd_set(jset, lset) + atomic_offset_bd - 2
@@ -1694,11 +1726,11 @@ CONTAINS
                                 Tac = .true.
                               end if
 
-                              write (*,*) "atoms:" , iatom,jatom,katom,latom
-                              write (*,*) " offsets ac ad bc bd: ", offset_ac_L_set, &
-                                                      offset_ad_L_set, offset_bc_L_set, offset_bd_L_set
-                              write (*,*) " ld      ac ad bc bd: ",       ld_ac_set, &
-                                                       ld_ad_set,      ld_bc_set,       ld_bd_set
+!                              write (*,*) "atoms:" , iatom,jatom,katom,latom
+!                              write (*,*) " offsets ac ad bc bd: ", offset_ac_L_set, &
+!                                                      offset_ad_L_set, offset_bc_L_set, offset_bd_L_set
+!                              write (*,*) " ld      ac ad bc bd: ",       ld_ac_set, &
+!                                                       ld_ad_set,      ld_bc_set,       ld_bd_set
 
                               ! MEGACHANGE! !!
 
@@ -2434,6 +2466,147 @@ CONTAINS
       CALL timestop(handle)
    END SUBROUTINE integrate_four_center
 
+!> \brief Assign two-electron integrals of a quartet/shell to the library
+!>      libGint in the periodic case for later dispatch
+!
+   
+   subroutine coulomb_4_gpu( iatom_set, jatom_set, katom_set, latom_set, &
+                       ra, rb, rc, rd, npgfa, npgfb, npgfc, npgfd, &
+                       zeta, zetb, zetc, zetd, potential_parameter, &
+                       screen1, screen2, log10_pmax, log10_eps_schwarz, &
+                       R1_pgf, R2_pgf, pgf1, pgf2, &
+                       bra, ket, &
+                       neighbor_cells, cell, do_periodic, screened )
+
+      REAL(dp), INTENT(IN)                               :: ra(3), rb(3), rc(3), rd(3)
+      INTEGER, INTENT(IN) :: npgfa, npgfb, npgfc, npgfd 
+      REAL(dp), DIMENSION(1:npgfa), INTENT(IN)           :: zeta
+      REAL(dp), DIMENSION(1:npgfb), INTENT(IN)           :: zetb
+      REAL(dp), DIMENSION(1:npgfc), INTENT(IN)           :: zetc
+      REAL(dp), DIMENSION(1:npgfd), INTENT(IN)           :: zetd
+      TYPE(hfx_potential_type)                           :: potential_parameter
+      TYPE(hfx_cell_type), DIMENSION(:), POINTER         :: neighbor_cells
+      REAL(dp), INTENT(IN)                               :: screen1(2), screen2(2)
+      TYPE(cell_type), POINTER                           :: cell
+      REAL(dp), INTENT(IN)                               :: log10_pmax, log10_eps_schwarz
+      TYPE(hfx_screen_coeff_type), DIMENSION(:, :), &
+         POINTER                                         :: R1_pgf, R2_pgf, pgf1, pgf2
+      TYPE(bra_t)                                        :: bra, ket
+      LOGICAL, INTENT(IN)                                :: do_periodic
+      logical, intent(out) :: screened
+      logical :: cell_was_screened
+
+      integer  :: idx_n1,idx_n2,n1,n2,n3,idx_ij,idx_kl,o_ij,n_ij,o_kl,n_kl
+      integer  :: ipgf,jpgf,kpgf,lpgf,iatom_set,jatom_set,katom_set,latom_set
+      REAL(dp) :: Q(3), P(3), PQ(3), PQo(3), PQm(3), Qs(3), Qp(3), shift(3)
+      real(dp) :: pgf_max_1, pgf_max_2, R1, R2, rpq2
+
+      integer :: nelements_ij, nelements_kl
+
+
+      screened = .true.
+
+      CALL build_pair_list_pbc_pgf( npgfa, npgfb, bra, zeta, zetb, screen1, screen2, &
+                               pgf1, R1_pgf, log10_pmax, log10_eps_schwarz, ra, rb, &
+                               nelements_ij, neighbor_cells, do_periodic )
+
+      CALL build_pair_list_pbc_pgf( npgfc, npgfd, ket, zetc, zetd, screen2, screen1, &
+                               pgf2, R2_pgf, log10_pmax, log10_eps_schwarz, rc, rd, &
+                               nelements_kl, neighbor_cells, do_periodic)
+
+      ! Note: we use 3 numbers n1 n2 and n3 as indices for the lattice traslantion vectors
+      ! n1 for the AB pair, n2 for the CD pair and n3 for the PQ pair
+      ! so that e.g. B = B0 + ua(n1) means B.x = B0.x + ua(n1).x (and same for y and z)
+      ! the ua, saved in neighbor_cells(:)%cell_r(:), are already computed 
+      ! lattice translation vectors T = i a1 + j a2 + k a3
+      ! where a1,a2 and a3 are lattice vectors and i,j and k integers.
+      ! So, B.x = B0.x + n1.i * a1.x + n1.j * a2.x + n1.k * a3.x (and same for y and z)
+      !  
+
+      ! BIGGER TODO move this to GPU
+
+      do idx_n1 = 1, bra%cell_cnt
+      ! TODO use define instead of number for array access
+         n1   = bra%cell_idx(1, idx_n1)
+         o_ij = bra%cell_idx(2, idx_n1)
+         n_ij = bra%cell_idx(3, idx_n1)
+
+         do idx_n2 = 1, ket%cell_cnt
+
+            n2   = ket%cell_idx(1, idx_n2)
+            o_kl = ket%cell_idx(2, idx_n2)
+            n_kl = ket%cell_idx(3, idx_n2)
+
+            cell_was_screened = .true.
+            do idx_ij = o_ij, o_ij+n_ij
+
+               ipgf = bra%pgf_idx(1, idx_ij)
+               jpgf = bra%pgf_idx(2, idx_ij)
+               pgf_max_1 = bra%pgf_scr(1, idx_ij)
+!               #define HFX_GPU_PRM_SCR 1
+!               #ifdef HFX_GPU_PRM_SCR
+                  R1   = bra%pgf_scr(2,idx_ij)
+                  P(1) = bra%pgf_scr(3,idx_ij)
+                  P(2) = bra%pgf_scr(4,idx_ij)
+                  P(3) = bra%pgf_scr(5,idx_ij)
+!               #endif
+               do idx_kl = o_kl, o_kl+n_kl
+                  kpgf = ket%pgf_idx(1,idx_kl)
+                  lpgf = ket%pgf_idx(2,idx_kl)
+                  pgf_max_2 = ket%pgf_scr(3,idx_kl)
+
+                  IF (pgf_max_1 + pgf_max_2 + log10_pmax < log10_eps_schwarz) CYCLE
+
+!                  #ifdef HFX_GPU_PRM_SCR
+                     R2   = ket%pgf_scr(2,idx_kl)
+                     Q(1) = ket%pgf_scr(3,idx_kl)
+                     Q(2) = ket%pgf_scr(4,idx_kl)
+                     Q(3) = ket%pgf_scr(5,idx_kl)
+                     ! Overall, the next 4 lines shift Q
+                     ! by a lattice vector called shift
+                     ! so that when n3.ijk = (000), 
+                     ! PQ is at the minimum image
+                     ! original value of PQ
+                     PQo = P-Q
+                     ! minimum value of PQ
+                     PQm = pbc(PQo,cell)
+                     ! note shift must be a lattice translation vectors
+                     shift = PQo - PQm
+                     ! shifted Q
+                     Qs = Q + shift
+                     ! Note: we have already done the same for the AB and CD pair,
+                     ! it is done in the build_pair_list subroutine
+!                  #endif
+                  ! BIG TODO move this loop to GPU
+                  do n3 = 1, SIZE(neighbor_cells)
+!                     #ifdef HFX_GPU_PRM_SCR                     
+                        Qp = Qs + neighbor_cells(n3)%cell_r(:)
+                        rpq2 = (P(1) - Qp(1))**2 + (P(2) - Qp(2))**2 + (P(3) - Qp(3))**2
+                        IF (potential_parameter%potential_type == do_potential_truncated .OR. &
+                            potential_parameter%potential_type == do_potential_short .OR. &
+                            potential_parameter%potential_type == do_potential_mix_cl_trunc) THEN
+                           IF (rpq2 > (R1 + R2 + potential_parameter%cutoff_radius)**2) CYCLE
+                        END IF
+                        IF (potential_parameter%potential_type == do_potential_TShPSC) THEN
+                           IF (rpq2 > (R1 + R2 + potential_parameter%cutoff_radius*2.0_dp)**2) CYCLE
+                        END IF
+!	                   #endif
+                     call libGint_add_prm( ipgf-1,jpgf-1,kpgf-1,lpgf-1, n1,n2,n3 )
+                     cell_was_screened = .false.
+
+                  end do
+               end do
+            end do
+
+            if ( .not. cell_was_screened ) then
+                    call libgint_add_shell( iatom_set, jatom_set, katom_set, latom_set, n1, n2 )
+                    screened = .false.
+            end if
+            call libGint_add_cell() ! ??
+
+         end do
+      end do
+   end subroutine coulomb_4_gpu
 ! **************************************************************************************************
 !> \brief calculates two-electron integrals of a quartet/shell using the library
 !>      lib_int in the periodic case
@@ -2577,6 +2750,7 @@ CONTAINS
       integer :: pgf_index
       logical, intent(out) :: screened
 
+
       CALL build_pair_list_pgf(npgfa, npgfb, pgf_list_ij, zeta, zetb, screen1, screen2, &
                                pgf1, R1_pgf, log10_pmax, log10_eps_schwarz, ra, rb, &
                                nelements_ij, &
@@ -2587,60 +2761,6 @@ CONTAINS
                                neighbor_cells, nimages, do_periodic)
 
 
-#if false
-
-      CALL build_pbc_pair_list( ... AB ..., bra )
-      CALL build_pbc_pair_list( ... CD ..., ket )
-
-      iatom_set = first_set_of_atom(iatom)+iset-2
-      jatom_set = first_set_of_atom(jatom)+jset-2
-      katom_set = first_set_of_atom(katom)+kset-2
-      latom_set = first_set_of_atom(latom)+lset-2
-
-      do n1 = 1, bra%ncells
-
-         o_ij = bra%cell(n1)%element_off
-         n_ij = bra%cell(n1)%element_cnt
-
-         do n2 = 1, ket%ncells
-
-            o_kl = ket%cell(n2)%element_off
-            n_kl = ket%cell(n2)%element_cnt
-
-            do idx_ij = o_ij, o_ij+n_ij
-
-               ipgf = bra%prms(idx_ij)%ipgf
-               jpgf = bra%prms(idx_ij)%jpgf
-               pgf_max_1 = bra%scrf(idx_ij)
-
-               do idx_kl = o_kl, o_kl+n_kl
-
-                  kpgf = ket%prms(idx_kl)%ipgf
-                  lpgf = ket%prms(idx_kl)%jpgf
-                  pgf_max_2 = ket%scrf(idx_kl)
-
-                  IF (pgf_max_1 + pgf_max_2 + log10_pmax < log10_eps_schwarz) CYCLE
-
-                  do n3 = 1, SIZE(neighbor_cells)
-
-                     cell_was_screened = .false.
-                     call libGint_add_prm( ipgf-1,jpgf-1,kpgf-1,lpgf-1, n1,n2,n3 )
-
-                  end do
-               end do
-            end do
-
-            if ( .not. cell_was_screened ) then
-                    call libgint_add_shell( iatom_set, jatom_set, katom_set, latom_set, n1, n2 )
-            end if
-            call libGint_add_cell() ! ??
-
-         end do
-      end do
-
-
-#endif
-
       cart_estimate = 0.0_dp
       neris_tmp = 0
       primitive_integrals = 0.0_dp
@@ -2648,7 +2768,7 @@ CONTAINS
 
       screened = .true.
 
-      write (*,*) " CP2K C4 L0 adding ", nelements_ij, " x ", nelements_kl, " gaussian quartets to libGint " 
+!      write (*,*) " CP2K C4 L0 adding ", nelements_ij, " x ", nelements_kl, " gaussian quartets to libGint " 
 
       DO list_ij = 1, nelements_ij
          ZetaInv = pgf_list_ij(list_ij)%ZetaInv
@@ -2660,8 +2780,8 @@ CONTAINS
             kpgf = pgf_list_kl(list_kl)%ipgf
             lpgf = pgf_list_kl(list_kl)%jpgf
 
-            write (*,*) " CP2K C4 L1 ", list_ij, " x ", list_kl, " are adding ", &
-                                       pgf_list_ij(list_ij)%nimages, "x", pgf_list_kl(list_kl)%nimages, " cells to libGint " 
+!            write (*,*) " CP2K C4 L1 ", list_ij, " x ", list_kl, " are adding ", &
+!                                       pgf_list_ij(list_ij)%nimages, "x", pgf_list_kl(list_kl)%nimages, " cells to libGint " 
 
             CALL build_pgf_product_list(pgf_list_ij(list_ij), pgf_list_kl(list_kl), pgf_product_list, &
                                         nproducts, log10_pmax, log10_eps_schwarz, neighbor_cells, cell, &
@@ -2671,8 +2791,8 @@ CONTAINS
 !            call libgint_add_prm( ipgf-1, jpgf-1, kpgf-1, lpgf-1, 0, 0, 0 )
            ! periodic one
             do pgf_index=1, nproducts
-               write (*,*) " CP2K C4 L2 adding PRM ", ipgf-1, jpgf-1, kpgf-1, lpgf-1, 0, 0, 0, " : " , & 
-                                       pgf_index-1, " / ", nproducts, list_ij, list_kl
+!               write (*,*) " CP2K C4 L2 adding PRM ", ipgf-1, jpgf-1, kpgf-1, lpgf-1, 0, 0, 0, " : " , & 
+!                                       pgf_index-1, " / ", nproducts, list_ij, list_kl
                call libgint_add_prm( ipgf-1, jpgf-1, kpgf-1, lpgf-1, 0, 0,0 )
                screened = .false.
             end do

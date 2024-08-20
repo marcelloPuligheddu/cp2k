@@ -40,23 +40,40 @@ MODULE hfx_pair_list_methods
              build_pair_list_pgf, &
              build_pgf_product_list, &
              build_atomic_pair_list, &
-             pgf_product_list_size
+             pgf_product_list_size, &
+             build_pair_list_pbc_pgf, &
+             bra_t, allocate_bra
 
    ! an initial estimate for the size of the product list
    INTEGER, SAVE :: pgf_product_list_size = 128
 
 !***
 
+   ! TODO move to hfx types
+   type :: Bra_t
+      real(dp), allocatable, dimension(:,:)    :: pgf_scr
+      integer, allocatable, dimension(:,:)     :: pgf_idx, cell_idx
+      integer :: cell_cnt, pgf_cnt
+   end type Bra_t
+
 CONTAINS
+ 
+   ! TODO move to hfx types
+   subroutine allocate_Bra( bra, max_npgf, max_ncell )
+      TYPE(bra_t) :: bra
+      integer :: max_npgf, max_ncell
+      allocate( bra%pgf_idx( 3, max_npgf*max_npgf*max_ncell ))
+      allocate( bra%pgf_scr( 5, max_npgf*max_npgf*max_ncell ))
+      allocate( bra%cell_idx( 3, max_ncell ))
+   end subroutine allocate_Bra
 
-#if false
 
-   SUBROUTINE build_pbc_pair_list(npgfa, npgfb, list, zeta, zetb, screen1, screen2, pgf, R_pgf, &
+   SUBROUTINE build_pair_list_pbc_pgf(npgfa, npgfb, bra, zeta, zetb, screen1, screen2, pgf, R_pgf, &
                                 log10_pmax, log10_eps_schwarz, ra, rb, nelements, &
-                                neighbor_cells, nimages, do_periodic)
+                                neighbor_cells, do_periodic)
 
       INTEGER, INTENT(IN)                                :: npgfa, npgfb
-      TYPE(hfx_pgf_list), DIMENSION(npgfa*npgfb)         :: list
+      TYPE(bra_t)                                        :: bra
       REAL(dp), DIMENSION(1:npgfa), INTENT(IN)           :: zeta
       REAL(dp), DIMENSION(1:npgfb), INTENT(IN)           :: zetb
       REAL(dp), INTENT(IN)                               :: screen1(2), screen2(2)
@@ -66,15 +83,15 @@ CONTAINS
                                                             rb(3)
       INTEGER, INTENT(OUT)                               :: nelements
       TYPE(hfx_cell_type), DIMENSION(:), POINTER         :: neighbor_cells
-      INTEGER                                            :: nimages(npgfa*npgfb)
       LOGICAL, INTENT(IN)                                :: do_periodic
 
-      INTEGER                                            :: element_counter, i, ipgf, j, jpgf
+      INTEGER                                            :: ipgf, jpgf
       REAL(dp)                                           :: AB(3), im_B(3), pgf_max, rab2, Zeta1, &
-                                                            Zeta_A, Zeta_B, ZetaInv
+                                                            Zeta_A, Zeta_B, ZetaInv, P(3), R
+      integer :: element_idx, element_off, element_cnt, cell_idx, cell_cnt 
 
 
-      nimages = 0
+
       element_idx = 0
       element_off = 0
       DO cell_idx = 1, SIZE(neighbor_cells)
@@ -101,37 +118,35 @@ CONTAINS
                ! Second screening on this actual AB pair and the same CD from before
                pgf_max = pgf(jpgf, ipgf)%x(1)*rab2 + pgf(jpgf, ipgf)%x(2)
                IF (pgf_max + screen2(2) + log10_pmax < log10_eps_schwarz) CYCLE
-               ! This pair passed screening. Add it to the bra
-               bra%prms(element_idx) = (/ ipgf, jpgf, cell_idx /)
-               bra%scrf(element_idx) = (/ pgf_max /)
-               element_cnt = element_ctr + 1
+               ! This pair passed screening. Add it to the bra. 
+               ! cell idx is not necessary, but convenient
+               bra%pgf_idx(:,element_idx) = (/ ipgf, jpgf, cell_idx /)
+!               #ifdef HFX_GPU_PRM_SCR
+                  R = MAX(0.0_dp, R_pgf(jpgf, ipgf)%x(1)*rab2 + R_pgf(jpgf, ipgf)%x(2))
+                  Zeta_A = zeta(ipgf)
+                  Zeta_B = zetb(jpgf)
+                  Zeta1 = Zeta_A + Zeta_B
+                  ZetaInv = 1.0_dp/Zeta1
+                  P = (Zeta_A*ra + Zeta_B*im_B)*ZetaInv
+!               #endif
+               bra%pgf_scr(:,element_idx) = (/ pgf_max, R, P(1), P(2), P(3) /)
+               element_cnt = element_cnt + 1
                element_idx = element_idx + 1
+            end do
+         end do
 
          ! If this cell produced any pair, add this cell to the bra
          if ( element_cnt == 0 ) cycle
-         bra%cell(cell_cnt) = (/ cell_idx, element_cnt, element_off /)
+         bra%cell_idx(:,cell_cnt) = (/ cell_idx, element_cnt, element_off /)
          element_off = element_off + element_cnt
+         cell_cnt = cell_cnt + 1
 
+      end do ! cell
+      bra%cell_cnt = cell_cnt
+      nelements = element_idx
+      bra%pgf_cnt  = nelements
 
-   END SUBROUTINE build_pbc_pair_list
-
-
-
-
-
-#endif
-
-
-
-
-
-
-
-
-
-
-
-
+   END SUBROUTINE build_pair_list_pbc_pgf
 
 ! **************************************************************************************************
 !> \brief ...
@@ -383,7 +398,7 @@ CONTAINS
 
 
                DO l = 1, m_max + 1
-                  write (*,*) " Fm[",l,"] = " , product_list(nproducts)%Fm(l), " * " , factor
+!                  write (*,*) " Fm[",l,"] = " , product_list(nproducts)%Fm(l), " * " , factor
                   product_list(nproducts)%Fm(l) = product_list(nproducts)%Fm(l)*factor
                END DO
 
