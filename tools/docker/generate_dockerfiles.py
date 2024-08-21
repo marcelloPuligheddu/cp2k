@@ -516,7 +516,7 @@ RUN ln -sf /usr/bin/gcc-{gcc_version}      /usr/local/bin/gcc  && \
 # ======================================================================================
 def toolchain_intel() -> str:
     return rf"""
-FROM intel/hpckit:2024.2.0-1-devel-ubuntu22.04
+FROM intel/hpckit:2024.2.1-0-devel-ubuntu22.04
 
 """ + install_toolchain(
         base_image="ubuntu",
@@ -843,7 +843,7 @@ RUN apt-get update -qq && apt-get install -qq --no-install-recommends \
 WORKDIR /opt/spack
 RUN git init --quiet && \
     git remote add origin https://github.com/spack/spack.git && \
-    git fetch --quiet --depth 1 origin tag develop-2024-05-26 --no-tags && \
+    git fetch --quiet --depth 1 origin 22e40541c75ae952c0afb1011082f3220e3ae2a9 --no-tags && \
     git checkout --quiet FETCH_HEAD
 ENV PATH="/opt/spack/bin:${{PATH}}"
 
