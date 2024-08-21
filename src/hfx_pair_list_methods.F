@@ -94,6 +94,7 @@ CONTAINS
 
       element_idx = 0
       element_off = 0
+      cell_cnt = 0
       DO cell_idx = 1, SIZE(neighbor_cells)
          ! move B to this cell while keeping A fixed
          ! NOTE rb has already been moved by build_pair_list
@@ -114,12 +115,13 @@ CONTAINS
          element_cnt = 0
          DO ipgf = 1, npgfa
             DO jpgf = 1, npgfb
-               element_idx = element_idx + 1
+
                ! Second screening on this actual AB pair and the same CD from before
                pgf_max = pgf(jpgf, ipgf)%x(1)*rab2 + pgf(jpgf, ipgf)%x(2)
                IF (pgf_max + screen2(2) + log10_pmax < log10_eps_schwarz) CYCLE
                ! This pair passed screening. Add it to the bra. 
                ! cell idx is not necessary, but convenient
+               element_idx = element_idx + 1
                bra%pgf_idx(:,element_idx) = (/ ipgf, jpgf, cell_idx /)
 !               #ifdef HFX_GPU_PRM_SCR
                   R = MAX(0.0_dp, R_pgf(jpgf, ipgf)%x(1)*rab2 + R_pgf(jpgf, ipgf)%x(2))
@@ -131,20 +133,28 @@ CONTAINS
 !               #endif
                bra%pgf_scr(:,element_idx) = (/ pgf_max, R, P(1), P(2), P(3) /)
                element_cnt = element_cnt + 1
-               element_idx = element_idx + 1
             end do
          end do
 
          ! If this cell produced any pair, add this cell to the bra
          if ( element_cnt == 0 ) cycle
+         cell_cnt = cell_cnt + 1
          bra%cell_idx(:,cell_cnt) = (/ cell_idx, element_cnt, element_off /)
          element_off = element_off + element_cnt
-         cell_cnt = cell_cnt + 1
+
 
       end do ! cell
       bra%cell_cnt = cell_cnt
       nelements = element_idx
       bra%pgf_cnt  = nelements
+
+
+      write(*,*) ' BRA/KET contains ', bra%pgf_cnt, " pgf pairs in ", bra%cell_cnt, " cells split as"
+      write(*,*) bra%cell_idx(:,1:bra%cell_cnt)
+      write(*,*) ' #### pgf are ###'
+      write(*,*) bra%pgf_idx(:,1:bra%pgf_cnt)
+      write(*,*) ' --------------------------'
+
 
    END SUBROUTINE build_pair_list_pbc_pgf
 

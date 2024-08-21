@@ -316,12 +316,12 @@ void libGint::add_qrtt(
    KS_idxs[KS_OFFSET_OFFBD  ] = offset_bd_L_set;
    KS_idxs[KS_OFFSET_TALL   ] = encode4(  (int)Tac, (int)Tad, (int)Tbc, (int)Tbd );
 
-   cout << endl;
-   cout << " KS adding qrtt at weight " << symm_fac << " i: |" << inla << " " << inlb << " " << inlc << " " << inld << "|" ;
-   cout << "     l: |" << la << " " << lb << " " << lc << " " << ld << "|" << endl;
-   cout << "     offsets are " << offset_ac_L_set << " " << offset_ad_L_set << " " << offset_bc_L_set << " " << offset_bd_L_set << endl;
-   cout << "     Ts are " << Tac << Tad << Tbc << Tbd << endl;
-   cout << endl;
+//   cout << endl;
+//   cout << " KS adding qrtt at weight " << symm_fac << " i: |" << inla << " " << inlb << " " << inlc << " " << inld << "|" ;
+//   cout << "     l: |" << la << " " << lb << " " << lc << " " << ld << "|" << endl;
+//   cout << "     offsets are " << offset_ac_L_set << " " << offset_ad_L_set << " " << offset_bc_L_set << " " << offset_bd_L_set << endl;
+//   cout << "     Ts are " << Tac << Tad << Tbc << Tbd << endl;
+//   cout << endl;
 
    KS[L].insert( KS[L].end(), KS_idxs, KS_idxs+KS_SIZE );
 
@@ -399,7 +399,15 @@ size_t libGint::memory_needed( ){
 
 void libGint::set_cell( bool periodic_, double * cell_h_ ){
    periodic = periodic_; 
-   for (int uff=0;uff<9;uff++){ cell_h[uff] = cell_h_[uff]; }
+   for (int i=0;i<9;i++){ cell_h[CELL_HMAT_OFF+i] = cell_h_[i]; }
+}
+
+void libGint::set_inv_cell( double * cell_i_ ){
+   for (int i=0;i<9;i++){ cell_h[CELL_HINV_OFF+i] = cell_i_[i]; }
+}
+
+void libGint::set_neighs( double * neighs_ ){
+   for (int i=0;i<2*max_ncells;i++){ neighs[i] = neighs_[i]; }
 }
 
 void libGint::set_P( double * P_, int P_size ){
@@ -570,7 +578,7 @@ void libGint::dispatch( bool skip_cpu ){
    cout << int( tot_mem *scale ) << endl; cout.flush();
    }
 
-   double *data_dev, *cell_h_dev, *ftable_dev, *OUT_dev, *C2S_dev;
+   double *data_dev, *cell_h_dev, neighs_dev, *ftable_dev, *OUT_dev, *C2S_dev;
    double *integral_scratch_dev;
    unsigned int *OF_dev, *PMX_dev, *FVH_dev, *SPH_dev, *KS_dev, *TRA_dev;
    int *plan_dev;
@@ -578,7 +586,8 @@ void libGint::dispatch( bool skip_cpu ){
    PUSH_RANGE("dispatch malloc",1);
    CUDA_GPU_ERR_CHECK( cudaMalloc( (void**)&OUT_dev, sizeof(double)*OUT.size() ));
    CUDA_GPU_ERR_CHECK( cudaMalloc( (void**)&data_dev, sizeof(double)*(ua.internal_buffer.size()) ));
-   CUDA_GPU_ERR_CHECK( cudaMalloc( (void**)&cell_h_dev, sizeof(double)*(9) ));
+   CUDA_GPU_ERR_CHECK( cudaMalloc( (void**)&cell_h_dev, sizeof(double)*(2*9) ));
+   CUDA_GPU_ERR_CHECK( cudaMalloc( (void**)&neighs_dev, sizeof(double)*(3*max_ncells) ));
    CUDA_GPU_ERR_CHECK( cudaMalloc( (void**)&ftable_dev, sizeof(double)*(nelem) ));
    CUDA_GPU_ERR_CHECK( cudaMalloc( (void**)&C2S_dev, sizeof(double)*245 ));
    CUDA_GPU_ERR_CHECK( cudaMalloc( (void**)&integral_scratch_dev, sizeof(double)*max_integral_scratch_size ));
@@ -598,6 +607,8 @@ void libGint::dispatch( bool skip_cpu ){
       data_dev, ua.internal_buffer.data(), sizeof(double)*(ua.internal_buffer.size()), cudaMemcpyHostToDevice, cuda_stream ));
    CUDA_GPU_ERR_CHECK( cudaMemcpyAsync(
       cell_h_dev, cell_h, sizeof(double)*(9), cudaMemcpyHostToDevice, cuda_stream ));
+   CUDA_GPU_ERR_CHECK( cudaMemcpyAsync(
+      neighs_dev, neighs, sizeof(double)*(3*max_ncells), cudaMemcpyHostToDevice, cuda_stream )); 
    CUDA_GPU_ERR_CHECK( cudaMemcpyAsync(
       ftable_dev, ftable, sizeof(double)*(nelem), cudaMemcpyHostToDevice, cuda_stream ));
    CUDA_GPU_ERR_CHECK( cudaMemcpyAsync(
@@ -670,7 +681,7 @@ void libGint::dispatch( bool skip_cpu ){
       PUSH_RANGE("compute",5);
       compute_Fm_batched_low_gpu<<<Fm_numblocks,Fm_blocksize,0,cuda_stream>>>(
          FVH_dev, OF_dev, PMX_dev, data_dev, Fm_dev, Nprm, labcd,
-         periodic, cell_h_dev, ftable_dev, ftable_ld,R_cut,C0_dev,ld_C0,potential_type );
+         periodic, cell_h_dev, neighs_dev, ftable_dev, ftable_ld,R_cut,C0_dev,ld_C0,potential_type );
       CUDA_GPU_ERR_CHECK( cudaPeekAtLastError() );
 
 
@@ -745,6 +756,7 @@ void libGint::dispatch( bool skip_cpu ){
    CUDA_GPU_ERR_CHECK( cudaFree(OUT_dev) );
    CUDA_GPU_ERR_CHECK( cudaFree(data_dev) );
    CUDA_GPU_ERR_CHECK( cudaFree(cell_h_dev) );
+   CUDA_GPU_ERR_CHECK( cudaFree(neighs_dev) );
    CUDA_GPU_ERR_CHECK( cudaFree(ftable_dev) );
    CUDA_GPU_ERR_CHECK( cudaFree(C2S_dev) );
    CUDA_GPU_ERR_CHECK( cudaFree(integral_scratch_dev) );

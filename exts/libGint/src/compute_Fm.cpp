@@ -32,6 +32,7 @@ __device__ __host__ void compute_Fm_batched_single( int p,
       double* const __restrict__ Fm,
       int NFm, int L, bool periodic,
       const double* const __restrict__ cell,
+      const double* const __restrict__ neighs,
       const double* const __restrict__ ftable, 
       const int ftable_ld,
       const double R_cut, 
@@ -57,14 +58,23 @@ __device__ __host__ void compute_Fm_batched_single( int p,
    unsigned int idx_zc = FVH[i*FVH_SIZE+FVH_OFFSET_IDX_ZC] + ipc;
    unsigned int idx_zd = FVH[i*FVH_SIZE+FVH_OFFSET_IDX_ZD] + ipd;
 
-   const double* A = &data[idx_A];
-   const double* B = &data[idx_B];
-   const double* C = &data[idx_C];
-   const double* D = &data[idx_D];
+   // original position of the atoms before *any* pbc is applied
+   const double* Ao = &data[idx_A];
+   const double* Bo = &data[idx_B];
+   const double* Co = &data[idx_C];
+   const double* Do = &data[idx_D];
+
    double za = data[idx_za];
    double zb = data[idx_zb];
    double zc = data[idx_zc];
    double zd = data[idx_zd];
+
+   double zab = za+zb;
+   double inv_zab = 1. / zab;
+   double zcd = zc+zd;
+   double inv_zcd = 1. / zcd;
+   double z = zab + zcd;
+   double inv_z = 1./z;
 
 //   printf( " p: %d | A: [ %d ]  %lf %lf %lf \n", p, idx_A, A[0], A[1], A[2] );
 //   printf( " p: %d | B: [ %d ]  %lf %lf %lf \n", p, idx_B, B[0], B[1], B[2] );
@@ -77,29 +87,38 @@ __device__ __host__ void compute_Fm_batched_single( int p,
 
    int Of = p * F_size;
 
-   double zab = za+zb;
-   double inv_zab = 1. / zab;
-   double P[3];
+   // n1,n2 and n3 are the idx of the pbc cells for AB,CD and PQ \"
+   // note that :
+   // A does not move
+   // B starts from the min.image of the AB pair and is it then moved by n1
+   // C is moved by pq_shift and n3
+   // D starts from the min.image of the CD pair and it is then moved by pq_shift and n3
+   double A[3], B[3], C[3], D[3];
+   double ABs[3], CDs[3], PQs[3];
+   double P[3], Q[3], W[3];
+   compute_pbc_shift( A0, B0, cell, ABs );
+   compute_pbc_shift( C0, D0, cell, CDs );
+   A[0] = Ao[0];
+   A[1] = Ao[1];
+   A[2] = Ao[2];
+   B[0] = Bo[0] + ABs[0] + neighs[n1*3+0];
+   B[1] = Bo[1] + ABs[1] + neighs[n1*3+1];
+   B[2] = Bo[2] + ABs[2] + neighs[n1*3+2];
+   C[0] = Co[0];
+   C[1] = Co[1];
+   C[2] = Co[2];
+   D[0] = Do[0] + CDs[0] + neighs[n2*3+0];
+   D[1] = Do[1] + CDs[1] + neighs[n2*3+1];
+   D[2] = Do[2] + CDs[2] + neighs[n2*3+2];
    compute_weighted_distance( P, A,B,za,zb,zab );
-   double zcd = zc+zd;
-   double inv_zcd = 1. / zcd;
-   double Q[3];
    compute_weighted_distance( Q, C,D,zc,zd,zcd );
-   
-   // TODO // ABSOLUTELY
-   // add n1 to pbc(AB)
-   // add n2 to pbc(CD)
-   // add n3 to pbc(QP)
-
-   // WRONG ! n1,n2 and n3 changed meaning from \"n123 of G3\" to \"idx of pbc cells for AB,CD and PQ \"
-//   if (periodic){
-//      Q[0] += n1 * cell[0*3+0] + n2 * cell[1*3+0] + n3 * cell[2*3+0];
-//      Q[1] += n1 * cell[0*3+1] + n2 * cell[1*3+1] + n3 * cell[2*3+1];
-//      Q[2] += n1 * cell[0*3+2] + n2 * cell[1*3+2] + n3 * cell[2*3+2];
-//   }
-   double z = zab + zcd;
-   double inv_z = 1./z;
-   double W[3];
+   compute_pbc_shift( P, Q, cell, PQs );
+   C[0] = Co[0] + PQs[0] + neighs[n3*3+0];
+   C[1] = Co[1] + PQs[1] + neighs[n3*3+1];
+   C[2] = Co[2] + PQs[2] + neighs[n3*3+2];
+   D[0] = Do[0] + CDs[0] + neighs[n2*3+0] + PQs[0] + neighs[n3*3+0];
+   D[1] = Do[1] + CDs[1] + neighs[n2*3+1] + PQs[1] + neighs[n3*3+1];
+   D[2] = Do[2] + CDs[2] + neighs[n2*3+2] + PQs[2] + neighs[n3*3+2];
    compute_weighted_distance( W, P,Q,zab,zcd,z );
    
    double rho = zab*zcd*inv_z;
@@ -115,10 +134,12 @@ __device__ __host__ void compute_Fm_batched_single( int p,
 //   printf( " p: %d | P: [ %d ]  %lf %lf %lf \n", p, 0, P[0], P[1], P[2] );
 //   printf( " p: %d | Q: [ %d ]  %lf %lf %lf \n", p, 0, Q[0], Q[1], Q[2] );
 
-   double F0 = 0.0;
-   fgamma0( 0, T, &F0, ftable, ftable_ld );
+//   double F0 = 0.0; // ?
+//   fgamma0( 0, T, &F0, ftable, ftable_ld ); // ??
 
    double R = R_cut * rho ;
+   // TODO it may be good to split the calculation of T,R,PA,WP,QC,WQ,Kfac
+   // and the calculation of Fm to separate kernels to limit reg pressure
    switch ( potential_type ){
       case COULOMB :
          fgamma0( L, T, &Fm[Of], ftable, ftable_ld );
@@ -169,13 +190,14 @@ void compute_Fm_batched_low(
       double* const __restrict__ Fm,
       int NFm, int L, bool periodic,
       const double* const __restrict__ cell,
+      const double* const __restrict__ neighs,
       const double* const __restrict__ ftable, const int ftable_ld,
       const double R_cut, const double * const __restrict__ C0, const int ld_C0, int potential_type ){
 //#pragma omp target map(tofrom:FVH, PMI, data, cell, NFm, periodic, Fm)
 //{
 //#pragma omp parallel for
    for( int p = 0 ; p < NFm ; p++ ){
-      compute_Fm_batched_single( p, FVH, OF,PMX,data,Fm,NFm,L,periodic,cell,ftable,ftable_ld,R_cut,C0,ld_C0,potential_type );
+      compute_Fm_batched_single( p, FVH, OF,PMX,data,Fm,NFm,L,periodic,cell,neighs,ftable,ftable_ld,R_cut,C0,ld_C0,potential_type );
    }
 }
 
@@ -187,22 +209,23 @@ __global__ void compute_Fm_batched_low_gpu(
       double* __restrict__ Fm,
       int NFm, int L, bool periodic,
       double* __restrict__ cell,
+      double* __restrict__ neighs,
       double* __restrict__ ftable, int ftable_ld,
       const double R_cut, const double * const __restrict__ C0, const int ld_C0, int potential_type  ){
    for( int p = threadIdx.x + blockIdx.x*blockDim.x ; p < NFm ; p += blockDim.x*gridDim.x ){
-      compute_Fm_batched_single( p, FVH, OF,PMX,data,Fm,NFm,L,periodic,cell,ftable,ftable_ld,R_cut,C0,ld_C0,potential_type );
+      compute_Fm_batched_single( p, FVH, OF,PMX,data,Fm,NFm,L,periodic,cell,neighs,ftable,ftable_ld,R_cut,C0,ld_C0,potential_type );
    }
 }
 
 void compute_Fm_batched(
       const std::vector<unsigned int>& FVH,const std::vector<unsigned int>& OF, const std::vector<unsigned int>& PMX,
-      const std::vector<double>& data, std::vector<double>& Fm, int NFm, int L, bool periodic, double* cell,
+      const std::vector<double>& data, std::vector<double>& Fm, int NFm, int L, bool periodic, double* cell, double* neighs,
       const double* const __restrict__ ftable, const int ftable_ld,
        const double R_cut, const double * const __restrict__ C0, const int ld_C0, int potential_type  ){
 
    compute_Fm_batched_low(
       FVH.data(), OF.data(), PMX.data(),
-      data.data(), Fm.data(), NFm, L, periodic, cell,
+      data.data(), Fm.data(), NFm, L, periodic, cell, neighs,
       ftable, ftable_ld,
       R_cut,C0,ld_C0, potential_type  );
 } 

@@ -67,6 +67,9 @@ __device__ __host__ inline void compute_weighted_distance(
 }
 
 
+__device__ __host__ void compute_pbc_shift( double A[3], double B[3], double * cell, double * shift );
+
+
 __host__ int NLco( int L );
 // Returns L-lx
 // essentialy is using the pattern:

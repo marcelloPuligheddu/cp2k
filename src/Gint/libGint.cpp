@@ -316,12 +316,12 @@ void libGint::add_qrtt(
    KS_idxs[KS_OFFSET_OFFBD  ] = offset_bd_L_set;
    KS_idxs[KS_OFFSET_TALL   ] = encode4(  (int)Tac, (int)Tad, (int)Tbc, (int)Tbd );
 
-   cout << endl;
-   cout << " KS adding qrtt at weight " << symm_fac << " i: |" << inla << " " << inlb << " " << inlc << " " << inld << "|" ;
-   cout << "     l: |" << la << " " << lb << " " << lc << " " << ld << "|" << endl;
-   cout << "     offsets are " << offset_ac_L_set << " " << offset_ad_L_set << " " << offset_bc_L_set << " " << offset_bd_L_set << endl;
-   cout << "     Ts are " << Tac << Tad << Tbc << Tbd << endl;
-   cout << endl;
+//   cout << endl;
+//   cout << " KS adding qrtt at weight " << symm_fac << " i: |" << inla << " " << inlb << " " << inlc << " " << inld << "|" ;
+//   cout << "     l: |" << la << " " << lb << " " << lc << " " << ld << "|" << endl;
+//   cout << "     offsets are " << offset_ac_L_set << " " << offset_ad_L_set << " " << offset_bc_L_set << " " << offset_bd_L_set << endl;
+//   cout << "     Ts are " << Tac << Tad << Tbc << Tbd << endl;
+//   cout << endl;
 
    KS[L].insert( KS[L].end(), KS_idxs, KS_idxs+KS_SIZE );
 

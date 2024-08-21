@@ -132,6 +132,9 @@ SOFTWARE.
 #define KS_OFFSET_OFFBD   6
 #define KS_OFFSET_TALL    7 
 
+#define CELL_HMAT_OFF 0
+#define CELL_HINV_OFF 9
+
 #include<stdio.h>
 #include <cuda.h>
 #include <cuda_runtime_api.h>
