@@ -99,12 +99,22 @@ module libgint
    end interface
 
    interface
-   subroutine libgint_internal_set_cell( libgint_handle, periodic, cell ) bind(C,name="libgint_set_cell")
+   subroutine libgint_internal_set_cell( libgint_handle, periodic, cell_h, cell_i ) bind(C,name="libgint_set_cell")
       import :: c_ptr, c_int, c_bool
       implicit none
       logical(kind=c_bool) :: periodic
-      type(c_ptr), value :: libgint_handle, cell
+      type(c_ptr), value :: libgint_handle, cell_h,cell_i
    end subroutine libgint_internal_set_cell
+   end interface
+
+! void libgint_set_neighs( void * handle, double * neighs_, int nneighs ){
+   interface
+   subroutine libgint_internal_set_neighs( libgint_handle, neighs, nneighs ) bind(C,name="libgint_set_neighs")
+      import :: c_ptr, c_int
+      implicit none
+      type(c_ptr), value :: libgint_handle, neighs
+      integer(kind=c_int), value :: nneighs
+   end subroutine libgint_internal_set_neighs
    end interface
 
    interface
@@ -207,6 +217,7 @@ module libgint
    public :: libgint_init, libgint_set_Potential_Truncated
    public :: libgint_set_P, libgint_set_P_polarized, libgint_set_K, libgint_set_K_polarized
    public :: libgint_get_K, libgint_get_K_polarized, libgint_set_Atom, libgint_set_Atom_L, libgint_set_cell
+   public :: libgint_set_neighs
    public :: libgint_set_max_n_cell, libgint_add_prm, libgint_add_shell, libgint_add_cell, libgint_add_qrt
    public :: libgint_add_qrtt, libgint_add_set, libgint_memory_needed, libgint_dispatch
 
@@ -264,11 +275,17 @@ contains
       call libgint_internal_get_K_polarized( obj, c_loc(Ka), c_loc(Kb) )
    end subroutine libgint_get_K_polarized
 
-   subroutine libgint_set_cell( periodic, cell )
+   subroutine libgint_set_cell( periodic, cell_h, cell_i )
       logical(kind=c_bool), value :: periodic
-      real(kind=8), dimension(:), target :: cell
-      call libgint_internal_set_cell( obj, periodic, c_loc(cell) )
+      real(kind=8), dimension(:,:), target :: cell_h, cell_i
+      call libgint_internal_set_cell( obj, periodic, c_loc(cell_h), c_loc(cell_i) )
    end subroutine libgint_set_cell
+
+   subroutine libgint_set_neighs( neighs, nneighs )
+      integer(kind=c_int) :: nneighs
+      real(kind=8), dimension(:,:), target :: neighs
+      call libgint_internal_set_neighs( obj, c_loc(neighs), nneighs )
+   end subroutine libgint_set_neighs
 
    subroutine libgint_set_Atom( i, R, Z, np )
       integer(kind=c_int), value :: i, np

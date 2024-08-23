@@ -50,9 +50,14 @@ void libgint_get_K_polarized( void * handle, double * Ka, double * Kb ){
    g_handle -> get_K( Ka, Kb ); 
 }
 
-void libgint_set_cell( void * handle, bool periodic, double * cell_h ){
+void libgint_set_cell( void * handle, bool periodic, double * cell_h, double * cell_i ){
    libGint * g_handle = (libGint *) handle ;
-   g_handle -> set_cell( periodic, cell_h );
+   g_handle -> set_cell( periodic, cell_h, cell_i );
+}
+
+void libgint_set_neighs( void * handle, double * neighs_, int nneighs ){
+   libGint * g_handle = (libGint *) handle ;
+   g_handle -> set_neighs( neighs_, nneighs );
 }
 
 void libgint_set_Atom( void * handle, int i, double * R, double * Z, int np ){
@@ -117,9 +122,9 @@ void libgint_set_AtomInfo( void * handle, int i, double * R, double * Z, int np,
    }
 }
 
-void libgint_set_max_n_cell( void * handle , int n3 ){
+void libgint_set_max_n_cell( void * handle , int max_n_cell_ ){
    libGint * g_handle = (libGint *) handle ;
-   g_handle -> set_max_n_prm( n3 );
+   g_handle -> set_max_n_prm( max_n_cell_ );
 }
 
 void libgint_add_prm( void * handle, int ipa, int ipb, int ipc, int ipd, int n1, int n2, int n3 ){

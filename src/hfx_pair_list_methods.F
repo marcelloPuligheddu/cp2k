@@ -149,11 +149,11 @@ CONTAINS
       bra%pgf_cnt  = nelements
 
 
-      write(*,*) ' BRA/KET contains ', bra%pgf_cnt, " pgf pairs in ", bra%cell_cnt, " cells split as"
-      write(*,*) bra%cell_idx(:,1:bra%cell_cnt)
-      write(*,*) ' #### pgf are ###'
-      write(*,*) bra%pgf_idx(:,1:bra%pgf_cnt)
-      write(*,*) ' --------------------------'
+!      write(*,*) ' BRA/KET contains ', bra%pgf_cnt, " pgf pairs in ", bra%cell_cnt, " cells split as"
+!      write(*,*) bra%cell_idx(:,1:bra%cell_cnt)
+!      write(*,*) ' #### pgf are ###'
+!      write(*,*) bra%pgf_idx(:,1:bra%pgf_cnt)
+!      write(*,*) ' --------------------------'
 
 
    END SUBROUTINE build_pair_list_pbc_pgf

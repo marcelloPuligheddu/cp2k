@@ -36,6 +36,9 @@ __global__ void compute_HRR_batched_gpu_low(
       const double* const __restrict__ data,
       double* const __restrict__ ABCD,
       double* const __restrict__ ABCD0,
+      bool periodic,
+      const double* const __restrict__ cell,
+      const double* const __restrict__ neighs,
       int hrr_blocksize, int Nc, int numVC, int numVCH );
 
 void compute_HRR_batched_low(

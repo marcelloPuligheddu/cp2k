@@ -97,9 +97,10 @@ MODULE hfx_energy_potential
 
    !!!!!!!!!!!!!!!!!!!!!!!
    
-   use libGint, only : libgint_init,libgint_set_Potential_Truncated, &
+   use libGint, only : libgint_init, libgint_set_Potential_Truncated, &
                        libgint_set_P, libgint_set_P_polarized, libgint_set_K, libgint_set_K_polarized, &
                        libgint_get_K, libgint_get_K_polarized, libgint_set_Atom, libgint_set_Atom_L, libgint_set_cell, &
+                       libgint_set_neighs, &
                        libgint_set_max_n_cell, libgint_add_prm, libgint_add_shell, libgint_add_cell, libgint_add_qrt, &
                        libgint_add_qrtt, libgint_add_set, libgint_memory_needed, libgint_dispatch
 
@@ -265,7 +266,7 @@ CONTAINS
       integer :: offset_ac_L_set, offset_ad_L_set, offset_bc_L_set, offset_bd_L_set
       integer :: la,lb,lc,ld, ld_bd_set,ld_bc_set,ld_ad_set,ld_ac_set,inlb,inlc,inld
       integer :: nlb,nlc,nld
-      logical(1) :: Tbd,Tbc,Tad,Tac ! logical(1) for C-compatibility
+      logical(1) :: Tbd,Tbc,Tad,Tac,do_pbc ! logical(1) for C-compatibility
       logical :: screened
       integer :: s_offset_a_l,s_offset_b_l,s_offset_c_l,s_offset_d_l
       integer :: s_offset_a,s_offset_b,s_offset_c,s_offset_d,s_offset_ac,s_offset_ad,s_offset_bc,s_offset_bd
@@ -273,6 +274,7 @@ CONTAINS
 
       type(bra_t) :: bra, ket
       integer :: iatom_set, jatom_set, katom_set, latom_set
+      real(dp), dimension(:,:), allocatable :: cell_r
 
 
 
@@ -442,7 +444,7 @@ CONTAINS
 !$OMP         la,lb,lc,ld, ld_bd_set,ld_bc_set,ld_ad_set,ld_ac_set,Tbd,Tbc,Tad,Tac,nlb,nlc,nld,screened, &
 !$OMP         s_offset_a_l,s_offset_b_l,s_offset_c_l,s_offset_d_l, &
 !$OMP         s_offset_a,s_offset_b,s_offset_c,s_offset_d,s_offset_ac,s_offset_ad,s_offset_bc,s_offset_bd, &
-!$OMP         bra,ket,iatom_set,jatom_set,katom_set,latom_set)
+!$OMP         bra,ket,iatom_set,jatom_set,katom_set,latom_set,do_pbc,cell_r)
 
       ln_10 = LOG(10.0_dp)
       i_thread = 0
@@ -943,12 +945,22 @@ CONTAINS
          write(*,*) " NOT FIRST CALL "
       end if
 
+      do_pbc = do_periodic
       ! TODO is it possible for nneighbors to change when the cell is resized ?
       call allocate_bra( bra, max_pgf, nneighbors )
       call allocate_bra( ket, max_pgf, nneighbors )
-      call libgint_set_max_n_cell( nneighbors )
 
-      write (*,*) " CAll to set P K "
+      allocate(cell_r(3,nneighbors))
+      do i=1, nneighbors
+         cell_r(:,i) = actual_x_data%neighbor_cells(i)%cell_r(:)
+      end do
+      call libgint_set_cell( do_pbc, cell%hmat, cell%h_inv)
+      call libgint_set_neighs( cell_r, nneighbors) 
+
+      write(*,*) 'libgint cell is ', cell%hmat, cell%h_inv
+      write(*,*) 'libgint neig are', nneighbors, '|', cell_r
+
+      write (*,*) " Call to set P K "
       call libgint_set_P( full_density_alpha(:, 1) )
       call libgint_set_K( full_ks_alpha(:, 1), fac )
 
@@ -975,7 +987,7 @@ CONTAINS
                nla = nsgfl_a(l,iset)
 
                write (*,*) " CP2K setting atom set L ", jset ,l, nla,  gcc(1:npgfa(iset),inla:inla+nla-1,iset)
-               write (*,*) "    note sphi is : " ,  basis_parameter(ikind)%sphi_ext(:, :, :, :)
+!               write (*,*) "    note sphi is : " ,  basis_parameter(ikind)%sphi_ext(:, :, :, :)
                call libgint_set_Atom_L( jset-1, l, nla, gcc(1:npgfa(iset),inla:inla+nla-1,iset) )
 
                inla = inla + nla
@@ -984,6 +996,8 @@ CONTAINS
          
          end do 
       end do
+      
+      call libgint_set_max_n_cell( nneighbors )
 
       write(*,*) " PK set "
 
@@ -1791,7 +1805,7 @@ CONTAINS
                                                          s_offset_bd = offset_bd_L_set + s_offset_b * ld_bd_set + s_offset_d
                                                       end if
 
-                                                      write (*,*) " Adding qrtt ", la,lb,lc,ld, inla-1,inlb-1,inlc-1,inld-1 
+!                                                      write (*,*) " Adding qrtt ", la,lb,lc,ld, inla-1,inlb-1,inlc-1,inld-1 
                                                       call libgint_add_qrtt( symm_fac, &
                                                             la,lb,lc,ld, inla-1,inlb-1,inlc-1,inld-1, &
                                                             ld_ac_set, ld_ad_set,ld_bc_set,ld_bd_set, &
@@ -2553,9 +2567,10 @@ CONTAINS
 
                   IF (pgf_max_1 + pgf_max_2 + log10_pmax < log10_eps_schwarz) CYCLE
 
+!                  write(*,*) "Adding", '<', ipgf,jpgf,'(',n1,')|',kpgf,lpgf,'(',n2,')>'
+!                  write(*,*) '          @', idx_n1, n1, idx_ij, '|', idx_n2, n2, idx_kl
+
 !                  #ifdef HFX_GPU_PRM_SCR
-                     write(*,*) "Adding", '<', ipgf,jpgf,'(',n1,')|',kpgf,lpgf,'(',n2,')>'
-                     write(*,*) '          @', idx_n1, n1, idx_ij, '|', idx_n2, n2, idx_kl
                      R2   = ket%pgf_scr(2,idx_kl)
                      Q(1) = ket%pgf_scr(3,idx_kl)
                      Q(2) = ket%pgf_scr(4,idx_kl)
@@ -2589,7 +2604,7 @@ CONTAINS
                            IF (rpq2 > (R1 + R2 + potential_parameter%cutoff_radius*2.0_dp)**2) CYCLE
                         END IF
 !	                   #endif
-
+!                     write(*,*) 'adding', n3, 'prm'
                      call libGint_add_prm( ipgf-1,jpgf-1,kpgf-1,lpgf-1, n1-1,n2-1,n3-1 )
                      cell_was_screened = .false.
 
@@ -2598,8 +2613,9 @@ CONTAINS
             end do
 
             if ( .not. cell_was_screened ) then
-                    call libgint_add_shell( iatom_set, jatom_set, katom_set, latom_set, n1, n2 )
-                    screened = .false.
+!               write(*,*) 'Adding ', iatom_set, jatom_set, katom_set, latom_set, n1-1, n2-1, 'shell'
+               call libgint_add_shell( iatom_set, jatom_set, katom_set, latom_set, n1-1, n2-1 )
+               screened = .false.
             end if
             call libGint_add_cell() ! ??
 

@@ -118,8 +118,9 @@ class libGint {
    void get_K( std::vector<double> & K );
    void get_K( std::vector<double> & K_a, std::vector<double> & K_b );
 
-   void set_cell( bool periodic, double * cell_ );
- 
+   void set_cell( bool periodic, double * cell_, double * cell_inv_);
+   void set_neighs( double * neighs_, int nneighs );
+
    size_t max_integral_scratch_size = 0;
    size_t max_plan_size = 0;
    size_t max_OF_size = 0;
@@ -152,6 +153,7 @@ class libGint {
    unsigned int prm_in_set = 0;
    unsigned int n_prm = 0;
    int max_n_prm;
+   int max_ncells;
    unsigned int p0 = 0;
    unsigned int cell_in_set = 0;
    PlanCollection plans;
@@ -170,6 +172,7 @@ class libGint {
 
    double cell_h[9] = {0};
    double cell_inv_h[9] = {0};
+   std::vector<double> neighs;
 
    std::unordered_set<unsigned int> encoded_moments ;
    bool first = true;

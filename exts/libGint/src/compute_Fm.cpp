@@ -46,6 +46,13 @@ __device__ __host__ void compute_Fm_batched_single( int p,
    int n1,n2,n3;
    decode_ipabcd_n123( ipzn, &ipa, &ipb, &ipc, &ipd, &n1, &n2, &n3 );
 
+//   if (p == 0 ){
+//      printf(" Fm  FVH: " );
+//      for ( int ii = 0 ; ii < FVH_SIZE ; ii++ ){
+//         printf( " %u " , FVH[i*FVH_SIZE+ii] );
+//      } printf("\n"); ; 
+//   }
+
 //   printf( " GPU px %d \n" , p );
 //   printf( " ipzn: %d | %d %d %d %d | %d %d %d \n" , ipzn, ipa, ipb, ipc, ipd, n1, n2, n3 );
 
@@ -81,6 +88,11 @@ __device__ __host__ void compute_Fm_batched_single( int p,
 //   printf( " p: %d | C: [ %d ]  %lf %lf %lf \n", p, idx_C, C[0], C[1], C[2] );
 //   printf( " p: %d | D: [ %d ]  %lf %lf %lf \n", p, idx_D, D[0], D[1], D[2] );
 //   printf( " z: [ %d ]  %lf %lf %lf %lf \n", idx_za, za, zb, zc, zd );
+//   printf(" nla %d nlb %d nlc %d nld %d n1 %d n2 %d nlabcd %d \n" , nla,nlb,nlc,nld,n1,n2,nlabcd);     
+//   printf(" shifting A %lf %lf %lf and B %lf %lf %lf by %lf %lf %lf \n", 
+//       Ao[0], Ao[1], Ao[2], Bo[0], Bo[1], Bo[2], ABs[0], ABs[1], ABs[2] );
+
+
 
    int F_size = L + 1;
    if (L > 0 ) { F_size += 4*3+5; }
@@ -92,12 +104,12 @@ __device__ __host__ void compute_Fm_batched_single( int p,
    // A does not move
    // B starts from the min.image of the AB pair and is it then moved by n1
    // C is moved by pq_shift and n3
-   // D starts from the min.image of the CD pair and it is then moved by pq_shift and n3
+   // D starts from the min.image of the CD pair and it is then moved by n2, PQ_shift and n3
    double A[3], B[3], C[3], D[3];
    double ABs[3], CDs[3], PQs[3];
    double P[3], Q[3], W[3];
-   compute_pbc_shift( A0, B0, cell, ABs );
-   compute_pbc_shift( C0, D0, cell, CDs );
+   compute_pbc_shift( Ao, Bo, cell, ABs );
+   compute_pbc_shift( Co, Do, cell, CDs );
    A[0] = Ao[0];
    A[1] = Ao[1];
    A[2] = Ao[2];
@@ -113,12 +125,15 @@ __device__ __host__ void compute_Fm_batched_single( int p,
    compute_weighted_distance( P, A,B,za,zb,zab );
    compute_weighted_distance( Q, C,D,zc,zd,zcd );
    compute_pbc_shift( P, Q, cell, PQs );
-   C[0] = Co[0] + PQs[0] + neighs[n3*3+0];
-   C[1] = Co[1] + PQs[1] + neighs[n3*3+1];
-   C[2] = Co[2] + PQs[2] + neighs[n3*3+2];
-   D[0] = Do[0] + CDs[0] + neighs[n2*3+0] + PQs[0] + neighs[n3*3+0];
-   D[1] = Do[1] + CDs[1] + neighs[n2*3+1] + PQs[1] + neighs[n3*3+1];
-   D[2] = Do[2] + CDs[2] + neighs[n2*3+2] + PQs[2] + neighs[n3*3+2];
+//   C[0] = Co[0] + PQs[0] + neighs[n3*3+0];
+//   C[1] = Co[1] + PQs[1] + neighs[n3*3+1];
+//   C[2] = Co[2] + PQs[2] + neighs[n3*3+2];
+//   D[0] = Do[0] + CDs[0] + neighs[n2*3+0] + PQs[0] + neighs[n3*3+0];
+//   D[1] = Do[1] + CDs[1] + neighs[n2*3+1] + PQs[1] + neighs[n3*3+1];
+//   D[2] = Do[2] + CDs[2] + neighs[n2*3+2] + PQs[2] + neighs[n3*3+2];
+   Q[0] = Q [0] + PQs[0] + neighs[n3*3+0];
+   Q[1] = Q [1] + PQs[1] + neighs[n3*3+1];
+   Q[2] = Q [2] + PQs[2] + neighs[n3*3+2];
    compute_weighted_distance( W, P,Q,zab,zcd,z );
    
    double rho = zab*zcd*inv_z;
@@ -131,11 +146,18 @@ __device__ __host__ void compute_Fm_batched_single( int p,
    double Zn = 1./sqrt(z); // cp2k uses the correct norm so we can use OS86 eq 44
    double Kfactor = Zn * Kab * Kcd;
 
+//   printf(" shifting A %lf %lf %lf and B %lf %lf %lf by %lf %lf %lf \n", 
+//       Ao[0], Ao[1], Ao[2], Bo[0], Bo[1], Bo[2], ABs[0], ABs[1], ABs[2] );
+//   printf(" shifting A %lf %lf %lf and B %lf %lf %lf by %lf %lf %lf \n", 
+//       Ao[0], Ao[1], Ao[2], Bo[0], Bo[1], Bo[2], ABs[0], ABs[1], ABs[2] );
+//   printf(" shifting P %lf %lf %lf and Q %lf %lf %lf by %lf %lf %lf \n", 
+//       P [0], P [1], P [2], Q [0], Q [1], Q [2], PQs[0], PQs[1], PQs[2] );
+
 //   printf( " p: %d | P: [ %d ]  %lf %lf %lf \n", p, 0, P[0], P[1], P[2] );
 //   printf( " p: %d | Q: [ %d ]  %lf %lf %lf \n", p, 0, Q[0], Q[1], Q[2] );
 
-//   double F0 = 0.0; // ?
-//   fgamma0( 0, T, &F0, ftable, ftable_ld ); // ??
+   double F0 = 0.0; // ?
+   fgamma0( 0, T, &F0, ftable, ftable_ld ); // ??
 
    double R = R_cut * rho ;
    // TODO it may be good to split the calculation of T,R,PA,WP,QC,WQ,Kfac
@@ -180,6 +202,15 @@ __device__ __host__ void compute_Fm_batched_single( int p,
       Fm[Of+L+16] = - inv_2zcd * rho_zcd;
       Fm[Of+L+17] = inv_2z;
    }
+
+   if (p == 0 ){
+      printf(" Fm2  FVH: " );
+      for ( int ii = 0 ; ii < FVH_SIZE ; ii++ ){
+         printf( " %u " , FVH[i*FVH_SIZE+ii] );
+      } printf("\n"); ; 
+   }
+
+
 }
 
 void compute_Fm_batched_low(
