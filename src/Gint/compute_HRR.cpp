@@ -199,6 +199,9 @@ __global__ void compute_HRR_batched_gpu_low(
       const double* const __restrict__ data,
       double* const __restrict__ ABCD,
       double* const __restrict__ ABCD0,
+      bool periodic,
+      const double* const __restrict__ cell,
+      const double* const __restrict__ neighs,
       int hrr_blocksize, int Nc, int numVC, int numVCH ){
 
    for( int block=blockIdx.x; block < Ncells ; block+=gridDim.x ){
@@ -209,18 +212,60 @@ __global__ void compute_HRR_batched_gpu_low(
       unsigned int idx_B  = FVH[block*FVH_SIZE+FVH_OFFSET_IDX_B];
       unsigned int idx_C  = FVH[block*FVH_SIZE+FVH_OFFSET_IDX_C];
       unsigned int idx_D  = FVH[block*FVH_SIZE+FVH_OFFSET_IDX_D];
-      unsigned int encoded_nlabcd = FVH[block*FVH_SIZE+FVH_OFFSET_NLABCD];
+      unsigned int encoded_nlabcd_12 = FVH[block*FVH_SIZE+FVH_OFFSET_NLABCD];
+
+      if (blockIdx.x == 0 and threadIdx.x == 0 ){
+         printf(" HRR FVH: " );
+         for ( int ii = 0 ; ii < FVH_SIZE ; ii++ ){
+            printf( " %u " , FVH[block*FVH_SIZE+ii] );
+         } printf("\n"); ; 
+      }
 
       unsigned int nla,nlb,nlc,nld;
-      decode4( encoded_nlabcd, &nla,&nlb,&nlc,&nld );
-      int nlabcd = nla*nlb*nlc*nld;
+      int nlabcd, n1, n2;
+      // TODO nlabcd is a dummy args, we need to rewrite to have a 6 elem. encoder
+      decode_ipabcd_n123( encoded_nlabcd_12, &nla,&nlb,&nlc,&nld,&n1,&n2,&nlabcd);
+      nlabcd = nla*nlb*nlc*nld;
 
-      const double * const A =  &data[idx_A];
-      const double * const B =  &data[idx_B];
+      
+      if (threadIdx.x == 0 ){
+         printf(" e %u | nla %u nlb %u nlc %u nld %u n1 %d n2 %d nlabcd %d \n" , encoded_nlabcd_12, nla,nlb,nlc,nld,n1,n2,nlabcd);
+      }
+
+      const double * const Ao =  &data[idx_A];
+      const double * const Bo =  &data[idx_B];
+      double A[3], B[3], ABs[3];
+      compute_pbc_shift( Ao, Bo, cell, ABs );
+
+      A[0] = Ao[0];
+      A[1] = Ao[1];
+      A[2] = Ao[2];
+      B[0] = Bo[0] + ABs[0] + neighs[n1*3+0];
+      B[1] = Bo[1] + ABs[1] + neighs[n1*3+1];
+      B[2] = Bo[2] + ABs[2] + neighs[n1*3+2];
+
       const double AB[3] = { A[0]-B[0], A[1]-B[1], A[2]-B[2] };
-      const double * const C =  &data[idx_C];
-      const double * const D =  &data[idx_D];
+
+      const double * const Co =  &data[idx_C];
+      const double * const Do =  &data[idx_D];
+      double C[3], D[3], CDs[3];
+      compute_pbc_shift( Co, Do, cell, CDs );
+      C[0] = Co[0];
+      C[1] = Co[1];
+      C[2] = Co[2];
+      D[0] = Do[0] + CDs[0] + neighs[n2*3+0];
+      D[1] = Do[1] + CDs[1] + neighs[n2*3+1];
+      D[2] = Do[2] + CDs[2] + neighs[n2*3+2];
       const double CD[3] = { C[0]-D[0], C[1]-D[1], C[2]-D[2] };
+
+      if (threadIdx.x == 0 ){
+         printf(" shifting A %lf %lf %lf and B %lf %lf %lf by %lf %lf %lf \n", 
+            Ao[0], Ao[1], Ao[2], Bo[0], Bo[1], Bo[2], ABs[0], ABs[1], ABs[2] );
+         printf(" shifting C %lf %lf %lf and D %lf %lf %lf by %lf %lf %lf \n", 
+            Co[0], Co[1], Co[2], Do[0], Do[1], Do[2], CDs[0], CDs[1], CDs[2] );
+      }
+
+
 
       // TODO // ABSOLUTELY
       // add CELL[n1] to pbc(AB) and CELL[n2] to pbc(CD)

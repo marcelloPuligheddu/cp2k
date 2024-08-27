@@ -7,7 +7,7 @@
 &FORCE_EVAL
   METHOD Quickstep
   &DFT
-    BASIS_SET_FILE_NAME ./BASIS_OPT_MOD
+    BASIS_SET_FILE_NAME ./MOD_BASIS_OPT
     POTENTIAL_FILE_NAME ./POTENTIAL
     &MGRID
       CUTOFF 100
@@ -18,8 +18,7 @@
       METHOD GAPW
     &END QS
     &POISSON
-       POISSON_SOLVER ANALYTIC
-       PERIODIC NONE
+       POISSON_SOLVER PERIODIC
     &END
     &SCF
       EPS_SCF 1.0E-9
@@ -57,10 +56,10 @@
       ABC 16.252 16.252 16.252
     &END CELL
     &COORD
-      H 0 0 0
+      H 16 0 0
       H 0 1 0
       Li 2.0 1.0 0
-      H 0 0 1
+      H 16 0 1
       H 0 1 1
       Li 1.0 1.0 0.5
    &END COORD

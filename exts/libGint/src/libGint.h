@@ -176,7 +176,7 @@ class libGint {
 
    std::unordered_set<unsigned int> encoded_moments ;
    bool first = true;
-   bool all_moments[NL4] ;
+   bool all_moments[NL4] = {false} ;
    std::vector<size_t> record_of_out_sizes[NL4];
    std::vector<double> record_of_times_cpu[NL4];
    std::vector<double> record_of_times_gpu[NL4];

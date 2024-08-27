@@ -202,7 +202,7 @@ void libGint::add_shell ( int i, int j, int k, int l, int n1, int n2 ){
                   encoded_nlabcd, encoded_npabcd
                };
 
-               cout << " Adding to FVH | " << la << lb << lc << ld << " | " << i << " " << j << " " << k << " " << l << " " << n1 << " " << n2 << " | " ;
+//               cout << " Adding to FVH | " << la << lb << lc << ld << " | " << i << " " << j << " " << k << " " << l << " " << n1 << " " << n2 << " | " ;
                for ( int tmp_idx=0; tmp_idx<FVH_SIZE; tmp_idx++ ){
                   cout << tmp[tmp_idx] << " " ;
                   if ( (tmp_idx==2) or (tmp_idx==3) or (tmp_idx==7) or (tmp_idx==11) or (tmp_idx==15) ){ cout << "|" ; }
@@ -218,7 +218,7 @@ void libGint::add_shell ( int i, int j, int k, int l, int n1, int n2 ){
 
                if ( all_moments[L] == false ){
 
-//                  cout << " planning " << la << " " << lb << " " << lc << " " << ld << endl;
+                  cout << " planning " << la << " " << lb << " " << lc << " " << ld << endl;
 
                   std::vector<int> * plan = NULL ;
                   unsigned int vrr_blocksize, hrr_blocksize, numV, numVC, numVCH;
@@ -226,9 +226,12 @@ void libGint::add_shell ( int i, int j, int k, int l, int n1, int n2 ){
                   all_vrr_blocksize[L] = vrr_blocksize;
                   all_hrr_blocksize[L] = hrr_blocksize;
                   all_moments[L] = true;
+
+                  cout << " Plan is " << plan->size() << " " << vrr_blocksize << " " << hrr_blocksize << " " << numV << " " << numVC << " " << numVCH << endl;
+
                }
 
-               cout << " AC size " << la<<lb<<lc<<ld << " += " << all_vrr_blocksize[L] << " " << n_prm << endl;
+//               cout << " AC size " << la<<lb<<lc<<ld << " += " << all_vrr_blocksize[L] << " " << n_prm << endl;
                AC_size[L] += all_vrr_blocksize[L] * n_prm;
                ABCD_size[L] += all_hrr_blocksize[L] * N_cc;
 
@@ -686,63 +689,70 @@ void libGint::dispatch( bool skip_cpu ){
       CUDA_GPU_ERR_CHECK( cudaPeekAtLastError() );
       CUDA_GPU_ERR_CHECK( cudaDeviceSynchronize() );
 
-      std::vector<double> FM_on_cpu(Fm_size[L]);
-      CUDA_GPU_ERR_CHECK( cudaMemcpy( FM_on_cpu.data(),  Fm_dev, sizeof(double)*(Fm_size[L]), cudaMemcpyDeviceToHost) );
-      cout << " FM " << endl;
-      for( int ifm=0; ifm < Fm_size[L]; ifm++ ){
-         cout << ifm << " " << std::setprecision(16) << FM_on_cpu[ifm] << endl;
-      } cout << endl;
+//      std::vector<double> FM_on_cpu(Fm_size[L]);
+//      CUDA_GPU_ERR_CHECK( cudaMemcpy( FM_on_cpu.data(),  Fm_dev, sizeof(double)*(Fm_size[L]), cudaMemcpyDeviceToHost) );
+//      cout << " FM " << endl;
+//      for( int ifm=0; ifm < Fm_size[L]; ifm++ ){
+//         cout << ifm << " " << std::setprecision(16) << FM_on_cpu[ifm] << endl;
+//      } cout << endl;
 
-      std::vector<unsigned int> FVH_on_cpu(FVH[L].size());
-      CUDA_GPU_ERR_CHECK( cudaMemcpy( FVH_on_cpu.data(),  FVH_dev, sizeof(unsigned int )*(FVH[L].size()), cudaMemcpyDeviceToHost) );
-      cout << " FVH <- " << endl;
-      for( int ifm=0; ifm < FVH[L].size(); ifm++ ){
-         cout << " " << FVH_on_cpu[ifm] ;
-         if (ifm % FVH_SIZE == FVH_SIZE-1 ){ cout << endl ; }
-      } cout << endl;
+//      std::vector<unsigned int> FVH_on_cpu(FVH[L].size());
+//      CUDA_GPU_ERR_CHECK( cudaMemcpy( FVH_on_cpu.data(),  FVH_dev, sizeof(unsigned int )*(FVH[L].size()), cudaMemcpyDeviceToHost) );
+//      cout << " FVH <- " << endl;
+//      for( int ifm=0; ifm < FVH[L].size(); ifm++ ){
+//         cout << " " << FVH_on_cpu[ifm] ;
+//         if (ifm % FVH_SIZE == FVH_SIZE-1 ){ cout << endl ; }
+//      } cout << endl;
+//      CUDA_GPU_ERR_CHECK( cudaPeekAtLastError() );
+//      CUDA_GPU_ERR_CHECK( cudaDeviceSynchronize() );
 
-      CUDA_GPU_ERR_CHECK( cudaPeekAtLastError() );
-      CUDA_GPU_ERR_CHECK( cudaDeviceSynchronize() );
 
-
-      compute_VRR_batched_gpu_low<<<Ncells,1,0,cuda_stream>>>(
+      compute_VRR_batched_gpu_low<<<Ncells,32,0,cuda_stream>>>(
          Ncells, plan_dev, PMX_dev, FVH_dev, Fm_dev, data_dev,
          AC_dev, ABCD_dev, vrr_blocksize, hrr_blocksize, labcd, numV, numVC ); 
       CUDA_GPU_ERR_CHECK( cudaPeekAtLastError() );
       CUDA_GPU_ERR_CHECK( cudaDeviceSynchronize() );
 
-      std::vector<double> AC_on_cpu(AC_size[L]);
-      CUDA_GPU_ERR_CHECK( cudaMemcpy( AC_on_cpu.data(),  AC_dev, sizeof(double)*(AC_size[L]), cudaMemcpyDeviceToHost) );
-      cout << " AC " << AC_size[L] << endl;
-      for( int ifm=0; ifm < AC_size[L]; ifm++ ){
-         cout << ifm << " " << std::setprecision(16) << AC_on_cpu[ifm] << endl;
-      } cout << endl;
+//      std::vector<double> AC_on_cpu(AC_size[L]);
+//      CUDA_GPU_ERR_CHECK( cudaMemcpy( AC_on_cpu.data(),  AC_dev, sizeof(double)*(AC_size[L]), cudaMemcpyDeviceToHost) );
+//      cout << " AC " << AC_size[L] << endl;
+//      for( int ifm=0; ifm < AC_size[L]; ifm++ ){
+//         cout << ifm << " " << std::setprecision(16) << AC_on_cpu[ifm] << endl;
+//      } cout << endl;
 
-      std::vector<unsigned int> FVH2_on_cpu(FVH[L].size());
-      CUDA_GPU_ERR_CHECK( cudaMemcpy( FVH2_on_cpu.data(),  FVH_dev, sizeof(unsigned int )*(FVH[L].size()), cudaMemcpyDeviceToHost) );
-      cout << " FVH 2 <- " << endl;
-      for( int ifm=0; ifm < FVH[L].size(); ifm++ ){
-         cout << " " << FVH2_on_cpu[ifm] ;
-         if (ifm % FVH_SIZE == FVH_SIZE-1 ){ cout << endl ; }
-      } cout << endl;
+//      std::vector<double> ABCD_on_cpu(ABCD_size[L]);
+//      CUDA_GPU_ERR_CHECK( cudaMemcpy( ABCD_on_cpu.data(),  ABCD_dev, sizeof(double)*(ABCD_size[L]), cudaMemcpyDeviceToHost) );
+//      cout << " ABCD " << ABCD_size[L] << endl;
+//      for( int ifm=0; ifm < ABCD_size[L]; ifm++ ){
+//         cout << ifm << " " << std::setprecision(16) << ABCD_on_cpu[ifm] << endl;
+//      } cout << endl;
 
 
-      for ( int ii = 0 ; ii < FVH[L].size() ; ii++ ){
-         cout << FVH[L][ii] << " " ;
-         if ( ii % FVH_SIZE == FVH_SIZE-1 ){ cout << endl ; }
-      }
+//      std::vector<unsigned int> FVH2_on_cpu(FVH[L].size());
+//      CUDA_GPU_ERR_CHECK( cudaMemcpy( FVH2_on_cpu.data(),  FVH_dev, sizeof(unsigned int )*(FVH[L].size()), cudaMemcpyDeviceToHost) );
+//      cout << " FVH 2 <- " << endl;
+//      for( int ifm=0; ifm < FVH[L].size(); ifm++ ){
+//         cout << " " << FVH2_on_cpu[ifm] ;
+//         if (ifm % FVH_SIZE == FVH_SIZE-1 ){ cout << endl ; }
+//      } cout << endl;
+
+//      cout << "FVH" << endl;
+//      for ( int ii = 0 ; ii < FVH[L].size() ; ii++ ){
+//         cout << FVH[L][ii] << " " ;
+//         if ( ii % FVH_SIZE == FVH_SIZE-1 ){ cout << endl ; }
+//      } cout << endl;
     
       compute_HRR_batched_gpu_low<<<Ncells,128,0,cuda_stream>>>(
          Ncells, plan_dev, FVH_dev, data_dev, ABCD_dev, ABCD0_dev,
          periodic, cell_h_dev, neighs_dev,
          hrr_blocksize, Nc, numVC, numVCH );
 
-      std::vector<double> ABCD0_on_cpu(ABCD0_size[L]);
-      CUDA_GPU_ERR_CHECK( cudaMemcpy( ABCD0_on_cpu.data(),  ABCD0_dev, sizeof(double)*(ABCD0_size[L]), cudaMemcpyDeviceToHost) );
-      cout << " ABCD0 " << endl;
-      for( int ifm=0; ifm < ABCD0_size[L]; ifm++ ){
-         cout << ifm << " " << std::setprecision(16) << ABCD0_on_cpu[ifm] << endl;
-      } cout << endl;
+//      std::vector<double> ABCD0_on_cpu(ABCD0_size[L]);
+//      CUDA_GPU_ERR_CHECK( cudaMemcpy( ABCD0_on_cpu.data(),  ABCD0_dev, sizeof(double)*(ABCD0_size[L]), cudaMemcpyDeviceToHost) );
+//      cout << " ABCD0 " << endl;
+//      for( int ifm=0; ifm < ABCD0_size[L]; ifm++ ){
+//         cout << ifm << " " << std::setprecision(16) << ABCD0_on_cpu[ifm] << endl;
+//      } cout << endl;
 
 
       // Note: we need to DeviceSynchronize before going from kernels to cublas. TODO actually check it is true

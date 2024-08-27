@@ -29,9 +29,9 @@ __device__ __host__ void decodeL( unsigned int L, int* la, int* lb, int* lc, int
 /*
 unsigned int encode_ipabcd_n123( const int ipa, const int ipb, const int ipc, const int ipd, const int n1, const int n2, const int n3 ){
     unsigned int ret = 0;
-    ret += n3+8;
-    ret += (n2+8) * 16;
-    ret += (n1+8) * 16 * 16;
+    ret += n3;
+    ret += (n2) * 16;
+    ret += (n1) * 16 * 16;
     ret += (ipd) * 16 * 16 * 16;
     ret += (ipc) * 16 * 16 * 16 * 32;
     ret += (ipb) * 16 * 16 * 16 * 32 * 32;
@@ -39,6 +39,27 @@ unsigned int encode_ipabcd_n123( const int ipa, const int ipb, const int ipc, co
     return ret;
 }
 */
+
+
+__device__ __host__ void compute_pbc_shift( const double A[3], const double B[3], const double * cell, double * shift ){
+   const double * h_mat = &cell[CELL_HMAT_OFF];
+   const double * h_inv = &cell[CELL_HINV_OFF];
+   double AB[3];
+   AB[0] = A[0]-B[0];
+   AB[1] = A[1]-B[1];
+   AB[2] = A[2]-B[2];
+   // note it is a 3x3 by 3 matrix vector product
+   double s0 = h_inv[0*3+0] * AB[0] + h_inv[1*3+0] * AB[1] + h_inv[2*3+0] * AB[2] ;
+   double s1 = h_inv[0*3+1] * AB[0] + h_inv[1*3+1] * AB[1] + h_inv[2*3+1] * AB[2] ;
+   double s2 = h_inv[0*3+2] * AB[0] + h_inv[1*3+2] * AB[1] + h_inv[2*3+2] * AB[2] ;
+   s0 = rint( s0 );
+   s1 = rint( s1 );
+   s2 = rint( s2 );
+   // note it is a 3x3 by 3 matrix vector product
+   shift[0] = h_mat[0*3+0] * s0 + h_mat[1*3+0] * s1 + h_mat[2*3+0] * s2;
+   shift[1] = h_mat[0*3+1] * s0 + h_mat[1*3+1] * s1 + h_mat[2*3+1] * s2;
+   shift[2] = h_mat[0*3+2] * s0 + h_mat[1*3+2] * s1 + h_mat[2*3+2] * s2;
+}
 
 
 __device__ __host__ void decode_ipabcd_none(
@@ -61,9 +82,9 @@ __host__ __device__ void decode_ipabcd_n123(
    (*ipb) = ipzn / (16*16*16*32*32)%32;
    (*ipc) = ipzn / (16*16*16*32)%32;
    (*ipd) = ipzn / (16*16*16)%32;
-   (*n1)  = ipzn / (16*16)%16-8;
-   (*n2)  = ipzn / (16)%16-8;
-   (*n3)  = ipzn %16-8;
+   (*n1)  = ipzn / (16*16)%16;
+   (*n2)  = ipzn / (16)%16;
+   (*n3)  = ipzn %16;
 }
 
 

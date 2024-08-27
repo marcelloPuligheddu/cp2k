@@ -602,44 +602,43 @@ __global__ void compute_VRR_batched_gpu_low(
       int F_size = L+1;
       if (L > 0){ F_size += 4*3+5; }
  
-      if (blockIdx.x == 0 and threadIdx.x == 0 ){
-         printf(" VRR 0 FVH: " );
-         for ( int ii = 0 ; ii < FVH_SIZE ; ii++ ){
-            printf( " %u " , FVH[ii] );
-         } printf("\n"); ; 
-      }
+//      if (blockIdx.x == 0 and threadIdx.x == 0 ){
+//         printf(" VRR 0 FVH: " );
+//         for ( int ii = 0 ; ii < FVH_SIZE ; ii++ ){
+//            printf( " %u " , FVH[ii] );
+//         } printf("\n"); ; 
+//      }
 
       unsigned int nla,nlb,nlc,nld,npa,npb,npc,npd;
       // VRR does not need to know the cell, since it is already in the PA vectors
       decode_ipabcd_none( nlabcd, &nla,&nlb,&nlc,&nld );
-      printf( " %d.%d decoded %u as %u %u %u %u", blockIdx.x, threadIdx.x, nlabcd, nla,nlb,nlc,nld );
 
-      if (blockIdx.x == 0 and threadIdx.x == 0 ){
-         printf(" VRR 0.1 FVH: " );
-         for ( int ii = 0 ; ii < FVH_SIZE ; ii++ ){
-            printf( " %u " , FVH[ii] );
-         } printf("\n"); ; 
-      }
+//      printf( " %d.%d decoded %u as %u %u %u %u", blockIdx.x, threadIdx.x, nlabcd, nla,nlb,nlc,nld );
+//      if (blockIdx.x == 0 and threadIdx.x == 0 ){
+//         printf(" VRR 0.1 FVH: " );
+//         for ( int ii = 0 ; ii < FVH_SIZE ; ii++ ){
+//            printf( " %u " , FVH[ii] );
+//         } printf("\n"); ; 
+//      }
 
       decode4( npabcd, &npa,&npb,&npc,&npd );
 
-      printf( " %d.%d decoded %u as %u %u %u %u", blockIdx.x, threadIdx.x, npabcd, npa,npb,npc,npd );
-
-      if (blockIdx.x == 0 and threadIdx.x == 0 ){
-         printf(" VRR 0.2 FVH: " );
-         for ( int ii = 0 ; ii < FVH_SIZE ; ii++ ){
-            printf( " %u " , FVH[ii] );
-         } printf("\n"); ; 
-      }
+//      printf( " %d.%d decoded %u as %u %u %u %u", blockIdx.x, threadIdx.x, npabcd, npa,npb,npc,npd );
+//      if (blockIdx.x == 0 and threadIdx.x == 0 ){
+//         printf(" VRR 0.2 FVH: " );
+//         for ( int ii = 0 ; ii < FVH_SIZE ; ii++ ){
+//            printf( " %u " , FVH[ii] );
+//         } printf("\n"); ; 
+//      }
 
       double* sh_mem = &ABCD[ Og * hrr_blocksize ];
 
-      if (blockIdx.x == 0 and threadIdx.x == 0 ){
-         printf(" VRR 0.3 FVH: " );
-         for ( int ii = 0 ; ii < FVH_SIZE ; ii++ ){
-            printf( " %u " , FVH[ii] );
-         } printf("\n"); ; 
-      }
+//      if (blockIdx.x == 0 and threadIdx.x == 0 ){
+//         printf(" VRR 0.3 FVH: " );
+//         for ( int ii = 0 ; ii < FVH_SIZE ; ii++ ){
+//            printf( " %u " , FVH[ii] );
+//         } printf("\n"); ; 
+//      }
 
       int n_cc = nla*nlb*nlc*nld;
       for ( unsigned i= threadIdx.x; i < hrr_blocksize * n_cc ; i+= blockDim.x ){
@@ -657,12 +656,12 @@ __global__ void compute_VRR_batched_gpu_low(
       int my_vrr_team = threadIdx.x / vrr_team_size;
       int my_vrr_rank = threadIdx.x % vrr_team_size;
 
-      if (blockIdx.x == 0 and threadIdx.x == 0 ){
-         printf(" VRR 0.2 FVH: " );
-         for ( int ii = 0 ; ii < FVH_SIZE ; ii++ ){
-            printf( " %u " , FVH[ii] );
-         } printf("\n"); ; 
-      }
+//      if (blockIdx.x == 0 and threadIdx.x == 0 ){
+//         printf(" VRR 0.2 FVH: " );
+//         for ( int ii = 0 ; ii < FVH_SIZE ; ii++ ){
+//            printf( " %u " , FVH[ii] );
+//         } printf("\n"); ; 
+//      }
 
 
       for ( unsigned i = my_vrr_team; i < n_prm ;  i += num_vrr_teams ){
@@ -675,12 +674,12 @@ __global__ void compute_VRR_batched_gpu_low(
          // we need to know the index of the pgfs to fidn the K coefficents
          decode_ipabcd_none( ipzn, &ipa,&ipb,&ipc,&ipd );
 
-         if (blockIdx.x == 0 and threadIdx.x == 0 ){
-            printf(" VRR %u %u %u %u %u %d FVH: ", ipzn, ipa, ipb, ipc, ipd, n_cc );
-            for ( int ii = 0 ; ii < FVH_SIZE ; ii++ ){
-               printf( " %u " , FVH[ii] );
-            } printf("\n"); ; 
-         }
+//         if (blockIdx.x == 0 and threadIdx.x == 0 ){
+//            printf(" VRR %u %u %u %u %u %d FVH: ", ipzn, ipa, ipb, ipc, ipd, n_cc );
+//            for ( int ii = 0 ; ii < FVH_SIZE ; ii++ ){
+//               printf( " %u " , FVH[ii] );
+//            } printf("\n"); ; 
+//         }
 
 
          double* pr_mem = &AC[ (Ov + i) * vrr_blocksize ];
@@ -731,12 +730,12 @@ __global__ void compute_VRR_batched_gpu_low(
 //            const int my_vrr_rank = 0;
 //            const int vrr_team_size = 1;
 
-            if (blockIdx.x == 0 and threadIdx.x == 0 ){
-               printf(" VRR %d FVH: ", op+1 );
-               for ( int ii = 0 ; ii < FVH_SIZE ; ii++ ){
-                  printf( " %u " , FVH[ii] );
-               } printf("\n"); ; 
-            }
+//            if (blockIdx.x == 0 and threadIdx.x == 0 ){
+//               printf(" VRR %d FVH: ", op+1 );
+//               for ( int ii = 0 ; ii < FVH_SIZE ; ii++ ){
+//                  printf( " %u " , FVH[ii] );
+//               } printf("\n"); ; 
+//            }
 
  
             if ( t == VRR1 ){ 

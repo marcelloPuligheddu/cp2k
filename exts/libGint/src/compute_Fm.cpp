@@ -125,12 +125,12 @@ __device__ __host__ void compute_Fm_batched_single( int p,
    compute_weighted_distance( P, A,B,za,zb,zab );
    compute_weighted_distance( Q, C,D,zc,zd,zcd );
    compute_pbc_shift( P, Q, cell, PQs );
-//   C[0] = Co[0] + PQs[0] + neighs[n3*3+0];
-//   C[1] = Co[1] + PQs[1] + neighs[n3*3+1];
-//   C[2] = Co[2] + PQs[2] + neighs[n3*3+2];
-//   D[0] = Do[0] + CDs[0] + neighs[n2*3+0] + PQs[0] + neighs[n3*3+0];
-//   D[1] = Do[1] + CDs[1] + neighs[n2*3+1] + PQs[1] + neighs[n3*3+1];
-//   D[2] = Do[2] + CDs[2] + neighs[n2*3+2] + PQs[2] + neighs[n3*3+2];
+   C[0] = Co[0] + PQs[0] + neighs[n3*3+0];
+   C[1] = Co[1] + PQs[1] + neighs[n3*3+1];
+   C[2] = Co[2] + PQs[2] + neighs[n3*3+2];
+   D[0] = Do[0] + CDs[0] + neighs[n2*3+0] + PQs[0] + neighs[n3*3+0];
+   D[1] = Do[1] + CDs[1] + neighs[n2*3+1] + PQs[1] + neighs[n3*3+1];
+   D[2] = Do[2] + CDs[2] + neighs[n2*3+2] + PQs[2] + neighs[n3*3+2];
    Q[0] = Q [0] + PQs[0] + neighs[n3*3+0];
    Q[1] = Q [1] + PQs[1] + neighs[n3*3+1];
    Q[2] = Q [2] + PQs[2] + neighs[n3*3+2];
