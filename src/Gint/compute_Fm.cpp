@@ -203,12 +203,12 @@ __device__ __host__ void compute_Fm_batched_single( int p,
       Fm[Of+L+17] = inv_2z;
    }
 
-   if (p == 0 ){
-      printf(" Fm2  FVH: " );
-      for ( int ii = 0 ; ii < FVH_SIZE ; ii++ ){
-         printf( " %u " , FVH[i*FVH_SIZE+ii] );
-      } printf("\n"); ; 
-   }
+//   if (p == 0 ){
+//      printf(" Fm2  FVH: " );
+//      for ( int ii = 0 ; ii < FVH_SIZE ; ii++ ){
+//         printf( " %u " , FVH[i*FVH_SIZE+ii] );
+//      } printf("\n"); ; 
+//   }
 
 
 }

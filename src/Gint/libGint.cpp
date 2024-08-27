@@ -203,10 +203,10 @@ void libGint::add_shell ( int i, int j, int k, int l, int n1, int n2 ){
                };
 
 //               cout << " Adding to FVH | " << la << lb << lc << ld << " | " << i << " " << j << " " << k << " " << l << " " << n1 << " " << n2 << " | " ;
-               for ( int tmp_idx=0; tmp_idx<FVH_SIZE; tmp_idx++ ){
-                  cout << tmp[tmp_idx] << " " ;
-                  if ( (tmp_idx==2) or (tmp_idx==3) or (tmp_idx==7) or (tmp_idx==11) or (tmp_idx==15) ){ cout << "|" ; }
-               } cout << endl;
+//               for ( int tmp_idx=0; tmp_idx<FVH_SIZE; tmp_idx++ ){
+//                  cout << tmp[tmp_idx] << " " ;
+//                  if ( (tmp_idx==2) or (tmp_idx==3) or (tmp_idx==7) or (tmp_idx==11) or (tmp_idx==15) ){ cout << "|" ; }
+//               } cout << endl;
 
                FVH[L].insert( FVH[L].end(), tmp, tmp+FVH_SIZE );
 
@@ -227,7 +227,7 @@ void libGint::add_shell ( int i, int j, int k, int l, int n1, int n2 ){
                   all_hrr_blocksize[L] = hrr_blocksize;
                   all_moments[L] = true;
 
-                  cout << " Plan is " << plan->size() << " " << vrr_blocksize << " " << hrr_blocksize << " " << numV << " " << numVC << " " << numVCH << endl;
+                  cout << " Plan is " << plan->size() / OP_SIZE << " " << vrr_blocksize << " " << hrr_blocksize << " " << numV << " " << numVC << " " << numVCH << endl;
 
                }
 
