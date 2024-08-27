@@ -42,7 +42,7 @@ double* read_c0( int Nder, FILE* stream, int* ldc0_ptr ){
 
 __device__ __host__ void PD2VAL( double* res, int Nder, double TG1, double TG2, const double* C0_row ){
    double T1[14], T2[14];
-   printf(" TG1 %lf TG2 %lf ", TG1, TG2 );
+//   printf(" TG1 %lf TG2 %lf ", TG1, TG2 );
    T1[0] = 1.0;
    T2[0] = 1.0;
    T1[1] = SQRT2*TG1;
@@ -50,12 +50,12 @@ __device__ __host__ void PD2VAL( double* res, int Nder, double TG1, double TG2, 
    T1[2] = 2.*TG1*T1[1] - SQRT2;
    T2[2] = 2.*TG2*T2[1] - SQRT2;
    for ( int i=3; i < 14; i++ ) {
-      // NOTE: this is the recurrencer relation for Chebishev polynomial of the first kind
+      // NOTE: this is the recurrence relation for Chebishev polynomial of the first kind
       T1[i] = 2.*TG1*T1[i-1] - T1[i-2];
       T2[i] = 2.*TG2*T2[i-1] - T2[i-2];
    }
-   // NOTE: this horror has the structure v1(k) @ T(k) @ v2(k).T[::-1]
-   // where v1 and v2 are vector and T is a Triangular matrix
+   // NOTE: this horror has the structure v1(k) @ L(k) @ v2(k).T[::-1]
+   // where v1 and v2 are vector and L is a (flattened) Triangular matrix
    for ( int k=0; k <= Nder; k++ ){
       res[k] = 0.; 
       int jl = 0; // unlike l, jl does not get reset after the l loop
@@ -63,10 +63,10 @@ __device__ __host__ void PD2VAL( double* res, int Nder, double TG1, double TG2, 
          double dot = 0.0;
          for ( int l=0; l < 14-j; l++){
             dot += T1[l] * C0_row[k*105+jl];
-            printf(" T1[l]: %lg C0_kl : %lg || k j l jl kjl %d %d %d %d %d || \n", T1[l], C0_row[k*105+jl], k, j, l, jl, k*105+jl );
+//            printf(" T1[l]: %lg C0_kl : %lg || k j l jl kjl %d %d %d %d %d || \n", T1[l], C0_row[k*105+jl], k, j, l, jl, k*105+jl );
             jl++;
          }
-         printf(" T2[j]: %lg dot : %lg || j k %d %d || \n", T2[j], dot, j, k );
+//         printf(" T2[j]: %lg dot : %lg || j k %d %d || \n", T2[j], dot, j, k );
          res[k] += dot * T2[j];
       }
    }
@@ -74,7 +74,7 @@ __device__ __host__ void PD2VAL( double* res, int Nder, double TG1, double TG2, 
 
 
 __device__ __host__ bool t_c_g0_n( double* res, double R, double T, int Nder, const double* C0, int ldc0 ){
-   printf(" computing tcg R: %lg T: %lg ", R, T );
+//   printf(" computing tcg R: %lg T: %lg ", R, T );
    bool use_gamma = false;
    double upper = R*R + 11.0*R + 50.0;
    double lower = R*R - 11.0*R +  0.0;

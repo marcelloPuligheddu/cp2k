@@ -927,12 +927,6 @@ CONTAINS
          potential_parameter = actual_x_data%potential_parameter
          if (potential_parameter%potential_type == do_potential_truncated .or. &
              potential_parameter%potential_type == do_potential_mix_cl_trunc) then
-            write (*,*) " Setting TruncCol: Rcut = ", potential_parameter%cutoff_radius
-            write (*,*) " C0 = " , shape(C0)
-            write (*,*) " C0 = " , C0(1,1)
-            do iatom=1, 207
-               write (*,*) iatom, C0(:,iatom)
-            end do
             call libgint_set_Potential_Truncated( potential_parameter%cutoff_radius, C0(:,:) )
          end if
          first_call = .false.

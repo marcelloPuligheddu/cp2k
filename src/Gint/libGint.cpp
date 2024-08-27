@@ -218,7 +218,7 @@ void libGint::add_shell ( int i, int j, int k, int l, int n1, int n2 ){
 
                if ( all_moments[L] == false ){
 
-                  cout << " planning " << la << " " << lb << " " << lc << " " << ld << endl;
+//                  cout << " planning " << la << " " << lb << " " << lc << " " << ld << endl;
 
                   std::vector<int> * plan = NULL ;
                   unsigned int vrr_blocksize, hrr_blocksize, numV, numVC, numVCH;
@@ -227,7 +227,7 @@ void libGint::add_shell ( int i, int j, int k, int l, int n1, int n2 ){
                   all_hrr_blocksize[L] = hrr_blocksize;
                   all_moments[L] = true;
 
-                  cout << " Plan is " << plan->size() / OP_SIZE << " " << vrr_blocksize << " " << hrr_blocksize << " " << numV << " " << numVC << " " << numVCH << endl;
+//                  cout << " Plan is " << plan->size() / OP_SIZE << " " << vrr_blocksize << " " << hrr_blocksize << " " << numV << " " << numVC << " " << numVCH << endl;
 
                }
 

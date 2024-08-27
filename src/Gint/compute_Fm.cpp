@@ -156,10 +156,7 @@ __device__ __host__ void compute_Fm_batched_single( int p,
 //   printf( " p: %d | P: [ %d ]  %lf %lf %lf \n", p, 0, P[0], P[1], P[2] );
 //   printf( " p: %d | Q: [ %d ]  %lf %lf %lf \n", p, 0, Q[0], Q[1], Q[2] );
 
-   double F0 = 0.0; // ?
-   fgamma0( 0, T, &F0, ftable, ftable_ld ); // ??
 
-   double R = R_cut * rho ;
    // TODO it may be good to split the calculation of T,R,PA,WP,QC,WQ,Kfac
    // and the calculation of Fm to separate kernels to limit reg pressure
    switch ( potential_type ){
@@ -167,16 +164,24 @@ __device__ __host__ void compute_Fm_batched_single( int p,
          fgamma0( L, T, &Fm[Of], ftable, ftable_ld );
       break;
       case TRUNCATED :
+         double R = R_cut * sqrt(rho) ;
          bool use_gamma = t_c_g0_n( &Fm[Of], R, T, L, C0, ld_C0 );
          if (use_gamma) { fgamma0( L, T, &Fm[Of], ftable, ftable_ld ); }
       break;
    } // end switch potential_type
 
-   for( unsigned int m=0; m < L+1; m++ ){
+//   for( unsigned int m=0; m < L+1; m++ ){
 //      double tmp = Fm[Of+m]*Kfactor;
-//      printf ( " Fm[%d](T=%lg) = %4.12lg = %4.12lg * %4.12lg || F00 = %4.12lg \n", m, T, tmp, Fm[Of+m], Kfactor, F0 );
-      Fm[Of+m] *= Kfactor;
-   }
+//      double F0 = 0.0;
+//      double R = R_cut * sqrt(rho) ;
+//      fgamma0( 0, T, &F0, ftable, ftable_ld );
+//      printf ( " Fm[%d](T=%lg,R=%lg) = %4.12lg = %4.12lg * %4.12lg || F00 = %4.12lg \n", m, T, R, tmp, Fm[Of+m], Kfactor, F0 );
+//   }
+
+   // Don't forget to scale by Zn, Ka and Kb
+   for( unsigned int m=0; m < L+1; m++ ){ Fm[Of+m] *= Kfactor; }
+
+
 
    if ( L > 0 ){
       double inv_2zab = inv_zab * 0.5;
