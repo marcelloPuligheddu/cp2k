@@ -1,8 +1,12 @@
 #include <cassert>
+#include <vector>
 #include "util.h"
 #include "define.h"
 
 
+unsigned int encode4( int a, int b, int c, int d ){
+   return a*256*256*256 + b*256*256 + c*256 + d;
+}
 
 __device__ __host__ void decode4(
    unsigned int abcd, unsigned int* a, unsigned int* b,
@@ -18,7 +22,6 @@ unsigned int encodeL( int la, int lb, int lc, int ld ){
    return la * NL3 + lb * NL2 + lc * NL + ld;
 }
 
-
 __device__ __host__ void decodeL( unsigned int L, int* la, int* lb, int* lc, int* ld ){
    (*ld) = L % NL;
    (*lc) = L / NL % NL ;
@@ -26,20 +29,82 @@ __device__ __host__ void decodeL( unsigned int L, int* la, int* lb, int* lc, int
    (*la) = L / NL3 ;
 }
 
-/*
-unsigned int encode_ipabcd_n123( const int ipa, const int ipb, const int ipc, const int ipd, const int n1, const int n2, const int n3 ){
+unsigned int encode_prm( const int ipa, const int ipb, const int ipc, const int ipd, const int n3 ){
+    assert(ipa >= 0);
+    assert(ipa < MAX_N_PRM);
+    assert(ipb >= 0);
+    assert(ipb < MAX_N_PRM);
+    assert(ipc >= 0);
+    assert(ipc < MAX_N_PRM);
+    assert(ipd >= 0);
+    assert(ipd < MAX_N_PRM);
+    assert(n3 >= 0);
+    assert(n3 < MAX_N_CELL);
+
     unsigned int ret = 0;
-    ret += n3;
-    ret += (n2) * 16;
-    ret += (n1) * 16 * 16;
-    ret += (ipd) * 16 * 16 * 16;
-    ret += (ipc) * 16 * 16 * 16 * 32;
-    ret += (ipb) * 16 * 16 * 16 * 32 * 32;
-    ret += (ipa) * 16 * 16 * 16 * 32 * 32 * 32;    
+    ret +=  n3;
+    ret += ipd * MAX_N_CELL;
+    ret += ipc * MAX_N_CELL * MAX_N_PRM;
+    ret += ipb * MAX_N_CELL * MAX_N_PRM * MAX_N_PRM;
+    ret += ipa * MAX_N_CELL * MAX_N_PRM * MAX_N_PRM * MAX_N_PRM;
     return ret;
 }
-*/
 
+__host__ __device__ void decode_prm( 
+      const unsigned int prm,
+      unsigned int* __restrict__ ipa, unsigned int* __restrict__ ipb,
+      unsigned int* __restrict__ ipc, unsigned int* __restrict__ ipd,
+      unsigned int* __restrict__ n3 ){
+   (*ipa) = (prm / (MAX_N_CELL * MAX_N_PRM * MAX_N_PRM * MAX_N_PRM));
+   (*ipb) = (prm / (MAX_N_CELL * MAX_N_PRM * MAX_N_PRM)) % MAX_N_PRM;
+   (*ipc) = (prm / (MAX_N_CELL * MAX_N_PRM)) % MAX_N_PRM;
+   (*ipd) = (prm / (MAX_N_CELL)) % MAX_N_PRM;
+   (*n3)  = (prm) % MAX_N_CELL;
+}
+
+unsigned int encode_shell( const int nla, const int nlb, const int nlc, const int nld, const int n1, const int n2 ){
+    assert(nla >= 0);
+    assert(nla < MAX_N_L);
+    assert(nlb >= 0);
+    assert(nlb < MAX_N_L);
+    assert(nlc >= 0);
+    assert(nlc < MAX_N_L);
+    assert(nld >= 0);
+    assert(nld < MAX_N_L);
+    assert(n1 >= 0);
+    assert(n1 < MAX_N_CELL);
+    assert(n2 >= 0);
+    assert(n2 < MAX_N_CELL);
+
+    unsigned int ret = 0;
+    ret +=  n2;
+    ret +=  n1 * MAX_N_CELL;
+    ret += nld * MAX_N_CELL * MAX_N_CELL;
+    ret += nlc * MAX_N_CELL * MAX_N_CELL * MAX_N_L;
+    ret += nlb * MAX_N_CELL * MAX_N_CELL * MAX_N_L * MAX_N_L;
+    ret += nla * MAX_N_CELL * MAX_N_CELL * MAX_N_L * MAX_N_L * MAX_N_L;
+    return ret;
+}
+
+__host__ __device__ void decode_shell(
+      const unsigned int shell,
+      unsigned int* __restrict__ nla, unsigned int* __restrict__ nlb,
+      unsigned int* __restrict__ nlc, unsigned int* __restrict__ nld,
+      unsigned int* __restrict__ n1,  unsigned int* __restrict__ n2 ){
+   (*nla) = (shell / (MAX_N_CELL * MAX_N_CELL * MAX_N_L * MAX_N_L * MAX_N_L));
+   (*nlb) = (shell / (MAX_N_CELL * MAX_N_CELL * MAX_N_L * MAX_N_L)) % MAX_N_L;
+   (*nlc) = (shell / (MAX_N_CELL * MAX_N_CELL * MAX_N_L)) % MAX_N_L;
+   (*nld) = (shell / (MAX_N_CELL * MAX_N_CELL)) % MAX_N_L;
+   (*n1)  = (shell / MAX_N_CELL) % MAX_N_CELL;
+   (*n2)  = (shell) % MAX_N_CELL;
+}
+
+int max( std::vector<int> x ){
+   if ( x.size() == 0 ){ return 0; };
+   int ret = x[0];
+   for( int idx=1; idx<x.size(); idx++ ){ ret = max(ret, x[idx]); }
+   return ret;
+}
 
 __device__ __host__ void compute_pbc_shift( const double A[3], const double B[3], const double * cell, double * shift ){
    const double * h_mat = &cell[CELL_HMAT_OFF];
@@ -60,33 +125,6 @@ __device__ __host__ void compute_pbc_shift( const double A[3], const double B[3]
    shift[1] = h_mat[0*3+1] * s0 + h_mat[1*3+1] * s1 + h_mat[2*3+1] * s2;
    shift[2] = h_mat[0*3+2] * s0 + h_mat[1*3+2] * s1 + h_mat[2*3+2] * s2;
 }
-
-
-__device__ __host__ void decode_ipabcd_none(
-      unsigned int ipzn,
-      unsigned int* __restrict__ ipa, unsigned int* __restrict__ ipb,
-      unsigned int* __restrict__ ipc, unsigned int* __restrict__ ipd ){
-   (*ipa) = ipzn / (16*16*16*32*32*32);
-   (*ipb) = ipzn / (16*16*16*32*32)%32;
-   (*ipc) = ipzn / (16*16*16*32)%32;
-   (*ipd) = ipzn / (16*16*16)%32;
-}
-
-
-__host__ __device__ void decode_ipabcd_n123(
-      unsigned int ipzn,
-      unsigned int* __restrict__ ipa, unsigned int* __restrict__ ipb,
-      unsigned int* __restrict__ ipc, unsigned int* __restrict__ ipd,
-      int* __restrict__ n1, int* __restrict__ n2, int* __restrict__ n3 ){
-   (*ipa) = ipzn / (16*16*16*32*32*32);
-   (*ipb) = ipzn / (16*16*16*32*32)%32;
-   (*ipc) = ipzn / (16*16*16*32)%32;
-   (*ipd) = ipzn / (16*16*16)%32;
-   (*n1)  = ipzn / (16*16)%16;
-   (*n2)  = ipzn / (16)%16;
-   (*n3)  = ipzn %16;
-}
-
 
 
 

@@ -49,7 +49,7 @@ class libGint {
       my_thr = omp_get_thread_num() ;
       std::cout << " LibGint Ctor called from thr " << my_thr << std::endl; 
    }
-   void add_prm ( const int ipa, const int ipb, const int ipc, const int ipd, const int n1, const int n2, const int n3 ) ;
+   void add_prm ( const int ipa, const int ipb, const int ipc, const int ipd, const int n3 ) ;
    void add_shell (int i, int j , int k, int l, int n1, int n2);
    void add_cell();
    int add_qrt( int la, int lb, int lc, int ld, int nla, int nlb, int nlc, int nld );

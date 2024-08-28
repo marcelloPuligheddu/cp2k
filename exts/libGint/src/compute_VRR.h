@@ -35,20 +35,5 @@ __global__ void compute_VRR_batched_gpu_low(
       double* const __restrict__ ABCD,
       int vrr_blocksize, int hrr_blocksize, int L, int numV, int numVC );
 
-void compute_VRR_batched(
-      const int Ncells, const std::vector<int>& plan, const std::vector<unsigned int>& OF, const std::vector<unsigned int>& PMX,
-      const std::vector<unsigned int>& FVH, const std::vector<double>& Fm, const std::vector<double>& data,
-      std::vector<double>& AC, std::vector<double>& ABCD, int vrr_blocksize, int hrr_blocksize, int L, int numV, int numVC );
-
-void compute_VRR_batched_low(
-      const int Ncells, const int* __restrict__ plan,
-      const unsigned int* const __restrict__ PMX,
-      const unsigned int* const __restrict__ FVH,
-      const double* const __restrict__ Fm,
-      const double* const __restrict__ data,
-      double* const __restrict__ AC,
-      double* const __restrict__ ABCD,
-      int vrr_blocksize, int hrr_blocksize, int L, int numV, int numVC );
-
 
 #endif // COMPUTE_VRR_H_COMPILE_GUARD

@@ -24,12 +24,9 @@ SOFTWARE.
 #define UTIL_H_COMPILE_GUARD
 
 
+#include <vector>
 
-inline unsigned int encode4( int a, int b, int c, int d ){
-   return a*256*256*256 + b*256*256 + c*256 + d;
-}
-
-//#pragma omp declare target
+unsigned int encode4( int a, int b, int c, int d );
 __device__ __host__ void decode4(
       unsigned int abcd, unsigned int* a, unsigned int* b,
       unsigned int* c, unsigned int* d );
@@ -37,26 +34,22 @@ __device__ __host__ void decode4(
 unsigned int encodeL( int la, int lb, int lc, int ld );
 __device__ __host__ void decodeL( unsigned int L, int* la, int* lb, int* lc, int* ld );
 
-//unsigned int encode_ipabcd_n123( const int ipa, const int ipb, const int ipc, const int ipd, const int n1, const int n2, const int n3 );
-
-__device__ __host__ void decode_ipabcd_none(
-      unsigned int ipzn,
-      unsigned int* __restrict__ ipa, unsigned int* __restrict__ ipb,
-      unsigned int* __restrict__ ipc, unsigned int* __restrict__ ipd);
-
-
-__device__ __host__ void decode_ipabcd_n123(
+unsigned int encode_prm( int ipa, int ipb, int ipc, int ipd, int n3 );
+__device__ __host__ void decode_prm(
       unsigned int ipzn,
       unsigned int* __restrict__ ipa, unsigned int* __restrict__ ipb,
       unsigned int* __restrict__ ipc, unsigned int* __restrict__ ipd,
-      int* __restrict__ n1, int* __restrict__ n2, int* __restrict__ n3 );
+      unsigned int* __restrict__ n3 );
 
+unsigned int encode_shell( int nla, int nlb, int nlc, int nld, int n1, int n2 );
+__device__ __host__ void decode_shell(
+      unsigned int shell,
+      unsigned int* __restrict__ nla, unsigned int* __restrict__ nlb,
+      unsigned int* __restrict__ nlc, unsigned int* __restrict__ nld,
+      unsigned int* __restrict__ n1 , unsigned int* __restrict__ n2 );
 
 __device__ __host__ int compute_Nc( int la, int lb=0, int lc=0, int ld=0 );
-
-
 __device__ __host__ int compute_Ns( int la, int lb=0, int lc=0, int ld=0 );
-
 
 __device__ __host__ inline void compute_weighted_distance(
       double X12[3], const double X1[3], const double X2[3],
@@ -67,6 +60,7 @@ __device__ __host__ inline void compute_weighted_distance(
 }
 
 
+int max( std::vector<int> x );
 __device__ __host__ void compute_pbc_shift( const double A[3], const double B[3], const double * cell, double * shift );
 
 

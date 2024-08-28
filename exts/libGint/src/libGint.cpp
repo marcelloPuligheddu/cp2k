@@ -21,9 +21,6 @@
 using std::max;
 
 
-
-
-
 void libGint::show_state(){
 
    for (unsigned int L : encoded_moments ){
@@ -32,27 +29,6 @@ void libGint::show_state(){
       cout << " Moments : " << la << " " << lb << " " << lc << " " << ld << endl;
    }
 
-}
-
-inline unsigned int encode_ipabcd_n123( const int ipa, const int ipb, const int ipc, const int ipd, const int n1, const int n2, const int n3 ){
-    unsigned int ret = 0;
-    ret +=  n3;
-    ret +=  n2 * 16;
-    ret +=  n1 * 16 * 16;
-    ret += ipd * 16 * 16 * 16;
-    ret += ipc * 16 * 16 * 16 * 32;
-    ret += ipb * 16 * 16 * 16 * 32 * 32;
-    ret += ipa * 16 * 16 * 16 * 32 * 32 * 32;    
-    return ret;
-}
-
-int max( std::vector<int> x ){
-   if ( x.size() == 0 ){ return 0; };
-   int ret = x[0];
-   for( int idx=1; idx<x.size(); idx++ ){
-      ret = max(ret, x[idx]);
-   }
-   return ret;
 }
 
 // TODO max_n3 is set by nneighs, which is also max_ncells
@@ -136,10 +112,10 @@ void libGint::set_Atom_L( int i, int l_, int nl_, double* K_ ){
    all_idx_K[i].push_back( ua.add( K_, np[i]*nl_ ) );
 }
 
-void libGint::add_prm( const int ipa, const int ipb, const int ipc, const int ipd, const int n1, const int n2, const int n3 ){
-//   cout << "|" << ipa << ipb << ipc << ipd << '|' << n1 << n2 << n3 ;
+void libGint::add_prm( const int ipa, const int ipb, const int ipc, const int ipd, const int n3 ){
+//   cout << "|" << ipa << ipb << ipc << ipd << '|' << n3 ;
 //   cout.flush();
-   unsigned int piabcdxyz = encode_ipabcd_n123(ipa,ipb,ipc,ipd,n1,n2,n3);
+   unsigned int piabcdxyz = encode_prm(ipa,ipb,ipc,ipd,n3);
    prm_tmp_list[ n_prm ] = piabcdxyz;
    n_prm++;
 }
@@ -185,7 +161,7 @@ void libGint::add_shell ( int i, int j, int k, int l, int n1, int n2 ){
                const unsigned int Og = offset_G[L];
                const unsigned int Oq = offset_Q[L];
 
-               const unsigned int encoded_nlabcd = encode_ipabcd_n123(nla,nlb,nlc,nld,n1,n2,0);
+               const unsigned int encoded_nlabcd = encode_shell(nla,nlb,nlc,nld,n1,n2);
                const unsigned int encoded_npabcd = encode4(np[i],np[j],np[k],np[l]);
 
 //               cout << " TH " << my_thr << " Inserting " << Of << " repeated " << n_prm << " times into OF[" << la<<lb<<lc<<ld << "] at " << OF[L].size() << " | " << PMX[L].size() << endl;

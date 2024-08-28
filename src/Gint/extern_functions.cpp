@@ -127,9 +127,9 @@ void libgint_set_max_n_cell( void * handle , int max_n_cell_ ){
    g_handle -> set_max_n_prm( max_n_cell_ );
 }
 
-void libgint_add_prm( void * handle, int ipa, int ipb, int ipc, int ipd, int n1, int n2, int n3 ){
+void libgint_add_prm( void * handle, int ipa, int ipb, int ipc, int ipd, int n3 ){
    libGint * g_handle = (libGint *) handle ;
-   g_handle -> add_prm( ipa, ipb, ipc, ipd, n1, n2, n3 );
+   g_handle -> add_prm( ipa, ipb, ipc, ipd, n3 );
 }
 
 void libgint_add_shell( void * handle, int i, int j ,int k, int l, int n1, int n2 ){

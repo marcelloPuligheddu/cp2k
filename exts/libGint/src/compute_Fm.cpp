@@ -2,10 +2,10 @@
 #include <omp.h>
 #include <vector>
 #include "define.h"
-#include "compute_Fm.h"
 #include "util.h"
 #include "fgamma.h"
 #include "t_c_g0_n.cpp"
+#include "compute_Fm.h"
 #include <cuda.h>
 #include <cuda_runtime.h>
 #include <iostream>
@@ -43,8 +43,24 @@ __device__ __host__ void compute_Fm_batched_single( int p,
    unsigned int i    = OF[p];
    unsigned int ipzn = PMX[p];
    unsigned int ipa,ipb,ipc,ipd;
-   int n1,n2,n3;
-   decode_ipabcd_n123( ipzn, &ipa, &ipb, &ipc, &ipd, &n1, &n2, &n3 );
+   unsigned int n3;
+
+   decode_prm( ipzn, &ipa, &ipb, &ipc, &ipd, &n3 );
+
+   unsigned int idx_A  = FVH[i*FVH_SIZE+FVH_OFFSET_IDX_A];
+   unsigned int idx_B  = FVH[i*FVH_SIZE+FVH_OFFSET_IDX_B];
+   unsigned int idx_C  = FVH[i*FVH_SIZE+FVH_OFFSET_IDX_C];
+   unsigned int idx_D  = FVH[i*FVH_SIZE+FVH_OFFSET_IDX_D];
+   unsigned int idx_za = FVH[i*FVH_SIZE+FVH_OFFSET_IDX_ZA] + ipa;
+   unsigned int idx_zb = FVH[i*FVH_SIZE+FVH_OFFSET_IDX_ZB] + ipb;
+   unsigned int idx_zc = FVH[i*FVH_SIZE+FVH_OFFSET_IDX_ZC] + ipc;
+   unsigned int idx_zd = FVH[i*FVH_SIZE+FVH_OFFSET_IDX_ZD] + ipd;
+   unsigned int encoded_nlabcd_12 = FVH[i*FVH_SIZE+FVH_OFFSET_NLABCD];
+
+   // TODO ipa can be reused as the dummy for nla, and so on for bcd
+   unsigned int nla,nlb,nlc,nld;
+   unsigned int n1, n2;
+   decode_shell( encoded_nlabcd_12, &nla,&nlb,&nlc,&nld,&n1,&n2);
 
 //   if (p == 0 ){
 //      printf(" Fm  FVH: " );
@@ -55,15 +71,6 @@ __device__ __host__ void compute_Fm_batched_single( int p,
 
 //   printf( " GPU px %d \n" , p );
 //   printf( " ipzn: %d | %d %d %d %d | %d %d %d \n" , ipzn, ipa, ipb, ipc, ipd, n1, n2, n3 );
-
-   unsigned int idx_A  = FVH[i*FVH_SIZE+FVH_OFFSET_IDX_A];
-   unsigned int idx_B  = FVH[i*FVH_SIZE+FVH_OFFSET_IDX_B];
-   unsigned int idx_C  = FVH[i*FVH_SIZE+FVH_OFFSET_IDX_C];
-   unsigned int idx_D  = FVH[i*FVH_SIZE+FVH_OFFSET_IDX_D];
-   unsigned int idx_za = FVH[i*FVH_SIZE+FVH_OFFSET_IDX_ZA] + ipa;
-   unsigned int idx_zb = FVH[i*FVH_SIZE+FVH_OFFSET_IDX_ZB] + ipb;
-   unsigned int idx_zc = FVH[i*FVH_SIZE+FVH_OFFSET_IDX_ZC] + ipc;
-   unsigned int idx_zd = FVH[i*FVH_SIZE+FVH_OFFSET_IDX_ZD] + ipd;
 
    // original position of the atoms before *any* pbc is applied
    const double* Ao = &data[idx_A];

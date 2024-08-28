@@ -1274,6 +1274,10 @@ CONTAINS
             latom_start = actual_x_data%blocks(latom_block)%istart
             latom_end = actual_x_data%blocks(latom_block)%iend
 
+            if ( jatom_start == 1 .and. katom_start == 1 .and. latom_start == 1 ) then
+               write(*,*) "Block is: ", iatom_start, iatom_end
+            end if
+
             pmax_blocks = MAX(shm_pmax_block(katom_block, iatom_block), &
                               shm_pmax_block(latom_block, jatom_block), &
                               shm_pmax_block(latom_block, iatom_block), &
@@ -2599,7 +2603,7 @@ CONTAINS
                         END IF
 !	                   #endif
 !                     write(*,*) 'adding', n3, 'prm'
-                     call libGint_add_prm( ipgf-1,jpgf-1,kpgf-1,lpgf-1, n1-1,n2-1,n3-1 )
+                     call libGint_add_prm( ipgf-1,jpgf-1,kpgf-1,lpgf-1, n3-1 )
                      cell_was_screened = .false.
 
                   end do
