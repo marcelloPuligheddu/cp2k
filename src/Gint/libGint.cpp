@@ -273,9 +273,7 @@ void libGint::add_qrtt(
       int ld_ac, int ld_ad, int ld_bc, int ld_bd, 
       unsigned int offset_ac_L_set, unsigned int offset_ad_L_set, 
       unsigned int offset_bc_L_set, unsigned int offset_bd_L_set, 
-      bool Tac, bool Tad, bool Tbc, bool Tbd ){
-
-  
+      bool Tac, bool Tad, bool Tbc, bool Tbd ){ 
 
    unsigned int idx_fac ;
    // The symm_fac can be only 2,1,0.5 or 0.25 (or 0 in dev version). We assign them to 0,1,2 and 3 (and 4) respectively
@@ -395,8 +393,12 @@ void libGint::set_P( double * P_, int P_size ){
    nspin = 1;
    P_a = P_ ;
    FP_size = P_size;
+#pragma omp single copyprivate(P_a_dev)
+{
    CUDA_GPU_ERR_CHECK( cudaMalloc( (void**)&P_a_dev, sizeof(double)*FP_size ));
    CUDA_GPU_ERR_CHECK( cudaMemcpy( P_a_dev, P_a, sizeof(double)*FP_size, cudaMemcpyHostToDevice ));  
+}
+
 }
 void libGint::set_P( std::vector<double> & P_ ){ set_P(P_.data(), P_.size()); }
 
@@ -417,9 +419,11 @@ void libGint::set_K( double * K_ , int K_size ){
    assert( nspin == 1 );
    K_a = K_;
    FP_size = K_size;
+#pragma omp single copyprivate(P_a_dev)
+{
    CUDA_GPU_ERR_CHECK( cudaMalloc( (void**)&K_a_dev, sizeof(double)*FP_size ));
    CUDA_GPU_ERR_CHECK( cudaMemcpy( K_a_dev, K_, sizeof(double)*FP_size, cudaMemcpyHostToDevice ));
-
+}
 //   cout << " Setting K with size " << K_size << " @ " << K_a << " and " << K_a_dev << endl ;
 
 }

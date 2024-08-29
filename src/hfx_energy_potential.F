@@ -94,6 +94,7 @@ MODULE hfx_energy_potential
                           qs_ks_env_type
    USE t_c_g0, ONLY: init, C0
    USE util, ONLY: sort
+   use, intrinsic :: iso_c_binding, only : c_ptr
 
    !!!!!!!!!!!!!!!!!!!!!!!
    
@@ -263,20 +264,13 @@ CONTAINS
       TYPE(qs_ks_env_type), POINTER                      :: ks_env
 
       logical, save :: first_call = .true.
-      integer :: offset_ac_L_set, offset_ad_L_set, offset_bc_L_set, offset_bd_L_set
-      integer :: la,lb,lc,ld, ld_bd_set,ld_bc_set,ld_ad_set,ld_ac_set,inlb,inlc,inld
-      integer :: nlb,nlc,nld
-      logical(1) :: Tbd,Tbc,Tad,Tac,do_pbc ! logical(1) for C-compatibility
       logical :: screened
-      integer :: s_offset_a_l,s_offset_b_l,s_offset_c_l,s_offset_d_l
-      integer :: s_offset_a,s_offset_b,s_offset_c,s_offset_d,s_offset_ac,s_offset_ad,s_offset_bc,s_offset_bd
+      logical(1) :: do_pbc
       real(dp) :: max_abs_delta_KS
-
       type(bra_t) :: bra, ket
       integer :: iatom_set, jatom_set, katom_set, latom_set
       real(dp), dimension(:,:), allocatable :: cell_r
-
-
+      type(c_ptr) :: libGint_handle
 
       NULLIFY (dft_control, matrix_ks_aux_fit_hfx)
 
@@ -439,12 +433,10 @@ CONTAINS
 !$OMP         tmp_screen_pgf1,tmp_screen_pgf2,cartesian_estimate,bintime_stop,iw,memsize_after,storage_counter_integrals,&
 !$OMP         stor_count_int_disk,stor_count_max_val,ene_x_aa,ene_x_bb,mb_size_p,mb_size_f,mb_size_buffers,afac,ene_x_aa_diag,&
 !$OMP         ene_x_bb_diag,act_atomic_block_offset,act_set_offset,j,handle_dist_ks,tmp_i8,tmp_i4,dft_control,&
-!$OMP         etmp,nkimages,img,bin,eps_scaling_str,eps_schwarz_min_str,i,inla,nla,gcc,first_set_of_atom,max_abs_delta_KS, &
-!$OMP         offset_ac_L_set, offset_ad_L_set, offset_bc_L_set, offset_bd_L_set,inlb,inlc,inld, &
-!$OMP         la,lb,lc,ld, ld_bd_set,ld_bc_set,ld_ad_set,ld_ac_set,Tbd,Tbc,Tad,Tac,nlb,nlc,nld,screened, &
-!$OMP         s_offset_a_l,s_offset_b_l,s_offset_c_l,s_offset_d_l, &
-!$OMP         s_offset_a,s_offset_b,s_offset_c,s_offset_d,s_offset_ac,s_offset_ad,s_offset_bc,s_offset_bd, &
-!$OMP         bra,ket,iatom_set,jatom_set,katom_set,latom_set,do_pbc,cell_r)
+!$OMP         etmp,nkimages,img,bin,eps_scaling_str,eps_schwarz_min_str, &
+!$OMP         i,inla,nla,gcc,first_set_of_atom,max_abs_delta_KS, screened, &
+!$OMP         bra,ket,iatom_set,jatom_set,katom_set,latom_set,do_pbc,cell_r, &
+!$OMP         libGint_handle )
 
       ln_10 = LOG(10.0_dp)
       i_thread = 0
@@ -923,11 +915,11 @@ CONTAINS
 
       if (first_call) then
          write(*,*) " FIRST CALL "
-         call libgint_init()
+         call libgint_init(libGint_handle)
          potential_parameter = actual_x_data%potential_parameter
          if (potential_parameter%potential_type == do_potential_truncated .or. &
              potential_parameter%potential_type == do_potential_mix_cl_trunc) then
-            call libgint_set_Potential_Truncated( potential_parameter%cutoff_radius, C0(:,:) )
+            call libgint_set_Potential_Truncated( libGint_handle, potential_parameter%cutoff_radius, C0(:,:) )
          end if
          first_call = .false.
 
@@ -948,15 +940,15 @@ CONTAINS
       do i=1, nneighbors
          cell_r(:,i) = actual_x_data%neighbor_cells(i)%cell_r(:)
       end do
-      call libgint_set_cell( do_pbc, cell%hmat, cell%h_inv)
-      call libgint_set_neighs( cell_r, nneighbors) 
+      call libgint_set_cell( libGint_handle, do_pbc, cell%hmat, cell%h_inv)
+      call libgint_set_neighs( libGint_handle, cell_r, nneighbors) 
 
-      write(*,*) 'libgint cell is ', cell%hmat, cell%h_inv
-      write(*,*) 'libgint neig are', nneighbors, '|', cell_r
+!      write(*,*) 'libgint cell is ', cell%hmat, cell%h_inv
+!      write(*,*) 'libgint neig are', nneighbors, '|', cell_r
 
       write (*,*) " Call to set P K "
-      call libgint_set_P( full_density_alpha(:, 1) )
-      call libgint_set_K( full_ks_alpha(:, 1), fac )
+      call libgint_set_P( libGint_handle, full_density_alpha(:, 1) )
+      call libgint_set_K( libGint_handle, full_ks_alpha(:, 1), fac )
 
       jset = 1
       allocate(first_set_of_atom(natom) )
@@ -975,14 +967,14 @@ CONTAINS
          do iset = 1, nseta
 !            ncoset(la_max(iset))
 !            nsgfa(iset)
-            call libgint_set_Atom( jset-1 , ra, zeta(:,iset), npgfa(iset) )
+            call libgint_set_Atom( libGint_handle, jset-1 , ra, zeta(:,iset), npgfa(iset) )
             inla = 1
             do l = la_min( iset ) , la_max(iset)
                nla = nsgfl_a(l,iset)
 
-               write (*,*) " CP2K setting atom set L ", jset ,l, nla,  gcc(1:npgfa(iset),inla:inla+nla-1,iset)
+!               write (*,*) " CP2K setting atom set L ", jset ,l, nla,  gcc(1:npgfa(iset),inla:inla+nla-1,iset)
 !               write (*,*) "    note sphi is : " ,  basis_parameter(ikind)%sphi_ext(:, :, :, :)
-               call libgint_set_Atom_L( jset-1, l, nla, gcc(1:npgfa(iset),inla:inla+nla-1,iset) )
+               call libgint_set_Atom_L( libGint_handle, jset-1, l, nla, gcc(1:npgfa(iset),inla:inla+nla-1,iset) )
 
                inla = inla + nla
             end do
@@ -991,7 +983,7 @@ CONTAINS
          end do 
       end do
       
-      call libgint_set_max_n_cell( nneighbors )
+      call libgint_set_max_n_cell( libGint_handle, nneighbors )
 
       write(*,*) " PK set "
 
@@ -1682,7 +1674,7 @@ CONTAINS
                            ! call coulom_4_gpu( HFX_data, iset, jset, kset, lset, [bra, ket] )
 
                            call coulomb_4_gpu( &
-                              iatom_set, jatom_set, katom_set, latom_set, &
+                              libGint_handle, iatom_set, jatom_set, katom_set, latom_set, &
                               ra, rb, rc, rd, &
                               npgfa(iset), npgfb(jset), npgfc(kset), npgfd(lset), &
                               zeta(1:npgfa(iset), iset), zetb(1:npgfb(jset), jset), &
@@ -1701,7 +1693,7 @@ CONTAINS
                               ! call update_fock_matrix_gpu( HFX_data, iset, jset, kset, lset )
 
                               call update_fock_matrix_gpu( &
-                                 symm_fac, &
+                                 libGint_handle, symm_fac, &
                                  iatom, jatom, katom, latom, &
                                  iset, jset, kset, lset, &
                                  atomic_offset_ac, atomic_offset_ad, atomic_offset_bc, atomic_offset_bd, &
@@ -1905,20 +1897,22 @@ CONTAINS
 
       !!!
 
-      call libgint_dispatch()
+      call libgint_dispatch( libGint_handle )
       write (*,*) " Dispatch returned "
 
-      write (*,*) " P from CPU calculations before symmetrization " 
-      write (*,*) full_density_alpha(:,1)
+!      write (*,*) " P from CPU calculations before symmetrization " 
+!      write (*,*) full_density_alpha(:,1)
 
-      write (*,*) " K from CPU calculations before symmetrization " 
+      write (*,*) " K from CPU  |  K from GPU  |  Delta " 
       allocate( full_ks_alpha_from_gpu, Mold = full_ks_alpha )
-      call libgint_get_K( full_ks_alpha_from_gpu(:,1) )
+!$OMP BARRIER
+      call libgint_get_K(libGint_handle, full_ks_alpha_from_gpu(:,1) )
+
       max_abs_delta_KS = 0.0_dp
-      do  inla=1, size(full_ks_alpha)
-         write (*,*) inla, full_ks_alpha(inla,1), full_ks_alpha_from_gpu(inla,1), &
-                           full_ks_alpha(inla,1) - full_ks_alpha_from_gpu(inla,1)
-         max_abs_delta_KS = max( max_abs_delta_ks, abs(  full_ks_alpha(inla,1) - full_ks_alpha_from_gpu(inla,1) ) )
+      do  i=1, size(full_ks_alpha)
+         write (*,*) i, full_ks_alpha(i,1) , full_ks_alpha_from_gpu(i,1), &
+                        full_ks_alpha(i,1) - full_ks_alpha_from_gpu(i,1)
+         max_abs_delta_KS = max( max_abs_delta_ks, abs(  full_ks_alpha(i,1) - full_ks_alpha_from_gpu(i,1) ) )
       end do
       write(*,*) " ------------------------------------ "
       write(*,*) " |                                   |" 
@@ -2365,7 +2359,7 @@ CONTAINS
 !
 ! TODO maybe move all this to libGint
 ! possible if we remove all mixed-bra-ket screening and the prm screening 
-   subroutine coulomb_4_gpu( iatom_set, jatom_set, katom_set, latom_set, &
+   subroutine coulomb_4_gpu(libGint_handle, iatom_set, jatom_set, katom_set, latom_set, &
                        ra, rb, rc, rd, npgfa, npgfb, npgfc, npgfd, &
                        zeta, zetb, zetc, zetd, potential_parameter, &
                        screen1, screen2, log10_pmax, log10_eps_schwarz, &
@@ -2373,6 +2367,7 @@ CONTAINS
                        bra, ket, &
                        neighbor_cells, cell, do_periodic, screened )
 
+      type(c_ptr) :: libGint_handle
       REAL(dp), INTENT(IN)                               :: ra(3), rb(3), rc(3), rd(3)
       INTEGER, INTENT(IN) :: npgfa, npgfb, npgfc, npgfd 
       REAL(dp), DIMENSION(1:npgfa), INTENT(IN)           :: zeta
@@ -2490,7 +2485,7 @@ CONTAINS
                         END IF
 !	                   #endif
 !                     write(*,*) 'adding', n3, 'prm'
-                     call libGint_add_prm( ipgf-1,jpgf-1,kpgf-1,lpgf-1, n3-1 )
+                     call libGint_add_prm( libGint_handle, ipgf-1,jpgf-1,kpgf-1,lpgf-1, n3-1 )
                      cell_was_screened = .false.
 
                   end do
@@ -2499,10 +2494,10 @@ CONTAINS
 
             if ( .not. cell_was_screened ) then
 !               write(*,*) 'Adding ', iatom_set, jatom_set, katom_set, latom_set, n1-1, n2-1, 'shell'
-               call libgint_add_shell( iatom_set, jatom_set, katom_set, latom_set, n1-1, n2-1 )
+               call libgint_add_shell( libGint_handle, iatom_set, jatom_set, katom_set, latom_set, n1-1, n2-1 )
                screened = .false.
             end if
-            call libGint_add_cell() ! ??
+            call libGint_add_cell( libGint_handle ) ! ??
 
          end do
       end do
@@ -2511,7 +2506,7 @@ CONTAINS
 
 
    subroutine update_fock_matrix_gpu( &
-         symm_fac, &
+         libGint_handle, symm_fac, &
          iatom, jatom, katom, latom, &
          iset, jset, kset, lset, &
          atomic_offset_ac, atomic_offset_ad, atomic_offset_bc, atomic_offset_bd, &
@@ -2537,7 +2532,7 @@ CONTAINS
    ! (2) This matrix is contigous in memory, in fortran column major order
    ! (3) This matrix is symmetric. 
    ! (4) The matrix is block sparse triangular, only the lower part is valid
-
+      type(c_ptr) :: libGint_handle
       real(dp) :: symm_fac
       integer :: iatom, jatom, katom, latom
       integer :: iset, jset, kset, lset
@@ -2607,7 +2602,7 @@ CONTAINS
                s_offset_d_l = 0
                ld_loop: DO ld = ld_min, ld_max
                   nld = nsgfl_d(ld,lset)
-                  call libgint_add_qrt(la,lb,lc,ld,  nla,nlb,nlc,nld )
+                  call libgint_add_qrt(libGint_handle, la,lb,lc,ld,  nla,nlb,nlc,nld )
 
                   do inla=1, nla
                      s_offset_a = s_offset_a_l + (inla-1) * ( 2 * la + 1 )
@@ -2642,7 +2637,7 @@ CONTAINS
                               end if
 
 !                              write (*,*) " Adding qrtt ", la,lb,lc,ld, inla-1,inlb-1,inlc-1,inld-1
-                              call libgint_add_qrtt( symm_fac, &
+                              call libgint_add_qrtt(libGint_handle, symm_fac, &
                                     la,lb,lc,ld, inla-1,inlb-1,inlc-1,inld-1, &
                                     ld_ac_set, ld_ad_set,ld_bc_set,ld_bd_set, &
                                     s_offset_ac,s_offset_ad,s_offset_bc,s_offset_bd,&
@@ -2660,7 +2655,7 @@ CONTAINS
          s_offset_a_l = s_offset_a_l + nla * ( 2 * la + 1 )
       end do
 
-      call libgint_add_set()
+      call libgint_add_set( libGint_handle )
    end subroutine update_fock_matrix_gpu
 
 
@@ -2828,8 +2823,6 @@ CONTAINS
 
       screened = .true.
 
-!      write (*,*) " CP2K C4 L0 adding ", nelements_ij, " x ", nelements_kl, " gaussian quartets to libGint " 
-
       DO list_ij = 1, nelements_ij
          ZetaInv = pgf_list_ij(list_ij)%ZetaInv
          ipgf = pgf_list_ij(list_ij)%ipgf
@@ -2840,25 +2833,9 @@ CONTAINS
             kpgf = pgf_list_kl(list_kl)%ipgf
             lpgf = pgf_list_kl(list_kl)%jpgf
 
-!            write (*,*) " CP2K C4 L1 ", list_ij, " x ", list_kl, " are adding ", &
-!                                       pgf_list_ij(list_ij)%nimages, "x", pgf_list_kl(list_kl)%nimages, " cells to libGint " 
-
             CALL build_pgf_product_list(pgf_list_ij(list_ij), pgf_list_kl(list_kl), pgf_product_list, &
                                         nproducts, log10_pmax, log10_eps_schwarz, neighbor_cells, cell, &
                                         potential_parameter, max_l, do_periodic)
-
-            !!!!
-!            call libgint_add_prm( ipgf-1, jpgf-1, kpgf-1, lpgf-1, 0, 0, 0 )
-           ! periodic one
-!            do pgf_index=1, nproducts
-!               write (*,*) " CP2K C4 L2 adding PRM ", ipgf-1, jpgf-1, kpgf-1, lpgf-1, 0, 0, 0, " : " , & 
-!                                       pgf_index-1, " / ", nproducts, list_ij, list_kl
-!               call libgint_add_prm( ipgf-1, jpgf-1, kpgf-1, lpgf-1, 0, 0,0 )
-!               screened = .false.
-!            end do
-!            write (*,*) " End do over n3 "
-
-            !!!!
 
             s_offset_a = 0
             DO la = la_min, la_max

@@ -1,9 +1,12 @@
 #include "libGint.h"
+#include <vector>
 
 extern "C" {
 
 void * libgint_create_handle () {
-   libGint * handle = new libGint() ;
+   libGint * handle;
+   handle = new libGint() ;
+   cout << "Thr " << omp_get_thread_num() << " using handle " << handle << endl;
    return (void*) handle ;
 }
 
@@ -19,7 +22,7 @@ void libgint_set_Potential_Truncated( void * handle, double R_cut_, double * C0_
 
 void libgint_set_P( void * handle, double * P, int P_size ){
    libGint * g_handle = (libGint *) handle ;
-   cout << " Setting P with handle " << handle << "|" << g_handle << " @ " << P << " x " << P_size << endl;
+   cout << " Setting P with handle " << handle << " @ " << P << " x " << P_size << endl;
    g_handle -> set_P( P, P_size );
 }
 
@@ -30,7 +33,7 @@ void libgint_set_P_polarized( void * handle, double * Pa, double * Pb, int P_siz
 
 void libgint_set_K( void * handle, double * K, int K_size, double fac ){
    libGint * g_handle = (libGint *) handle ;
-   cout << " Setting K with handle " << handle << "|" << g_handle << " @ " << K << " x " << K_size << " fac: " << fac << endl;
+   cout << " Setting K with handle " << handle << " @ " << K << " x " << K_size << " fac: " << fac << endl;
    g_handle -> set_K( K, K_size ); 
    g_handle -> hf_fac = fac ;
 }
@@ -62,11 +65,9 @@ void libgint_set_neighs( void * handle, double * neighs_, int nneighs ){
 
 void libgint_set_Atom( void * handle, int i, double * R, double * Z, int np ){
    libGint * g_handle = (libGint *) handle ;
-
-   cout << " Setting Atom(set) " << i << " at " << R[0] << " " << R[1] << " " << R[2] << " w Z: | " ;
-   for ( int i = 0 ; i < np ; i++ ){ cout << Z[i] << " " ; }
-   cout << " | " << np << endl;
-
+//   cout << " Setting Atom(set) " << i << " at " << R[0] << " " << R[1] << " " << R[2] << " w Z: | " ;
+//   for ( int i = 0 ; i < np ; i++ ){ cout << Z[i] << " " ; }
+//   cout << " | " << np << endl;
    g_handle -> set_Atom( i, R, Z, np );
 }
 
@@ -85,7 +86,7 @@ double compute_norm_psi( double * K, double * z, int np, int l ){
 
 }
 
-#include <vector>
+
 void libgint_set_Atom_L( void * handle, int i, int l, int nl, double * K ){
    libGint * g_handle = (libGint *) handle ;
 
@@ -100,12 +101,12 @@ void libgint_set_Atom_L( void * handle, int i, int l, int nl, double * K ){
       }
    }
 
-   cout << " Setting Atom L (set) " << " as " << i << " " << l << " " << nl << "x" << np << " K: " << endl;
-   for ( int inl=0; inl < nl ; inl++ ){
-      for ( int ip = 0; ip < np ; ip ++ ){
-         cout << K[ inl * np + ip ] << " ( " <<  K_normalized[inl * np + ip] << " ) " ;
-      } cout << endl ;
-   } cout << endl;
+//   cout << " Setting Atom L (set) " << " as " << i << " " << l << " " << nl << "x" << np << " K: " << endl;
+//   for ( int inl=0; inl < nl ; inl++ ){
+//      for ( int ip = 0; ip < np ; ip ++ ){
+//         cout << K[ inl * np + ip ] << " ( " <<  K_normalized[inl * np + ip] << " ) " ;
+//      } cout << endl ;
+//   } cout << endl;
 
 
 
