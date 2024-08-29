@@ -1274,9 +1274,11 @@ CONTAINS
             latom_start = actual_x_data%blocks(latom_block)%istart
             latom_end = actual_x_data%blocks(latom_block)%iend
 
-            if ( jatom_start == 1 .and. katom_start == 1 .and. latom_start == 1 ) then
-               write(*,*) "Block is: ", iatom_start, iatom_end
+
+            if ( mod( my_current_counter, 100000_int_8 ) == 0_int_8 ) then
+               write(*,*) "Counter: ", my_current_counter, " block: ", atom_block, '/', nblocks**4 - 1
             end if
+
 
             pmax_blocks = MAX(shm_pmax_block(katom_block, iatom_block), &
                               shm_pmax_block(latom_block, jatom_block), &
@@ -1676,155 +1678,40 @@ CONTAINS
                            katom_set = first_set_of_atom(katom)+kset-2
                            latom_set = first_set_of_atom(latom)+lset-2
 
-                           call coulomb_4_gpu( iatom_set, jatom_set, katom_set, latom_set, ra, rb, rc, rd, &
-                                               npgfa(iset), npgfb(jset), npgfc(kset), npgfd(lset), &
-                                               zeta(1:npgfa(iset), iset), zetb(1:npgfb(jset), jset), &
-                                               zetc(1:npgfc(kset), kset), zetd(1:npgfd(lset), lset), &
-                                               potential_parameter, &
-                                               screen_coeffs_set(jset, iset, jkind, ikind)%x, &
-                                               screen_coeffs_set(lset, kset, lkind, kkind)%x, &
-                                               log10_pmax, log10_eps_schwarz, &
-                                               tmp_R_1, tmp_R_2, tmp_screen_pgf1, tmp_screen_pgf2, &
-                                               bra, ket, & 
-                                               actual_x_data%neighbor_cells, cell, do_periodic, screened )
+                           ! TODO a more modern approach in which the call is more like
+                           ! call coulom_4_gpu( HFX_data, iset, jset, kset, lset, [bra, ket] )
+
+                           call coulomb_4_gpu( &
+                              iatom_set, jatom_set, katom_set, latom_set, &
+                              ra, rb, rc, rd, &
+                              npgfa(iset), npgfb(jset), npgfc(kset), npgfd(lset), &
+                              zeta(1:npgfa(iset), iset), zetb(1:npgfb(jset), jset), &
+                              zetc(1:npgfc(kset), kset), zetd(1:npgfd(lset), lset), &
+                              potential_parameter, &
+                              screen_coeffs_set(jset, iset, jkind, ikind)%x, &
+                              screen_coeffs_set(lset, kset, lkind, kkind)%x, &
+                              log10_pmax, log10_eps_schwarz, &
+                              tmp_R_1, tmp_R_2, tmp_screen_pgf1, tmp_screen_pgf2, &
+                              bra, ket, & 
+                              actual_x_data%neighbor_cells, cell, do_periodic, screened )
 
                            if ( .not. screened ) then
 
-                              ! CHANGE! 
-                              ! TODO maybe put inside coulomb_4_gpu ?
-                              !
-                              if ( jatom >= latom ) then 
-                                offset_bd_L_set = offset_bd_set(jset, lset) + atomic_offset_bd - 2
-                                ld_bd_set = nsgfb(jset)
-                                Tbd = .false.
-                              else
-                                offset_bd_L_set = offset_bd_set(lset, jset) + atomic_offset_bd - 2
-                                ld_bd_set = nsgfd(lset)
-                                Tbd = .true.
-                              end if
+                              ! TODO a more modern approach in which the call is more like
+                              ! call update_fock_matrix_gpu( HFX_data, iset, jset, kset, lset )
 
-                              if ( jatom >= katom ) then 
-                                offset_bc_L_set = offset_bc_set(jset, kset) + atomic_offset_bc - 2
-                                ld_bc_set = nsgfb(jset)
-                                Tbc = .false.
-                              else
-                                offset_bc_L_set = offset_bc_set(kset, jset) + atomic_offset_bc - 2
-                                ld_bc_set = nsgfc(kset)
-                                Tbc = .true.
-                              end if
+                              call update_fock_matrix_gpu( &
+                                 symm_fac, &
+                                 iatom, jatom, katom, latom, &
+                                 iset, jset, kset, lset, &
+                                 atomic_offset_ac, atomic_offset_ad, atomic_offset_bc, atomic_offset_bd, &
+                                 offset_ac_set, offset_ad_set, offset_bc_set, offset_bd_set, &
+                                 nsgfa(iset), nsgfb(jset), nsgfc(kset), nsgfd(lset), &
+                                 la_min(iset), la_max(iset), lb_min(jset), lb_max(jset), &
+                                 lc_min(kset), lc_max(kset), ld_min(lset), ld_max(lset), &
+                                 nsgfl_a, nsgfl_b, nsgfl_c, nsgfl_d)
 
-                              if ( iatom >= latom ) then 
-                                offset_ad_L_set = offset_ad_set(iset, lset) + atomic_offset_ad - 2
-                                ld_ad_set = nsgfa(iset)
-                                Tad = .false.
-                              else
-                                offset_ad_L_set = offset_ad_set(lset, iset) + atomic_offset_ad - 2
-                                ld_ad_set = nsgfd(lset)
-                                Tad = .true.
-                              end if
-
-                              if ( iatom >= katom ) then 
-                                offset_ac_L_set = offset_ac_set(iset, kset) + atomic_offset_ac - 2
-                                ld_ac_set = nsgfa(iset)
-                                Tac = .false.
-                              else
-                                offset_ac_L_set = offset_ac_set(kset, iset) + atomic_offset_ac - 2
-                                ld_ac_set = nsgfc(kset)
-                                Tac = .true.
-                              end if
-
-!                              write (*,*) "atoms:" , iatom,jatom,katom,latom
-!                              write (*,*) " offsets ac ad bc bd: ", offset_ac_L_set, &
-!                                                      offset_ad_L_set, offset_bc_L_set, offset_bd_L_set
-!                              write (*,*) " ld      ac ad bc bd: ",       ld_ac_set, &
-!                                                       ld_ad_set,      ld_bc_set,       ld_bd_set
-
-                              ! MEGACHANGE! !!
-
-                              !! (Hyp)   
-                              ! Let a be a set composed of 2 s and 1 p function.
-                              ! Let c be a set composed of 1 s and 2 p function.
-                              ! (1) The density matrix for the ac pair is a 5 x 7 matrix organized as 
-                              !
-                              !    / -------------------------------------------------------------------------------------------------------------------\
-                              !    |   a_s1_0@c_s1_0  || a_s1_0@c_p1_0 | a_s1_0@c_p1_1 | a_s1_0@c_p1_2 || a_s1_0@c_p2_0 | a_s1_0@c_p2_1 | a_s1_0@c_p2_2 |
-                              !    |   a_s2_0@c_s1_0  || a_s2_0@c_p1_0 | a_s2_0@c_p1_1 | a_s2_0@c_p1_2 || a_s2_0@c_p2_0 | a_s2_0@c_p2_1 | a_s2_0@c_p2_2 |
-                              !    |   a_p1_0@c_s1_0  || a_p1_0@c_p1_0 | a_p1_0@c_p1_1 | a_p1_0@c_p1_2 || a_p1_0@c_p2_0 | a_p1_0@c_p2_1 | a_p1_0@c_p2_2 |
-                              !    |   a_p1_1@c_s1_0  || a_p1_1@c_p1_0 | a_p1_1@c_p1_1 | a_p1_1@c_p1_2 || a_p1_1@c_p2_0 | a_p1_1@c_p2_1 | a_p1_1@c_p2_2 |
-                              !    |   a_p1_2@c_s1_0  || a_p1_2@c_p1_0 | a_p1_2@c_p1_1 | a_p1_2@c_p1_2 || a_p1_2@c_p2_0 | a_p1_2@c_p2_1 | a_p1_2@c_p2_2 |
-                              !    \ -------------------------------------------------------------------------------------------------------------------/
-                              !    
-                              ! (2) This matrix is contigous in memory, in fortran column major order
-
-                              s_offset_a_l = 0
-                              DO la = la_min(iset), la_max(iset)
-                                 nla = nsgfl_a(la,iset)
-                                 s_offset_b_l = 0
-                                 DO lb = lb_min(jset), lb_max(jset)
-                                    nlb = nsgfl_b(lb,jset)
-                                    s_offset_c_l = 0
-                                    DO lc = lc_min(kset), lc_max(kset)
-                                       nlc = nsgfl_c(lc,kset)
-                                       s_offset_d_l = 0
-                                       ld_loop: DO ld = ld_min(lset), ld_max(lset)
-                                          nld = nsgfl_d(ld,lset)
-                                          call libgint_add_qrt(la,lb,lc,ld,  nla,nlb,nlc,nld )                                         
-
-                                          do inla=1, nla
-                                             s_offset_a = s_offset_a_l + (inla-1) * ( 2 * la + 1 )
-                                             do inlb=1, nlb
-                                                s_offset_b = s_offset_b_l + (inlb-1) * ( 2 * lb + 1 )
-                                                do inlc=1, nlc
-                                                   s_offset_c = s_offset_c_l + (inlc-1) * ( 2 * lc + 1 )
-                                                   do inld=1, nld
-                                                      s_offset_d = s_offset_d_l + (inld-1) * ( 2 * ld + 1 )
-
-                                                      if (.not. Tac) then
-                                                         s_offset_ac = offset_ac_L_set + s_offset_c * ld_ac_set + s_offset_a
-                                                      else
-                                                         s_offset_ac = offset_ac_L_set + s_offset_a * ld_ac_set + s_offset_c
-                                                      end if
-
-                                                      if (.not. Tad) then
-                                                         s_offset_ad = offset_ad_L_set + s_offset_d * ld_ad_set + s_offset_a
-                                                      else
-                                                         s_offset_ad = offset_ad_L_set + s_offset_a * ld_ad_set + s_offset_d
-                                                      end if
-
-                                                      if (.not. Tbc) then
-                                                         s_offset_bc = offset_bc_L_set + s_offset_c * ld_bc_set + s_offset_b
-                                                      else
-                                                         s_offset_bc = offset_bc_L_set + s_offset_b * ld_bc_set + s_offset_c
-                                                      end if
-
-                                                      if (.not. Tbd) then
-                                                         s_offset_bd = offset_bd_L_set + s_offset_d * ld_bd_set + s_offset_b
-                                                      else
-                                                         s_offset_bd = offset_bd_L_set + s_offset_b * ld_bd_set + s_offset_d
-                                                      end if
-
-!                                                      write (*,*) " Adding qrtt ", la,lb,lc,ld, inla-1,inlb-1,inlc-1,inld-1 
-                                                      call libgint_add_qrtt( symm_fac, &
-                                                            la,lb,lc,ld, inla-1,inlb-1,inlc-1,inld-1, &
-                                                            ld_ac_set, ld_ad_set,ld_bc_set,ld_bd_set, &
-                                                            s_offset_ac,s_offset_ad,s_offset_bc,s_offset_bd,&
-                                                            Tac,Tad,Tbc,Tbd )
-                                                   end do
-                                                end do
-                                             end do
-                                          end do
-                                          s_offset_d_l = s_offset_d_l + nld * ( 2 * ld + 1 )
-                                       end do ld_loop
-                                       s_offset_c_l = s_offset_c_l + nlc * ( 2 * lc + 1 )
-                                    end do
-                                    s_offset_b_l = s_offset_b_l + nlb * ( 2 * lb + 1 )
-                                 end do
-                                 s_offset_a_l = s_offset_a_l + nla * ( 2 * la + 1 )
-                              end do
-
-                              call libgint_add_set()
-                              !!!!
-                           end if ! if not screened
+                           end if
 
                            nints = nsgfa(iset)*nsgfb(jset)*nsgfc(kset)*nsgfd(lset)
                            neris_total = neris_total + nints
@@ -2620,6 +2507,166 @@ CONTAINS
          end do
       end do
    end subroutine coulomb_4_gpu
+
+
+
+   subroutine update_fock_matrix_gpu( &
+         symm_fac, &
+         iatom, jatom, katom, latom, &
+         iset, jset, kset, lset, &
+         atomic_offset_ac, atomic_offset_ad, atomic_offset_bc, atomic_offset_bd, &
+         offset_ac_set, offset_ad_set, offset_bc_set, offset_bd_set, &
+         nsgfa, nsgfb, nsgfc, nsgfd, &
+         la_min, la_max, lb_min, lb_max, &
+         lc_min, lc_max, ld_min, ld_max, &
+         nsgfl_a, nsgfl_b, nsgfl_c, nsgfl_d)
+
+   !! (Hyp)
+   ! Let a be a set composed of 2 s and 1 p function.
+   ! Let c be a set composed of 1 s and 2 p function.
+   ! (1) The density matrix for the ac pair is a 5 x 7 matrix organized as
+   !
+   !    / -------------------------------------------------------------------------------------------------------------------\
+   !    |   a_s1_0@c_s1_0  || a_s1_0@c_p1_0 | a_s1_0@c_p1_1 | a_s1_0@c_p1_2 || a_s1_0@c_p2_0 | a_s1_0@c_p2_1 | a_s1_0@c_p2_2 |
+   !    |   a_s2_0@c_s1_0  || a_s2_0@c_p1_0 | a_s2_0@c_p1_1 | a_s2_0@c_p1_2 || a_s2_0@c_p2_0 | a_s2_0@c_p2_1 | a_s2_0@c_p2_2 |
+   !    |   a_p1_0@c_s1_0  || a_p1_0@c_p1_0 | a_p1_0@c_p1_1 | a_p1_0@c_p1_2 || a_p1_0@c_p2_0 | a_p1_0@c_p2_1 | a_p1_0@c_p2_2 |
+   !    |   a_p1_1@c_s1_0  || a_p1_1@c_p1_0 | a_p1_1@c_p1_1 | a_p1_1@c_p1_2 || a_p1_1@c_p2_0 | a_p1_1@c_p2_1 | a_p1_1@c_p2_2 |
+   !    |   a_p1_2@c_s1_0  || a_p1_2@c_p1_0 | a_p1_2@c_p1_1 | a_p1_2@c_p1_2 || a_p1_2@c_p2_0 | a_p1_2@c_p2_1 | a_p1_2@c_p2_2 |
+   !    \ -------------------------------------------------------------------------------------------------------------------/
+   !
+   ! (2) This matrix is contigous in memory, in fortran column major order
+   ! (3) This matrix is symmetric. 
+   ! (4) The matrix is block sparse triangular, only the lower part is valid
+
+      real(dp) :: symm_fac
+      integer :: iatom, jatom, katom, latom
+      integer :: iset, jset, kset, lset
+      integer :: atomic_offset_ac, atomic_offset_ad, atomic_offset_bc, atomic_offset_bd
+      INTEGER, DIMENSION(:, :), POINTER :: offset_ac_set, offset_ad_set
+      INTEGER, DIMENSION(:, :), POINTER :: offset_bc_set, offset_bd_set
+      integer :: nsgfa, nsgfb, nsgfc, nsgfd
+      integer :: la_min, la_max, lb_min, lb_max
+      integer :: lc_min, lc_max, ld_min, ld_max
+      INTEGER, DIMENSION(:, :), POINTER :: nsgfl_a, nsgfl_b, nsgfl_c, nsgfl_d
+
+      logical(1) :: Tac,Tad,Tbc,Tbd
+      integer :: offset_ac_L_set, offset_ad_L_set, offset_bc_L_set, offset_bd_L_set
+      integer :: s_offset_a, s_offset_b, s_offset_c, s_offset_d
+      integer :: s_offset_a_l, s_offset_b_l, s_offset_c_l, s_offset_d_l
+      integer :: s_offset_ac, s_offset_ad, s_offset_bc, s_offset_bd
+      integer :: ld_ac_set, ld_ad_set, ld_bc_set, ld_bd_set
+      integer :: la,lb,lc,ld,nla,nlb,nlc,nld,inla,inlb,inlc,inld
+ 
+      if ( jatom >= latom ) then 
+        offset_bd_L_set = offset_bd_set(jset, lset) + atomic_offset_bd - 2
+        ld_bd_set = nsgfb
+        Tbd = .false.
+      else
+        offset_bd_L_set = offset_bd_set(lset, jset) + atomic_offset_bd - 2
+        ld_bd_set = nsgfd
+        Tbd = .true.
+      end if
+      if ( jatom >= katom ) then
+        offset_bc_L_set = offset_bc_set(jset, kset) + atomic_offset_bc - 2
+        ld_bc_set = nsgfb
+        Tbc = .false.
+      else
+        offset_bc_L_set = offset_bc_set(kset, jset) + atomic_offset_bc - 2
+        ld_bc_set = nsgfc
+        Tbc = .true.
+      end if
+
+      if ( iatom >= latom ) then
+        offset_ad_L_set = offset_ad_set(iset, lset) + atomic_offset_ad - 2
+        ld_ad_set = nsgfa
+        Tad = .false.
+      else
+        offset_ad_L_set = offset_ad_set(lset, iset) + atomic_offset_ad - 2
+        ld_ad_set = nsgfd
+        Tad = .true.
+      end if
+
+      if ( iatom >= katom ) then
+        offset_ac_L_set = offset_ac_set(iset, kset) + atomic_offset_ac - 2
+        ld_ac_set = nsgfa
+        Tac = .false.
+      else
+        offset_ac_L_set = offset_ac_set(kset, iset) + atomic_offset_ac - 2
+        ld_ac_set = nsgfc
+        Tac = .true.
+      end if
+      s_offset_a_l = 0
+      DO la = la_min, la_max
+         nla = nsgfl_a(la,iset)
+         s_offset_b_l = 0
+         DO lb = lb_min, lb_max
+            nlb = nsgfl_b(lb,jset)
+            s_offset_c_l = 0
+            DO lc = lc_min, lc_max
+               nlc = nsgfl_c(lc,kset)
+               s_offset_d_l = 0
+               ld_loop: DO ld = ld_min, ld_max
+                  nld = nsgfl_d(ld,lset)
+                  call libgint_add_qrt(la,lb,lc,ld,  nla,nlb,nlc,nld )
+
+                  do inla=1, nla
+                     s_offset_a = s_offset_a_l + (inla-1) * ( 2 * la + 1 )
+                     do inlb=1, nlb
+                        s_offset_b = s_offset_b_l + (inlb-1) * ( 2 * lb + 1 )
+                        do inlc=1, nlc
+                           s_offset_c = s_offset_c_l + (inlc-1) * ( 2 * lc + 1 )
+                           do inld=1, nld
+                              s_offset_d = s_offset_d_l + (inld-1) * ( 2 * ld + 1 )
+                              if (.not. Tac) then
+                                 s_offset_ac = offset_ac_L_set + s_offset_c * ld_ac_set + s_offset_a
+                              else
+                                 s_offset_ac = offset_ac_L_set + s_offset_a * ld_ac_set + s_offset_c
+                              end if
+
+                              if (.not. Tad) then
+                                 s_offset_ad = offset_ad_L_set + s_offset_d * ld_ad_set + s_offset_a
+                              else
+                                 s_offset_ad = offset_ad_L_set + s_offset_a * ld_ad_set + s_offset_d
+                              end if
+
+                              if (.not. Tbc) then
+                                 s_offset_bc = offset_bc_L_set + s_offset_c * ld_bc_set + s_offset_b
+                              else
+                                 s_offset_bc = offset_bc_L_set + s_offset_b * ld_bc_set + s_offset_c
+                              end if
+
+                              if (.not. Tbd) then
+                                 s_offset_bd = offset_bd_L_set + s_offset_d * ld_bd_set + s_offset_b
+                              else
+                                 s_offset_bd = offset_bd_L_set + s_offset_b * ld_bd_set + s_offset_d
+                              end if
+
+!                              write (*,*) " Adding qrtt ", la,lb,lc,ld, inla-1,inlb-1,inlc-1,inld-1
+                              call libgint_add_qrtt( symm_fac, &
+                                    la,lb,lc,ld, inla-1,inlb-1,inlc-1,inld-1, &
+                                    ld_ac_set, ld_ad_set,ld_bc_set,ld_bd_set, &
+                                    s_offset_ac,s_offset_ad,s_offset_bc,s_offset_bd,&
+                                    Tac,Tad,Tbc,Tbd )
+                           end do
+                        end do
+                     end do
+                  end do
+                  s_offset_d_l = s_offset_d_l + nld * ( 2 * ld + 1 )
+               end do ld_loop
+               s_offset_c_l = s_offset_c_l + nlc * ( 2 * lc + 1 )
+            end do
+            s_offset_b_l = s_offset_b_l + nlb * ( 2 * lb + 1 )
+         end do
+         s_offset_a_l = s_offset_a_l + nla * ( 2 * la + 1 )
+      end do
+
+      call libgint_add_set()
+   end subroutine update_fock_matrix_gpu
+
+
+
+
+
 ! **************************************************************************************************
 !> \brief calculates two-electron integrals of a quartet/shell using the library
 !>      lib_int in the periodic case
