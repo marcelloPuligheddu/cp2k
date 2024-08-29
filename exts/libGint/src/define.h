@@ -25,7 +25,7 @@ SOFTWARE.
 #define DEFINE_COMPILE_GUARD
 
 // max number of periodic cell, 2**8
-#define MAX_N_CELL 512
+#define MAX_N_CELL 256 
 // max number of prm per STO, 2**6. Way larger than sanity should allow
 #define MAX_N_PRM   64
 // max number of linear combinations of 
@@ -37,10 +37,10 @@ SOFTWARE.
 //
 #define MAX_N_L     16
 // Should be 8 + 4*6 = 32 bits
-static_assert( (unsigned int) MAX_N_CELL * MAX_N_PRM * MAX_N_PRM * MAX_N_PRM * MAX_N_PRM <= 4294967296,
+static_assert( (unsigned long int) MAX_N_CELL * MAX_N_PRM * MAX_N_PRM * MAX_N_PRM * MAX_N_PRM <= 4294967296,
       "Error, MAX_N_PRM or MAX_N_CELL are too large" );
 // Should be 8 + 8 + 4*4 = 32 bits
-static_assert( (unsigned int) MAX_N_CELL * MAX_N_CELL * MAX_N_L * MAX_N_L * MAX_N_L * MAX_N_L <= 4294967296,
+static_assert( (unsigned long int) MAX_N_CELL * MAX_N_CELL * MAX_N_L * MAX_N_L * MAX_N_L * MAX_N_L <= 4294967296,
       "Error, MAX_N_L or MAX_N_CELL are too large");
 // 
 #define PAL_SLOTS 3
