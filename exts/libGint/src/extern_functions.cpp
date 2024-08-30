@@ -6,6 +6,7 @@ extern "C" {
 void * libgint_create_handle () {
    libGint * handle;
    handle = new libGint() ;
+#pragma omp critical
    cout << "Thr " << omp_get_thread_num() << " using handle " << handle << endl;
    return (void*) handle ;
 }
@@ -22,7 +23,7 @@ void libgint_set_Potential_Truncated( void * handle, double R_cut_, double * C0_
 
 void libgint_set_P( void * handle, double * P, int P_size ){
    libGint * g_handle = (libGint *) handle ;
-   cout << " Setting P with handle " << handle << " @ " << P << " x " << P_size << endl;
+//   cout << " Setting P with handle " << handle << " @ " << P << " x " << P_size << endl;
    g_handle -> set_P( P, P_size );
 }
 
@@ -33,7 +34,7 @@ void libgint_set_P_polarized( void * handle, double * Pa, double * Pb, int P_siz
 
 void libgint_set_K( void * handle, double * K, int K_size, double fac ){
    libGint * g_handle = (libGint *) handle ;
-   cout << " Setting K with handle " << handle << " @ " << K << " x " << K_size << " fac: " << fac << endl;
+//   cout << " Setting K with handle " << handle << " @ " << K << " x " << K_size << " fac: " << fac << endl;
    g_handle -> set_K( K, K_size ); 
    g_handle -> hf_fac = fac ;
 }

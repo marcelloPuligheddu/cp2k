@@ -47,7 +47,6 @@ class libGint {
    public:
    libGint(){ 
       my_thr = omp_get_thread_num() ;
-      std::cout << " LibGint Ctor called from thr " << my_thr << std::endl; 
    }
    void add_prm ( const int ipa, const int ipb, const int ipc, const int ipd, const int n3 ) ;
    void add_shell (int i, int j , int k, int l, int n1, int n2);

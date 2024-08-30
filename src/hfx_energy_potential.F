@@ -946,7 +946,7 @@ CONTAINS
 !      write(*,*) 'libgint cell is ', cell%hmat, cell%h_inv
 !      write(*,*) 'libgint neig are', nneighbors, '|', cell_r
 
-      write (*,*) " Call to set P K "
+!      write (*,*) " Call to set P K "
       call libgint_set_P( libGint_handle, full_density_alpha(:, 1) )
       call libgint_set_K( libGint_handle, full_ks_alpha(:, 1), fac )
 
@@ -984,8 +984,7 @@ CONTAINS
       end do
       
       call libgint_set_max_n_cell( libGint_handle, nneighbors )
-
-      write(*,*) " PK set "
+!      write(*,*) " PK set "
 
       !!!
 
@@ -1898,16 +1897,24 @@ CONTAINS
       !!!
 
       call libgint_dispatch( libGint_handle )
+
       write (*,*) " Dispatch returned "
 
 !      write (*,*) " P from CPU calculations before symmetrization " 
 !      write (*,*) full_density_alpha(:,1)
 
-      write (*,*) " K from CPU  |  K from GPU  |  Delta " 
+
+
       allocate( full_ks_alpha_from_gpu, Mold = full_ks_alpha )
+! barrier needed after allocate  full_ks_alpha_from_gpu before libGint get K 
+! ? to feed libgint a valid position for full_ks_alpha_from_gpu ?
 !$OMP BARRIER
       call libgint_get_K(libGint_handle, full_ks_alpha_from_gpu(:,1) )
 
+
+
+!$omp single
+      write (*,*) " K from CPU  |  K from GPU  |  Delta " 
       max_abs_delta_KS = 0.0_dp
       do  i=1, size(full_ks_alpha)
          write (*,*) i, full_ks_alpha(i,1) , full_ks_alpha_from_gpu(i,1), &
@@ -1919,7 +1926,7 @@ CONTAINS
       write(*,*) " |  max abs dif: ", max_abs_delta_KS
       write(*,*) " |                                   |"
       write(*,*) " ------------------------------------ "
-
+!$omp end single
       !!!
 
 
