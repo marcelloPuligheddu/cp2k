@@ -270,7 +270,9 @@ CONTAINS
       type(bra_t) :: bra, ket
       integer :: iatom_set, jatom_set, katom_set, latom_set
       real(dp), dimension(:,:), allocatable :: cell_r
-      type(c_ptr) :: libGint_handle
+      type(c_ptr), save :: libGint_handle
+!$OMP threadprivate( libGint_handle )
+
 
       NULLIFY (dft_control, matrix_ks_aux_fit_hfx)
 
@@ -347,6 +349,7 @@ CONTAINS
       shm_neris_incore = 0
       shm_neris_disk = 0
       shm_stor_count_max_val = 0
+
 
 !$OMP PARALLEL DEFAULT(OMP_DEFAULT_NONE_WITH_OOP) &
 !$OMP SHARED(qs_env,&
@@ -435,8 +438,8 @@ CONTAINS
 !$OMP         ene_x_bb_diag,act_atomic_block_offset,act_set_offset,j,handle_dist_ks,tmp_i8,tmp_i4,dft_control,&
 !$OMP         etmp,nkimages,img,bin,eps_scaling_str,eps_schwarz_min_str, &
 !$OMP         i,inla,nla,gcc,first_set_of_atom,max_abs_delta_KS, screened, &
-!$OMP         bra,ket,iatom_set,jatom_set,katom_set,latom_set,do_pbc,cell_r, &
-!$OMP         libGint_handle )
+!$OMP         bra,ket,iatom_set,jatom_set,katom_set,latom_set,do_pbc,cell_r) 
+
 
       ln_10 = LOG(10.0_dp)
       i_thread = 0
@@ -912,9 +915,11 @@ CONTAINS
 !$OMP BARRIER
 
       !!!
-
+      ! Set up the gpu enviroment
       if (first_call) then
+         !$omp master
          write(*,*) " FIRST CALL "
+         !$omp end master
          call libgint_init(libGint_handle)
          potential_parameter = actual_x_data%potential_parameter
          if (potential_parameter%potential_type == do_potential_truncated .or. &
@@ -923,12 +928,14 @@ CONTAINS
          end if
          first_call = .false.
 
-         do iatom=1, size(full_density_alpha, 1)
-            full_density_alpha(iatom,1) = 1.0_dp * iatom / size(full_density_alpha, 1)
-         end do
+!         do iatom=1, size(full_density_alpha, 1)
+!            full_density_alpha(iatom,1) = 1.0_dp * iatom / size(full_density_alpha, 1)
+!         end do
 
       else
+         !$omp master
          write(*,*) " NOT FIRST CALL "
+         !$omp end master
       end if
 
       do_pbc = do_periodic
@@ -940,6 +947,7 @@ CONTAINS
       do i=1, nneighbors
          cell_r(:,i) = actual_x_data%neighbor_cells(i)%cell_r(:)
       end do
+
       call libgint_set_cell( libGint_handle, do_pbc, cell%hmat, cell%h_inv)
       call libgint_set_neighs( libGint_handle, cell_r, nneighbors) 
 
@@ -1898,7 +1906,7 @@ CONTAINS
 
       call libgint_dispatch( libGint_handle )
 
-      write (*,*) " Dispatch returned "
+!      write (*,*) " Dispatch returned "
 
 !      write (*,*) " P from CPU calculations before symmetrization " 
 !      write (*,*) full_density_alpha(:,1)
@@ -1917,15 +1925,19 @@ CONTAINS
       write (*,*) " K from CPU  |  K from GPU  |  Delta " 
       max_abs_delta_KS = 0.0_dp
       do  i=1, size(full_ks_alpha)
-         write (*,*) i, full_ks_alpha(i,1) , full_ks_alpha_from_gpu(i,1), &
-                        full_ks_alpha(i,1) - full_ks_alpha_from_gpu(i,1)
          max_abs_delta_KS = max( max_abs_delta_ks, abs(  full_ks_alpha(i,1) - full_ks_alpha_from_gpu(i,1) ) )
       end do
       write(*,*) " ------------------------------------ "
-      write(*,*) " |                                   |" 
       write(*,*) " |  max abs dif: ", max_abs_delta_KS
-      write(*,*) " |                                   |"
       write(*,*) " ------------------------------------ "
+
+      if ( max_abs_delta_KS > 1.E-12_dp ) then
+         do  i=1, size(full_ks_alpha)
+            write (*,*) i, full_ks_alpha(i,1) , full_ks_alpha_from_gpu(i,1), &
+                           full_ks_alpha(i,1) - full_ks_alpha_from_gpu(i,1)
+         end do
+      end if
+
 !$omp end single
       !!!
 

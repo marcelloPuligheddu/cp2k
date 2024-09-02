@@ -40,7 +40,7 @@ void libGint::set_max_n_prm( int max_n3 ){
    max_n_prm *= max( np );
    prm_tmp_list.resize( max_n_prm );
    n_prm = 0;
-#pragma omp critical
+#pragma omp single
    {cout << " resized prm to accept up to " << max_n_prm << " prm from " << max_n3 << " cells and " << max(np) << " prm " << endl; cout.flush(); }
 }
 
@@ -66,8 +66,8 @@ void libGint::init(){
    potential_type = COULOMB; // default
 
    timer.stop();
-#pragma omp critical
-   { cout << "Cuda create stream " << cuda_stream << " @ " << &cuda_stream << " \n" ; cout.flush(); }
+//#pragma omp critical
+//   { cout << "Cuda create stream " << cuda_stream << " @ " << &cuda_stream << " \n" ; cout.flush(); }
    POP_RANGE;
 }
 
@@ -380,12 +380,18 @@ size_t libGint::memory_needed( ){
 }
 
 void libGint::set_cell( bool periodic_, double * cell_h_,  double * cell_i_ ){
+//#pragma omp critical
+//   {cout << " Setting cell " << periodic_ << " " << cell_h[0] << " " << cell_i_[8] << endl; cout.flush();}
+   
    periodic = periodic_; 
    for (int i=0;i<9;i++){ cell_h[CELL_HMAT_OFF+i] = cell_h_[i]; }
    for (int i=0;i<9;i++){ cell_h[CELL_HINV_OFF+i] = cell_i_[i]; }
 }
 
 void libGint::set_neighs( double * neighs_, int nneighs_ ){
+//#pragma omp critical
+//   {cout << " Setting neigh " << nneighs_ << " " << neighs_[0] << " -  " << neighs_[3*nneighs_-1] << endl; cout.flush();}
+ 
    max_ncells = nneighs_;
    neighs.resize(3*nneighs_);
    for (int i=0;i<3*nneighs_;i++){ neighs[i] = neighs_[i]; }
