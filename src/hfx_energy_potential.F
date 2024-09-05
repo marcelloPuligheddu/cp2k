@@ -97,7 +97,7 @@ MODULE hfx_energy_potential
    use, intrinsic :: iso_c_binding, only : c_ptr
 
    !!!!!!!!!!!!!!!!!!!!!!!
-   
+   use offload_api, only :  offload_get_chosen_device, offload_set_chosen_device, offload_activate_chosen_device
    use libGint, only : libgint_init, libgint_set_Potential_Truncated, &
                        libgint_set_P, libgint_set_P_polarized, libgint_set_K, libgint_set_K_polarized, &
                        libgint_get_K, libgint_get_K_polarized, libgint_set_Atom, libgint_set_Atom_L, libgint_set_cell, &
@@ -268,7 +268,7 @@ CONTAINS
       logical(1) :: do_pbc
       real(dp) :: max_abs_delta_KS
       type(bra_t) :: bra, ket
-      integer :: iatom_set, jatom_set, katom_set, latom_set
+      integer :: iatom_set, jatom_set, katom_set, latom_set, shared_dev
       real(dp), dimension(:,:), allocatable :: cell_r
       type(c_ptr), save :: libGint_handle
 !$OMP threadprivate( libGint_handle )
@@ -405,7 +405,7 @@ CONTAINS
 !$OMP                                  shm_pmax_block,&
 !$OMP                                  shm_atomic_pair_list,&
 !$OMP                                  shm_mem_compression_counter,&
-!$OMP                                  C0,&
+!$OMP                                  C0, shared_dev, &
 !$OMP                                  do_print_load_balance_info) &
 !$OMP PRIVATE(ln_10,i_thread,actual_x_data,do_periodic,screening_parameter,potential_parameter,&
 !$OMP         general_parameter,load_balance_parameter,memory_parameter,cache_size,bits_max_val,&
@@ -917,9 +917,21 @@ CONTAINS
       !!!
       ! Set up the gpu enviroment
       if (first_call) then
+         !$omp critical
+         write(*,*) " FIRST CALL ", para_env%mepos , omp_get_thread_num(), offload_get_chosen_device()
+         !$omp end critical
+
+         ! APPARENTELY only the master thread has received a call to offload_set_chosen_device
+         ! BUT we need all omp threads with th same mpi process to be on the same physical device.
+         ! so they can share gpu memory for P and HF
          !$omp master
-         write(*,*) " FIRST CALL "
+         shared_dev = offload_get_chosen_device()
          !$omp end master
+         !$omp barrier
+
+         call offload_set_chosen_device( shared_dev )
+         call offload_activate_chosen_device()
+
          call libgint_init(libGint_handle)
          potential_parameter = actual_x_data%potential_parameter
          if (potential_parameter%potential_type == do_potential_truncated .or. &
@@ -1911,7 +1923,7 @@ CONTAINS
 !      write (*,*) " P from CPU calculations before symmetrization " 
 !      write (*,*) full_density_alpha(:,1)
 
-
+      CALL para_env%sync()
 
       allocate( full_ks_alpha_from_gpu, Mold = full_ks_alpha )
 ! barrier needed after allocate  full_ks_alpha_from_gpu before libGint get K 
@@ -1922,16 +1934,18 @@ CONTAINS
 
 
 !$omp single
-      write (*,*) " K from CPU  |  K from GPU  |  Delta " 
+
       max_abs_delta_KS = 0.0_dp
       do  i=1, size(full_ks_alpha)
          max_abs_delta_KS = max( max_abs_delta_ks, abs(  full_ks_alpha(i,1) - full_ks_alpha_from_gpu(i,1) ) )
       end do
       write(*,*) " ------------------------------------ "
+      write(*,*) " | rank " , para_env%mepos
       write(*,*) " |  max abs dif: ", max_abs_delta_KS
       write(*,*) " ------------------------------------ "
 
       if ( max_abs_delta_KS > 1.E-12_dp ) then
+         write (*,*) " K from CPU  |  K from GPU  |  Delta " 
          do  i=1, size(full_ks_alpha)
             write (*,*) i, full_ks_alpha(i,1) , full_ks_alpha_from_gpu(i,1), &
                            full_ks_alpha(i,1) - full_ks_alpha_from_gpu(i,1)
@@ -2609,6 +2623,12 @@ CONTAINS
         ld_ac_set = nsgfc
         Tac = .true.
       end if
+!!$omp critical
+!      write (*,*) " Atoms ", iatom,jatom,katom,latom,iset,jset,kset,lset
+!      write (*,*) " General Offsets: " , atomic_offset_ac, atomic_offset_ad, atomic_offset_bc, atomic_offset_bd
+!      write (*,*) "                  " , offset_ac_set, offset_ad_set, offset_bc_set, offset_bd_set
+!      write (*,*) "     ->           " , offset_ac_L_set, offset_ad_L_set, offset_bc_L_set, offset_bd_L_set
+!!$omp end critical
       s_offset_a_l = 0
       DO la = la_min, la_max
          nla = nsgfl_a(la,iset)
@@ -2654,13 +2674,17 @@ CONTAINS
                               else
                                  s_offset_bd = offset_bd_L_set + s_offset_b * ld_bd_set + s_offset_d
                               end if
-
+!!$omp critical
+!                              write (*,*) " Atom ", iatom,jatom,katom,latom, iset,jset,kset,lset
 !                              write (*,*) " Adding qrtt ", la,lb,lc,ld, inla-1,inlb-1,inlc-1,inld-1
+!                              write (*,*) " At offset ",  s_offset_ac,s_offset_ad,s_offset_bc,s_offset_bd
+!!$omp end critical
                               call libgint_add_qrtt(libGint_handle, symm_fac, &
                                     la,lb,lc,ld, inla-1,inlb-1,inlc-1,inld-1, &
                                     ld_ac_set, ld_ad_set,ld_bc_set,ld_bd_set, &
                                     s_offset_ac,s_offset_ad,s_offset_bc,s_offset_bd,&
                                     Tac,Tad,Tbc,Tbd )
+
                            end do
                         end do
                      end do

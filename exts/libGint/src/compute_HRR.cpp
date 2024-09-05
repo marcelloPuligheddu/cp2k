@@ -165,26 +165,22 @@ __global__ void compute_HRR_batched_gpu_low(
       D[2] = Do[2] + CDs[2] + neighs[n2*3+2];
       const double CD[3] = { C[0]-D[0], C[1]-D[1], C[2]-D[2] };
 
-//      if (threadIdx.x == 0 ){
-//         printf(" shifting A %lf %lf %lf and B %lf %lf %lf by %lf %lf %lf \n", 
-//            Ao[0], Ao[1], Ao[2], Bo[0], Bo[1], Bo[2], ABs[0], ABs[1], ABs[2] );
-//         printf(" shifting C %lf %lf %lf and D %lf %lf %lf by %lf %lf %lf \n", 
-//            Co[0], Co[1], Co[2], Do[0], Do[1], Do[2], CDs[0], CDs[1], CDs[2] );
-//      }
-
-
-
-      // TODO // ABSOLUTELY
-      // add CELL[n1] to pbc(AB) and CELL[n2] to pbc(CD)
+      if (threadIdx.x == 0 ){
+         printf(" shifting A %lf %lf %lf and B %lf %lf %lf by %lf %lf %lf \n", 
+            Ao[0], Ao[1], Ao[2], Bo[0], Bo[1], Bo[2], ABs[0], ABs[1], ABs[2] );
+         printf(" shifting C %lf %lf %lf and D %lf %lf %lf by %lf %lf %lf \n", 
+            Co[0], Co[1], Co[2], Do[0], Do[1], Do[2], CDs[0], CDs[1], CDs[2] );
+         printf(" n1 %d n2 %d \n" , n1 , n2 );
+      }
 
       double* sh_mem = &ABCD[ Og * hrr_blocksize ];
 
-      for ( unsigned int ilabcd=0 ; ilabcd < nlabcd; ilabcd++ ){
-         int s0_st = (Oq + ilabcd) * Nc;
-         for ( int i=threadIdx.x ; i < Nc; i+=blockDim.x ){
-            ABCD0[ s0_st + i ] = 0. ;
-         }
-      }
+//      for ( unsigned int ilabcd=0 ; ilabcd < nlabcd; ilabcd++ ){
+//         int s0_st = (Oq + ilabcd) * Nc;
+//         for ( int i=threadIdx.x ; i < Nc; i+=blockDim.x ){
+//            ABCD0[ s0_st + i ] = 0. ;
+//         }
+//      }
 
       __syncthreads();
 

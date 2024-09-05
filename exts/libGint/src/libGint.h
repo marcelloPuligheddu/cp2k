@@ -91,13 +91,13 @@ class libGint {
    int nspin = 0 ;
    double * K_a; // not owned 
    double * P_a; // not owned  
-   double * K_a_dev; // owned and managed 
-   double * P_a_dev; // owned and managed 
+   double * K_a_dev = 0; // owned and managed 
+   double * P_a_dev = 0; // owned and managed 
 
    double * K_b; // not owned
    double * P_b; // not owned
-   double * K_b_dev; // owned and managed
-   double * P_b_dev; // owned and managed
+   double * K_b_dev = 0; // owned and managed
+   double * P_b_dev = 0; // owned and managed
 
    double hf_fac; // K += fac * I @@ P
  

@@ -24,7 +24,7 @@ __device__ __host__ double compute_K( const double z1, const double z2, const do
 }
 //#pragma omp end declare target
 
-__device__ __host__ void compute_Fm_batched_single( int p, 
+__device__ void compute_Fm_batched_single( int p, 
       const unsigned int* const __restrict__ FVH,
       const unsigned int* const __restrict__ OF,
       const unsigned int* const __restrict__ PMX,
@@ -69,8 +69,7 @@ __device__ __host__ void compute_Fm_batched_single( int p,
 //      } printf("\n"); ; 
 //   }
 
-//   printf( " GPU px %d \n" , p );
-//   printf( " ipzn: %d | %d %d %d %d | %d %d %d \n" , ipzn, ipa, ipb, ipc, ipd, n1, n2, n3 );
+   printf( " GPU px %d (%d.%d) : %u %u %u %u | %u %u %u \n" , p, threadIdx.x, blockIdx.x, ipa, ipb, ipc, ipd, n1, n2, n3 );
 
    // original position of the atoms before *any* pbc is applied
    const double* Ao = &data[idx_A];
@@ -177,13 +176,13 @@ __device__ __host__ void compute_Fm_batched_single( int p,
       break;
    } // end switch potential_type
 
-//   for( unsigned int m=0; m < L+1; m++ ){
-//      double tmp = Fm[Of+m]*Kfactor;
-//      double F0 = 0.0;
-//      double R = R_cut * sqrt(rho) ;
-//      fgamma0( 0, T, &F0, ftable, ftable_ld );
-//      printf ( " Fm[%d](T=%lg,R=%lg) = %4.12lg = %4.12lg * %4.12lg || F00 = %4.12lg \n", m, T, R, tmp, Fm[Of+m], Kfactor, F0 );
-//   }
+   for( unsigned int m=0; m < L+1; m++ ){
+      double tmp = Fm[Of+m]*Kfactor;
+      double F0 = 0.0;
+      double R = R_cut * sqrt(rho) ;
+      fgamma0( 0, T, &F0, ftable, ftable_ld );
+      printf ( " Fm[%d @ %d](T=%lg,R=%lg) = %4.12lg = %4.12lg * %4.12lg || F00 = %4.12lg \n", p, m, T, R, tmp, Fm[Of+m], Kfactor, F0 );
+   }
 
    // Don't forget to scale by Zn, Ka and Kb
    for( unsigned int m=0; m < L+1; m++ ){ Fm[Of+m] *= Kfactor; }
@@ -239,9 +238,9 @@ void compute_Fm_batched_low(
 //#pragma omp target map(tofrom:FVH, PMI, data, cell, NFm, periodic, Fm)
 //{
 //#pragma omp parallel for
-   for( int p = 0 ; p < NFm ; p++ ){
-      compute_Fm_batched_single( p, FVH, OF,PMX,data,Fm,NFm,L,periodic,cell,neighs,ftable,ftable_ld,R_cut,C0,ld_C0,potential_type );
-   }
+//   for( int p = 0 ; p < NFm ; p++ ){
+//      compute_Fm_batched_single( p, FVH, OF,PMX,data,Fm,NFm,L,periodic,cell,neighs,ftable,ftable_ld,R_cut,C0,ld_C0,potential_type );
+//   }
 }
 
 __global__ void compute_Fm_batched_low_gpu(

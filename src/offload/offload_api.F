@@ -141,6 +141,8 @@ CONTAINS
 
       CALL offload_set_chosen_device_c(device_id=device_id)
 
+      write(*,*) "Someone called offload to ", device_id
+
    END SUBROUTINE offload_set_chosen_device
 
 ! **************************************************************************************************

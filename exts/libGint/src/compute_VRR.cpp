@@ -475,7 +475,7 @@ __device__ void execute_VRR6_gpu(
 __device__ void execute_CP2S_gpu( 
       const int AL, const int CL, 
       const double* __restrict__ pr_mem,
-      double* sh_mem, // sh is -very much- not restrict-ed. It is only written/read to by this block, however
+      double* sh_mem, // sh is -very much- not restrict-ed.
       const int my_vrr_rank, const int vrr_team_size, const int hrr_blocksize,
       const unsigned int ipa, const unsigned int ipb, const unsigned int ipc, const unsigned int ipd,
       const unsigned int nla, const int unsigned nlb, const int unsigned nlc, const int unsigned nld, 
@@ -502,6 +502,7 @@ __device__ void execute_CP2S_gpu(
 
       for( int i=my_vrr_rank; i < NcoAC; i+=vrr_team_size){
         // must be atomic
+        printf("CP2S %d %d adding %lg @ %p \n", blockIdx.x, threadIdx.x,  K * pr_mem[i], &sh_mem[ilabcd*hrr_blocksize+i] );
         atomicAdd( &sh_mem[ ilabcd*hrr_blocksize + i ] , K * pr_mem[i]);
       }
    }
@@ -580,6 +581,7 @@ __global__ void compute_VRR_batched_gpu_low(
 //         } printf("\n"); ; 
 //      }
 
+      // TODO recheck no other block can do the same op
       int n_cc = nla*nlb*nlc*nld;
       for ( unsigned i= threadIdx.x; i < hrr_blocksize * n_cc ; i+= blockDim.x ){
          sh_mem[i] = 0.0 ;
