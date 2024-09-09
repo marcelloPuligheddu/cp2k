@@ -104,7 +104,7 @@ MODULE hfx_energy_potential
                        libgint_get_K, libgint_get_K_polarized, libgint_set_Atom, libgint_set_Atom_L, libgint_set_cell, &
                        libgint_set_neighs, &
                        libgint_set_max_n_cell, libgint_add_prm, libgint_add_shell, libgint_add_cell, libgint_add_qrt, &
-                       libgint_add_qrtt, libgint_add_set, libgint_memory_needed, libgint_dispatch
+                       libgint_add_qrtt, libgint_add_set
 
    !!!!!!!!!!!!!!!!!!!!!!!
 
@@ -1925,8 +1925,6 @@ CONTAINS
       END DO !bin
 
       !!!
-
-      call libgint_dispatch( libGint_handle )
 
 !      write (*,*) " Dispatch returned "
 

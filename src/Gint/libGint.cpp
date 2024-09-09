@@ -491,6 +491,8 @@ void libGint::set_K( std::vector<double> & K_a_ , std::vector<double> & K_b_ ){ 
 void libGint::get_K( double * K_ ){
    assert( nspin == 1 );
 
+   dispatch(true);
+
 // make sure every thread is done with its calculations
 #pragma omp barrier
    
@@ -506,6 +508,7 @@ void libGint::get_K( std::vector<double> & K_a_ ){ get_K( K_a_.data()); }
 void libGint::get_K( double * K_a_,  double * K_b_ ){
    assert( nspin == 2 );
 
+   dispatch(true);
 // make sure every thread is done with its calculations
 #pragma omp barrier
  
