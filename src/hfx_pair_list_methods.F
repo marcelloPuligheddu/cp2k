@@ -98,10 +98,7 @@ CONTAINS
       DO cell_idx = 1, SIZE(neighbor_cells)
          ! move B to this cell while keeping A fixed
          ! NOTE rb has already been moved by build_pair_list
-         !      so that when cell is (000) AB is in the pbc cell
-         ! HYP: This means that AB is at a minimum at the (000) cell.
-         !      This means that if the first screening cycles for the (000) cell,
-         !      Then EVERY other screening will cycle and we could exit early
+         !      so that when cell_r is (000) AB is in the pbc cell
          IF (do_periodic) THEN
             im_B = rb + neighbor_cells(cell_idx)%cell_r(:)
          ELSE
@@ -123,14 +120,14 @@ CONTAINS
                ! cell idx is not necessary, but convenient
                element_idx = element_idx + 1
                bra%pgf_idx(:,element_idx) = (/ ipgf, jpgf, cell_idx /)
-!               #ifdef HFX_GPU_PRM_SCR
-                  R = MAX(0.0_dp, R_pgf(jpgf, ipgf)%x(1)*rab2 + R_pgf(jpgf, ipgf)%x(2))
-                  Zeta_A = zeta(ipgf)
-                  Zeta_B = zetb(jpgf)
-                  Zeta1 = Zeta_A + Zeta_B
-                  ZetaInv = 1.0_dp/Zeta1
-                  P = (Zeta_A*ra + Zeta_B*im_B)*ZetaInv
-!               #endif
+
+               R = MAX(0.0_dp, R_pgf(jpgf, ipgf)%x(1)*rab2 + R_pgf(jpgf, ipgf)%x(2))
+               Zeta_A = zeta(ipgf)
+               Zeta_B = zetb(jpgf)
+               Zeta1 = Zeta_A + Zeta_B
+               ZetaInv = 1.0_dp/Zeta1
+               P = (Zeta_A*ra + Zeta_B*im_B)*ZetaInv
+
                bra%pgf_scr(:,element_idx) = (/ pgf_max, R, P(1), P(2), P(3) /)
                element_cnt = element_cnt + 1
             end do
@@ -141,7 +138,6 @@ CONTAINS
          cell_cnt = cell_cnt + 1
          bra%cell_idx(:,cell_cnt) = (/ cell_idx, element_cnt, element_off /)
          element_off = element_off + element_cnt
-
 
       end do ! cell
       bra%cell_cnt = cell_cnt
