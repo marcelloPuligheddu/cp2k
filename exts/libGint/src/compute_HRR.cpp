@@ -142,36 +142,36 @@ __global__ void compute_HRR_batched_gpu_low(
       const double * const Ao =  &data[idx_A];
       const double * const Bo =  &data[idx_B];
       double A[3], B[3], ABs[3];
-      compute_pbc_shift( Ao, Bo, cell, ABs );
+      compute_pbc( Ao, Bo, cell, ABs );
 
       A[0] = Ao[0];
       A[1] = Ao[1];
       A[2] = Ao[2];
-      B[0] = Bo[0] + ABs[0] + neighs[n1*3+0];
-      B[1] = Bo[1] + ABs[1] + neighs[n1*3+1];
-      B[2] = Bo[2] + ABs[2] + neighs[n1*3+2];
+      B[0] = Ao[0] + ABs[0] + neighs[n1*3+0];
+      B[1] = Ao[1] + ABs[1] + neighs[n1*3+1];
+      B[2] = Ao[2] + ABs[2] + neighs[n1*3+2];
 
       const double AB[3] = { A[0]-B[0], A[1]-B[1], A[2]-B[2] };
 
       const double * const Co =  &data[idx_C];
       const double * const Do =  &data[idx_D];
       double C[3], D[3], CDs[3];
-      compute_pbc_shift( Co, Do, cell, CDs );
+      compute_pbc( Co, Do, cell, CDs );
       C[0] = Co[0];
       C[1] = Co[1];
       C[2] = Co[2];
-      D[0] = Do[0] + CDs[0] + neighs[n2*3+0];
-      D[1] = Do[1] + CDs[1] + neighs[n2*3+1];
-      D[2] = Do[2] + CDs[2] + neighs[n2*3+2];
+      D[0] = Co[0] + CDs[0] + neighs[n2*3+0];
+      D[1] = Co[1] + CDs[1] + neighs[n2*3+1];
+      D[2] = Co[2] + CDs[2] + neighs[n2*3+2];
       const double CD[3] = { C[0]-D[0], C[1]-D[1], C[2]-D[2] };
 
-      if (threadIdx.x == 0 ){
-         printf(" shifting A %lf %lf %lf and B %lf %lf %lf by %lf %lf %lf \n", 
-            Ao[0], Ao[1], Ao[2], Bo[0], Bo[1], Bo[2], ABs[0], ABs[1], ABs[2] );
-         printf(" shifting C %lf %lf %lf and D %lf %lf %lf by %lf %lf %lf \n", 
-            Co[0], Co[1], Co[2], Do[0], Do[1], Do[2], CDs[0], CDs[1], CDs[2] );
-         printf(" n1 %d n2 %d \n" , n1 , n2 );
-      }
+//      if (threadIdx.x == 0 ){
+//         printf(" shifting A %lf %lf %lf and B %lf %lf %lf by %lf %lf %lf \n", 
+//            Ao[0], Ao[1], Ao[2], Bo[0], Bo[1], Bo[2], ABs[0], ABs[1], ABs[2] );
+//         printf(" shifting C %lf %lf %lf and D %lf %lf %lf by %lf %lf %lf \n", 
+//            Co[0], Co[1], Co[2], Do[0], Do[1], Do[2], CDs[0], CDs[1], CDs[2] );
+//         printf(" n1 %d n2 %d \n" , n1 , n2 );
+//      }
 
       double* sh_mem = &ABCD[ Og * hrr_blocksize ];
 

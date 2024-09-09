@@ -106,13 +106,37 @@ int max( std::vector<int> x ){
    return ret;
 }
 
+__device__ __host__ void compute_pbc( const double A[3], const double B[3], const double * cell, double * AB ){
+   // modifies AB = B - A + R such that:
+   // AB is inside cell
+   // R  is a lattice vector
+   const double * h_mat = &cell[CELL_HMAT_OFF];
+   const double * h_inv = &cell[CELL_HINV_OFF];
+   AB[0] = B[0]-A[0];
+   AB[1] = B[1]-A[1];
+   AB[2] = B[2]-A[2];
+   // note it is a 3x3 by 3 matrix vector product
+   double s0 = h_inv[0*3+0] * AB[0] + h_inv[1*3+0] * AB[1] + h_inv[2*3+0] * AB[2] ;
+   double s1 = h_inv[0*3+1] * AB[0] + h_inv[1*3+1] * AB[1] + h_inv[2*3+1] * AB[2] ;
+   double s2 = h_inv[0*3+2] * AB[0] + h_inv[1*3+2] * AB[1] + h_inv[2*3+2] * AB[2] ;
+   s0 = s0 - rint( s0 );
+   s1 = s1 - rint( s1 );
+   s2 = s2 - rint( s2 );
+   // note it is a 3x3 by 3 matrix vector product
+   AB[0] = h_mat[0*3+0] * s0 + h_mat[1*3+0] * s1 + h_mat[2*3+0] * s2;
+   AB[1] = h_mat[0*3+1] * s0 + h_mat[1*3+1] * s1 + h_mat[2*3+1] * s2;
+   AB[2] = h_mat[0*3+2] * s0 + h_mat[1*3+2] * s1 + h_mat[2*3+2] * s2;
+}
+
+
+
 __device__ __host__ void compute_pbc_shift( const double A[3], const double B[3], const double * cell, double * shift ){
    const double * h_mat = &cell[CELL_HMAT_OFF];
    const double * h_inv = &cell[CELL_HINV_OFF];
    double AB[3];
-   AB[0] = A[0]-B[0];
-   AB[1] = A[1]-B[1];
-   AB[2] = A[2]-B[2];
+   AB[0] = B[0]-A[0];
+   AB[1] = B[1]-A[1];
+   AB[2] = B[2]-A[2];
    // note it is a 3x3 by 3 matrix vector product
    double s0 = h_inv[0*3+0] * AB[0] + h_inv[1*3+0] * AB[1] + h_inv[2*3+0] * AB[2] ;
    double s1 = h_inv[0*3+1] * AB[0] + h_inv[1*3+1] * AB[1] + h_inv[2*3+1] * AB[2] ;

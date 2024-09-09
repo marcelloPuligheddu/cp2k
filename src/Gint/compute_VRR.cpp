@@ -502,7 +502,7 @@ __device__ void execute_CP2S_gpu(
 
       for( int i=my_vrr_rank; i < NcoAC; i+=vrr_team_size){
         // must be atomic
-        printf("CP2S %d %d adding %lg @ %p \n", blockIdx.x, threadIdx.x,  K * pr_mem[i], &sh_mem[ilabcd*hrr_blocksize+i] );
+//        printf("CP2S %d %d adding %lg @ %p \n", blockIdx.x, threadIdx.x,  K * pr_mem[i], &sh_mem[ilabcd*hrr_blocksize+i] );
         atomicAdd( &sh_mem[ ilabcd*hrr_blocksize + i ] , K * pr_mem[i]);
       }
    }
@@ -614,7 +614,7 @@ __global__ void compute_VRR_batched_gpu_low(
          unsigned int n3;
 
          // VRR does not need to know the cell, since it is already in the PA vectors
-         // we need to know the index of the pgfs to fidn the K coefficents
+         // we need to know the index of the pgfs to find the K coefficents
          decode_prm( ipzn, &ipa,&ipb,&ipc,&ipd,&n3 );
 
 //         if (blockIdx.x == 0 and threadIdx.x == 0 ){

@@ -92,9 +92,8 @@ __global__ void compute_KS_gpu(
          const int Iad_T = offset_L_set_atom_ad + idx_ad_T;
          const int Ibc_T = offset_L_set_atom_bc + idx_bc_T;
          const int Ibd_T = offset_L_set_atom_bd + idx_bd_T;
-//         printf(" ----- KS GPU %d.%d.0: | %d | %d %d %d %d ||| %d %lf | %d %d %d %d | %d %d %d %d \n" , block, t, Oq+t , Iac_T, Iad_T, Ibc_T, Ibd_T, idx_fac, fac, inla,inlb,inlc,inld, ldac,ldad,ldbc,ldbd );
+
          const double iabcd = - fac * I[ Oq + t ];
-//         printf( " ---------- KS GPU %p %d %lg \n", I, Oq+t, iabcd );
          const double kbd = iabcd * P [Iac_T];
          const double kbc = iabcd * P [Iad_T];
          const double kad = iabcd * P [Ibc_T];
@@ -102,10 +101,10 @@ __global__ void compute_KS_gpu(
 
 //         printf( " ---------- KS GPU %lg %lg %lg %lg %lg \n", iabcd, kbd,kbc,kad,kac );
 //         printf("KS GPU %d.%d.0: Adding %4.10lg ( - %lg * %lg * %lg ) to %lg from P %d [%p] @ K %d [%p] \n ", block, t, kbd, fac, I[ Oq + t ], P[Iac_T], K[Ibd_T], Iac_T, &P[Iac_T], Ibd_T, &K[Ibd_T] );
-         printf("KS GPU %d.0: Adding %4.10lg ( - %lg * %lg * %lg ) to %lg from P %d @ K %d \n ", block, kbd, fac, I[ Oq + t ], P[Iac_T], K[Ibd_T], Iac_T, Ibd_T );
-         printf("KS GPU %d.1: Adding %4.10lg ( - %lg * %lg * %lg ) to %lg from P %d @ K %d \n ", block, kbc, fac, I[ Oq + t ], P[Iad_T], K[Ibc_T], Iad_T, Ibc_T );
-         printf("KS GPU %d.2: Adding %4.10lg ( - %lg * %lg * %lg ) to %lg from P %d @ K %d \n ", block, kad, fac, I[ Oq + t ], P[Ibc_T], K[Iad_T], Ibc_T, Iad_T );
-         printf("KS GPU %d.4: Adding %4.10lg ( - %lg * %lg * %lg ) to %lg from P %d @ K %d \n ", block, kac, fac, I[ Oq + t ], P[Ibd_T], K[Iac_T], Ibd_T, Iac_T );
+//         printf("KS GPU %d.0: Adding %4.10lg ( - %lg * %lg * %lg ) to %lg from P %d @ K %d \n ", block, kbd, fac, I[ Oq + t ], P[Iac_T], K[Ibd_T], Iac_T, Ibd_T );
+//         printf("KS GPU %d.1: Adding %4.10lg ( - %lg * %lg * %lg ) to %lg from P %d @ K %d \n ", block, kbc, fac, I[ Oq + t ], P[Iad_T], K[Ibc_T], Iad_T, Ibc_T );
+//         printf("KS GPU %d.2: Adding %4.10lg ( - %lg * %lg * %lg ) to %lg from P %d @ K %d \n ", block, kad, fac, I[ Oq + t ], P[Ibc_T], K[Iad_T], Ibc_T, Iad_T );
+//         printf("KS GPU %d.3: Adding %4.10lg ( - %lg * %lg * %lg ) to %lg from P %d @ K %d \n ", block, kac, fac, I[ Oq + t ], P[Ibd_T], K[Iac_T], Ibd_T, Iac_T );
 
          // MUST be atomics on device, or however K is distributed
          atomicAdd( &K[ Ibd_T ] , kbd);

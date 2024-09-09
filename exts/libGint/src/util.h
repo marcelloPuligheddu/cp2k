@@ -61,6 +61,8 @@ __device__ __host__ inline void compute_weighted_distance(
 
 
 int max( std::vector<int> x );
+
+__device__ __host__ void compute_pbc( const double A[3], const double B[3], const double * cell, double * AB );
 __device__ __host__ void compute_pbc_shift( const double A[3], const double B[3], const double * cell, double * shift );
 
 
