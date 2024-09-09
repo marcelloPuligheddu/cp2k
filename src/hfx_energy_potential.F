@@ -72,6 +72,7 @@ MODULE hfx_energy_potential
                               do_potential_truncated, &
                               do_potential_TShPSC, &
                               do_potential_short, &
+                              do_potential_coulomb, &
                               hfx_do_eval_energy
    USE input_section_types, ONLY: section_vals_type
    USE kinds, ONLY: default_string_length, &
@@ -917,13 +918,15 @@ CONTAINS
       !!!
       ! Set up the gpu enviroment
       if (first_call) then
-         !$omp critical
-         write(*,*) " FIRST CALL ", para_env%mepos , omp_get_thread_num(), offload_get_chosen_device()
-         !$omp end critical
+
+!         !$omp critical
+!         write(*,*) " FIRST CALL ", para_env%mepos , omp_get_thread_num(), offload_get_chosen_device()
+!         !$omp end critical
 
          ! APPARENTELY only the master thread has received a call to offload_set_chosen_device
          ! BUT we need all omp threads with th same mpi process to be on the same physical device.
-         ! so they can share gpu memory for P and HF
+         ! so they can share GPU memory for the density matrix P (full_density_alpha and full_density_beta)
+         !         and the Kohm-Sham matrix (full_ks_alpha and full_ks_beta)
          !$omp master
          shared_dev = offload_get_chosen_device()
          !$omp end master
@@ -934,20 +937,27 @@ CONTAINS
 
          call libgint_init(libGint_handle)
          potential_parameter = actual_x_data%potential_parameter
-         if (potential_parameter%potential_type == do_potential_truncated .or. &
-             potential_parameter%potential_type == do_potential_mix_cl_trunc) then
-            call libgint_set_Potential_Truncated( libGint_handle, potential_parameter%cutoff_radius, C0(:,:) )
-         end if
+         libGint_select_potential: select case(potential_parameter%potential_type)
+            ! coulomb is the default assumed by libGint, so no more info is needed
+            case (do_potential_coulomb)
+               exit libGint_select_potential
+            case (do_potential_truncated) 
+               call libgint_set_Potential_Truncated( libGint_handle, potential_parameter%cutoff_radius, C0(:,:) )
+            case default
+               CPASSERT(.false.) ! not (yet) implemented
+         end select libGint_select_potential
+
          first_call = .false.
 
-         do iatom=1, size(full_density_alpha, 1)
-            full_density_alpha(iatom,1) = 1.0_dp / size(full_density_alpha, 1)
-         end do
+!         do iatom=1, size(full_density_alpha, 1)
+!            full_density_alpha(iatom,1) = 1.0_dp / size(full_density_alpha, 1)
+!         end do
 
-      else
-         !$omp master
-         write(*,*) " NOT FIRST CALL "
-         !$omp end master
+!      else
+!         !$omp master
+!         write(*,*) " NOT FIRST CALL "
+!         !$omp end master
+
       end if
 
       do_pbc = do_periodic
