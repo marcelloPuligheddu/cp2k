@@ -570,7 +570,7 @@ void libGint::dispatch( bool skip_cpu ){
 //   #pragma omp critical
 //   { cout << "Dispatch: Will compute " << out_size << " values " << endl; cout.flush(); }
    
-   OUT.resize(out_size);
+//   OUT.resize(out_size);
 
 
    int ftable_ld = 0; // ld of table for fgamma
@@ -585,7 +585,7 @@ void libGint::dispatch( bool skip_cpu ){
    double* ftable = create_md_ftable( nmax, tmin, tmax, tdelta, &ftable_ld);
 
    size_t tot_mem = 0;
-   tot_mem += OUT.size()*sizeof(double);
+   tot_mem += out_size*sizeof(double);
    tot_mem += ua.internal_buffer.size()*sizeof(double) ;
    tot_mem += sizeof(double)*max_integral_scratch_size;
    tot_mem += sizeof(int)*max_plan_size          ;
@@ -598,7 +598,7 @@ void libGint::dispatch( bool skip_cpu ){
    tot_mem += sizeof(unsigned int)*(3*max_ncells+2*9+nelem+245) ;
    tot_mem += 2 * sizeof(double)*(FP_size) ;
 
-   
+   /*
    #pragma omp single
    if ( first ){
      cout << "Memory use: (B)" << endl;
@@ -625,6 +625,7 @@ void libGint::dispatch( bool skip_cpu ){
    cout << int( tot_mem *scale ) << endl; cout.flush();
    }
    #pragma omp barrier
+   */
    
 
    double *data_dev, *cell_h_dev, *neighs_dev, *ftable_dev, *OUT_dev, *C2S_dev;
@@ -665,7 +666,7 @@ void libGint::dispatch( bool skip_cpu ){
    POP_RANGE;
    // ! needed after async memcpy
    CUDA_GPU_ERR_CHECK( cudaStreamSynchronize(cuda_stream) );
-   CUDA_GPU_ERR_CHECK( cudaPeekAtLastError() );
+//   CUDA_GPU_ERR_CHECK( cudaPeekAtLastError() );
 
    // Main cycle. 
    // 1) Get the plan
@@ -717,28 +718,24 @@ void libGint::dispatch( bool skip_cpu ){
          FVH_dev, FVH[L].data(), sizeof(unsigned int)*(FVH[L].size()), cudaMemcpyHostToDevice, cuda_stream ));
       CUDA_GPU_ERR_CHECK( cudaMemcpyAsync(
           KS_dev,  KS[L].data(), sizeof(unsigned int)*( KS[L].size()), cudaMemcpyHostToDevice, cuda_stream )); 
-//      CUDA_GPU_ERR_CHECK( cudaMemcpyAsync(
-//         TRA_dev, TRA[L].data(), sizeof(unsigned int)*(TRA[L].size()), cudaMemcpyHostToDevice, cuda_stream ));
-
-      // GPU adheres to IEEE-754, so a pattern of all 0s represents a floating-point zero.
+      // (nvidia?) GPUs adhere to IEEE-754, so a pattern of all 0s represents a floating-point zero.
       CUDA_GPU_ERR_CHECK( cudaMemsetAsync( ABCD0_dev, 0, ABCD0_size[L]*sizeof(double) , cuda_stream ) );
       // ! needed after async     
-      CUDA_GPU_ERR_CHECK( cudaStreamSynchronize(cuda_stream) );
-      
-      CUDA_GPU_ERR_CHECK( cudaPeekAtLastError() );
-      CUDA_GPU_ERR_CHECK( cudaDeviceSynchronize() );
+      CUDA_GPU_ERR_CHECK( cudaStreamSynchronize(cuda_stream) );     
+//      CUDA_GPU_ERR_CHECK( cudaPeekAtLastError() );
+//      CUDA_GPU_ERR_CHECK( cudaDeviceSynchronize() );
       POP_RANGE; // transfer indeces
+
       PUSH_RANGE("compute",5);
 
       int Fm_blocksize = 256;
       int Fm_numblocks = (Nprm+Fm_blocksize-1)/Fm_blocksize;
 
-
       compute_Fm_batched_low_gpu<<<Fm_numblocks,Fm_blocksize,0,cuda_stream>>>(
          FVH_dev, OF_dev, PMX_dev, data_dev, Fm_dev, Nprm, labcd,
          periodic, cell_h_dev, neighs_dev, ftable_dev, ftable_ld,R_cut,C0_dev,ld_C0,potential_type );
-      CUDA_GPU_ERR_CHECK( cudaPeekAtLastError() );
-      CUDA_GPU_ERR_CHECK( cudaDeviceSynchronize() );
+//      CUDA_GPU_ERR_CHECK( cudaPeekAtLastError() );
+//      CUDA_GPU_ERR_CHECK( cudaDeviceSynchronize() );
 
 //      std::vector<double> FM_on_cpu(Fm_size[L]);
 //      CUDA_GPU_ERR_CHECK( cudaMemcpy( FM_on_cpu.data(),  Fm_dev, sizeof(double)*(Fm_size[L]), cudaMemcpyDeviceToHost) );
@@ -760,8 +757,8 @@ void libGint::dispatch( bool skip_cpu ){
       compute_VRR_batched_gpu_low<<<Ncells,32,0,cuda_stream>>>(
          Ncells, plan_dev, PMX_dev, FVH_dev, Fm_dev, data_dev,
          AC_dev, ABCD_dev, vrr_blocksize, hrr_blocksize, labcd, numV, numVC ); 
-      CUDA_GPU_ERR_CHECK( cudaPeekAtLastError() );
-      CUDA_GPU_ERR_CHECK( cudaDeviceSynchronize() );
+//      CUDA_GPU_ERR_CHECK( cudaPeekAtLastError() );
+//      CUDA_GPU_ERR_CHECK( cudaDeviceSynchronize() );
 
 //      std::vector<double> AC_on_cpu(AC_size[L]);
 //      CUDA_GPU_ERR_CHECK( cudaMemcpy( AC_on_cpu.data(),  AC_dev, sizeof(double)*(AC_size[L]), cudaMemcpyDeviceToHost) );
@@ -806,14 +803,14 @@ void libGint::dispatch( bool skip_cpu ){
 
       // Note: we need to DeviceSynchronize before going from kernels to cublas. TODO actually check it is true
       // TODO it should not be necessary since this cublas handle has been assigned to this stream
-      CUDA_GPU_ERR_CHECK( cudaPeekAtLastError() );
-      CUDA_GPU_ERR_CHECK( cudaDeviceSynchronize() );
+//      CUDA_GPU_ERR_CHECK( cudaPeekAtLastError() );
+//      CUDA_GPU_ERR_CHECK( cudaDeviceSynchronize() );
       // note: uses ABCD as a scratch space
       compute_SPH_batched_gpu_alt ( Nqrtt, la, lb, lc, ld, ABCD0_dev, SPHER_dev, ABCD_dev, C2S_dev, cublas_handle );
 
       // same note as above
-      CUDA_GPU_ERR_CHECK( cudaPeekAtLastError() );
-      CUDA_GPU_ERR_CHECK( cudaDeviceSynchronize() );
+//      CUDA_GPU_ERR_CHECK( cudaPeekAtLastError() );
+//      CUDA_GPU_ERR_CHECK( cudaDeviceSynchronize() );
 
 //      int corrBS = 64;
 //      int corrNB = (Nqrtt*Ns+corrBS-1)/corrBS;
@@ -837,8 +834,8 @@ void libGint::dispatch( bool skip_cpu ){
       if ( nspin == 2 ){
          compute_KS_gpu<<<Nqrtt,128,0,cuda_stream>>>( Nqrtt, KS_dev, la,lb,lc,ld, P_b_dev, SPHER_dev, K_b_dev, data_dev, hf_fac );
       }
-      CUDA_GPU_ERR_CHECK( cudaPeekAtLastError() );
-      CUDA_GPU_ERR_CHECK( cudaDeviceSynchronize() );
+//      CUDA_GPU_ERR_CHECK( cudaPeekAtLastError() );
+//      CUDA_GPU_ERR_CHECK( cudaDeviceSynchronize() );
       
 //      compute_TRA_batched_gpu_low<<<Nshell,128>>>( Nshell, la, lb, lc, ld, TRA_dev, SPHER_dev, OUT_dev );
 
@@ -847,7 +844,7 @@ void libGint::dispatch( bool skip_cpu ){
    }
    POP_RANGE; // compute all L
 
-#pragma omp barrier
+// #pragma omp barrier
 
 //   std::vector<double> OUT_from_gpu( OUT.size() );
 //   CUDA_GPU_ERR_CHECK( cudaMemcpy( OUT_from_gpu.data(), OUT_dev, sizeof(double)*(OUT.size()), cudaMemcpyDeviceToHost ));
@@ -866,6 +863,10 @@ void libGint::dispatch( bool skip_cpu ){
 //   }
 //   for ( int ipf=0; ipf < FP_size; ipf++ ){ cout <<  ipf << " " << F_a_from_gpu[ipf] << endl ; } cout << endl;
 
+   // 90% sure it is not needed. In theory we want to wait for the last kernel in
+   // the last L to finish before cleaning and returning, but it should not be necessary
+   CUDA_GPU_ERR_CHECK( cudaStreamSynchronize(cuda_stream) );
+
    // TODO move to some resize / delete function
    CUDA_GPU_ERR_CHECK( cudaFree(OUT_dev) );
    CUDA_GPU_ERR_CHECK( cudaFree(data_dev) );
@@ -881,11 +882,7 @@ void libGint::dispatch( bool skip_cpu ){
    CUDA_GPU_ERR_CHECK( cudaFree(SPH_dev) );
    CUDA_GPU_ERR_CHECK( cudaFree( KS_dev) );
    CUDA_GPU_ERR_CHECK( cudaFree(TRA_dev) );
-
-   // 90% sure it is not needed. In theory we want to wait for the last kernel in
-   // the last L to finish before returning, but it should not be necessary
-   CUDA_GPU_ERR_CHECK( cudaStreamSynchronize(cuda_stream) );
-   
+  
    reset_indices();
 
 }
