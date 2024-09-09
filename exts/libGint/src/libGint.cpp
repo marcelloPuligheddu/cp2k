@@ -10,7 +10,7 @@
 #include "compute_VRR.h"
 #include "compute_HRR.h"
 #include "compute_SPH.h"
-#include "compute_TRA.h"
+//#include "compute_TRA.h"
 #include "fgamma.h"
 #include "libGint.h"
 #include "c2s.h"
@@ -80,8 +80,11 @@ void libGint::set_Potential_Truncated( double R_cut_, double * C0_, int ld_C0_, 
    C0 = C0_;
    potential_type = TRUNCATED;
 
+#pragma omp single copyprivate(C0_dev)
+   {
    CUDA_GPU_ERR_CHECK( cudaMalloc( (void**)&C0_dev, C0_size * sizeof(double) ) );
    CUDA_GPU_ERR_CHECK( cudaMemcpy( C0_dev, C0, C0_size * sizeof(double), cudaMemcpyHostToDevice ));   
+   }
 
 //   cout << " Setting C0 " << C0_size << " | " << ld_C0 << endl;
 //   for ( int ic=0; ic < C0_size; ic++ ){
@@ -240,33 +243,34 @@ int libGint::add_qrt( int la, int lb, int lc, int ld, int nla, int nlb, int nlc,
    unsigned int nlabcd = nla*nlb*nlc*nld;
    unsigned int L = encodeL(la,lb,lc,ld);
 
-   unsigned int SPH_idxs[SPH_SIZE] = {0} ;
-   SPH_idxs[SPH_OFFSET_Q     ] = offset_Q[L];
-   SPH_idxs[SPH_OFFSET_NLABCD] = nlabcd;
-   SPH[L].insert(SPH[L].end(), SPH_idxs, SPH_idxs+SPH_SIZE);
+//   unsigned int SPH_idxs[SPH_SIZE] = {0} ;
+//   SPH_idxs[SPH_OFFSET_Q     ] = offset_Q[L];
+//   SPH_idxs[SPH_OFFSET_NLABCD] = nlabcd;
+//   SPH[L].insert(SPH[L].end(), SPH_idxs, SPH_idxs+SPH_SIZE);
 
-   unsigned int nla_as_uint = (unsigned int) nla ;
-   unsigned int nlb_as_uint = (unsigned int) nlb ;
-   unsigned int nlc_as_uint = (unsigned int) nlc ;
-   unsigned int nld_as_uint = (unsigned int) nld ;
-   unsigned int TRA_idxs[TRA_SIZE] = {0};
-   TRA_idxs[TRA_OFFSET_Q   ] = offset_Q[L];
-   TRA_idxs[TRA_OFFSET_NLA ] = nla_as_uint;
-   TRA_idxs[TRA_OFFSET_NLB ] = nlb_as_uint;
-   TRA_idxs[TRA_OFFSET_NLC ] = nlc_as_uint;
-   TRA_idxs[TRA_OFFSET_NLD ] = nld_as_uint;
-   TRA_idxs[TRA_OFFSET_DEST] = dest;
-   TRA[L].insert(TRA[L].end(), TRA_idxs, TRA_idxs+TRA_SIZE );
+//   unsigned int nla_as_uint = (unsigned int) nla ;
+//   unsigned int nlb_as_uint = (unsigned int) nlb ;
+//   unsigned int nlc_as_uint = (unsigned int) nlc ;
+//   unsigned int nld_as_uint = (unsigned int) nld ;
+//   unsigned int TRA_idxs[TRA_SIZE] = {0};
+//   TRA_idxs[TRA_OFFSET_Q   ] = offset_Q[L];
+//   TRA_idxs[TRA_OFFSET_NLA ] = nla_as_uint;
+//   TRA_idxs[TRA_OFFSET_NLB ] = nlb_as_uint;
+//   TRA_idxs[TRA_OFFSET_NLC ] = nlc_as_uint;
+//   TRA_idxs[TRA_OFFSET_NLD ] = nld_as_uint;
+//   TRA_idxs[TRA_OFFSET_DEST] = dest;
+//   TRA[L].insert(TRA[L].end(), TRA_idxs, TRA_idxs+TRA_SIZE );
 
    ABCD0_size[L] += compute_Nc(la,lb,lc,ld) * nlabcd ;
    SPHER_size[L] += compute_Ns(la,lb,lc,ld) * nlabcd ;
-   OUT_size[L] += compute_Ns(la,lb,lc,ld) * nlabcd ; 
+//   OUT_size[L] += compute_Ns(la,lb,lc,ld) * nlabcd ; 
    offset_Q[L] += nlabcd ;
    offset_T[L] += 1 ;
 
-   unsigned int prev_dest = dest;
-   dest += compute_Ns(la,lb,lc,ld) * nlabcd ;
-   return prev_dest;
+//   unsigned int prev_dest = dest;
+//   dest += compute_Ns(la,lb,lc,ld) * nlabcd ;
+//   return prev_dest;
+   return 0;
 
 
 }
@@ -349,10 +353,10 @@ void libGint::compute_max_vector_size(){
    max_OF_size = 0;
    max_PMX_size = 0;
    max_FVH_size = 0;
-   max_SPH_size = 0;
+//   max_SPH_size = 0;
    max_KS_size  = 0;
-   max_TRA_size = 0;
-   out_size = 0;
+//   max_TRA_size = 0;
+//   out_size = 0;
 
    for ( unsigned int L : encoded_moments ){
 
@@ -369,11 +373,10 @@ void libGint::compute_max_vector_size(){
       max_OF_size    = max(max_OF_size,    OF[L].size());
       max_PMX_size   = max(max_PMX_size,  PMX[L].size());
       max_FVH_size   = max(max_FVH_size,  FVH[L].size());
-      max_SPH_size   = max(max_SPH_size,  SPH[L].size());
+//      max_SPH_size   = max(max_SPH_size,  SPH[L].size());
       max_KS_size    = max(max_KS_size,    KS[L].size());
-      max_TRA_size   = max(max_TRA_size,  TRA[L].size());
-
-      out_size += OUT_size[L];
+//      max_TRA_size   = max(max_TRA_size,  TRA[L].size());
+//      out_size += OUT_size[L];
 
    }
 
@@ -381,9 +384,10 @@ void libGint::compute_max_vector_size(){
 
 size_t libGint::memory_needed( ){
    compute_max_vector_size();
-   size_t tmp = (max_plan_size + max_OF_size + max_PMX_size + max_FVH_size + max_SPH_size + max_KS_size + max_TRA_size);
+//   size_t tmp = (max_plan_size + max_OF_size + max_PMX_size + max_FVH_size + max_SPH_size + max_KS_size + max_TRA_size);
+   size_t tmp = (max_plan_size + max_OF_size + max_PMX_size + max_FVH_size + max_KS_size);
    size_t add1 = tmp * sizeof(unsigned int);
-   size_t add2 = (max_integral_scratch_size + out_size) * sizeof(double);
+   size_t add2 = (max_integral_scratch_size) * sizeof(double);
    size_t add3 = 2 * FP_size * sizeof(double);
    return add1+add2+add3;
 }
@@ -525,16 +529,16 @@ void libGint::reset_indices(){
    max_OF_size = 0;
    max_PMX_size = 0;
    max_FVH_size = 0;
-   max_SPH_size = 0;
-   max_TRA_size = 0;
-   out_size = 0;
+//   max_SPH_size = 0;
+//   max_TRA_size = 0;
+//   out_size = 0;
 
    for ( unsigned int L : encoded_moments ){
        OF[L].clear();
       PMX[L].clear();
       FVH[L].clear();
       SPH[L].clear();
-      TRA[L].clear();
+//      TRA[L].clear();
        KS[L].clear();
       offset_F[L] = 0;
       offset_V[L] = 0;
@@ -546,7 +550,7 @@ void libGint::reset_indices(){
       ABCD_size[L] = 0;
       ABCD0_size[L] = 0;
       SPHER_size[L] = 0;
-      OUT_size[L] = 0;
+//      OUT_size[L] = 0;
    }
 
    dest=0;
@@ -576,6 +580,7 @@ void libGint::dispatch( bool skip_cpu ){
 //   OUT.resize(out_size);
 
 
+   // TODO move at init
    int ftable_ld = 0; // ld of table for fgamma
    int nmax = 21;
    double tdelta = 0.1;  // hardcoded in source code
@@ -587,6 +592,7 @@ void libGint::dispatch( bool skip_cpu ){
    int nelem = (itabmax - itabmin + 1 ) * (n+1); // === 121*(n+1) == 121*ftable_ld
    double* ftable = create_md_ftable( nmax, tmin, tmax, tdelta, &ftable_ld);
 
+   /*
    size_t tot_mem = 0;
    tot_mem += out_size*sizeof(double);
    tot_mem += ua.internal_buffer.size()*sizeof(double) ;
@@ -601,7 +607,7 @@ void libGint::dispatch( bool skip_cpu ){
    tot_mem += sizeof(unsigned int)*(3*max_ncells+2*9+nelem+245) ;
    tot_mem += 2 * sizeof(double)*(FP_size) ;
 
-   /*
+   
    #pragma omp single
    if ( first ){
      cout << "Memory use: (B)" << endl;
@@ -631,13 +637,13 @@ void libGint::dispatch( bool skip_cpu ){
    */
    
 
-   double *data_dev, *cell_h_dev, *neighs_dev, *ftable_dev, *OUT_dev, *C2S_dev;
+   double *data_dev, *cell_h_dev, *neighs_dev, *ftable_dev, *C2S_dev;
    double *integral_scratch_dev;
-   unsigned int *OF_dev, *PMX_dev, *FVH_dev, *SPH_dev, *KS_dev, *TRA_dev;
+   unsigned int *OF_dev, *PMX_dev, *FVH_dev,*KS_dev; //, *SPH_dev, *TRA_dev;
    int *plan_dev;
 
    PUSH_RANGE("dispatch malloc",1);
-   CUDA_GPU_ERR_CHECK( cudaMalloc( (void**)&OUT_dev, sizeof(double)*OUT.size() ));
+//   CUDA_GPU_ERR_CHECK( cudaMalloc( (void**)&OUT_dev, sizeof(double)*OUT.size() ));
    CUDA_GPU_ERR_CHECK( cudaMalloc( (void**)&data_dev, sizeof(double)*(ua.internal_buffer.size()) ));
    CUDA_GPU_ERR_CHECK( cudaMalloc( (void**)&cell_h_dev, sizeof(double)*(2*9) ));
    CUDA_GPU_ERR_CHECK( cudaMalloc( (void**)&neighs_dev, sizeof(double)*(3*max_ncells) ));
@@ -648,14 +654,14 @@ void libGint::dispatch( bool skip_cpu ){
    CUDA_GPU_ERR_CHECK( cudaMalloc( (void**)&OF_dev , sizeof(unsigned int)*max_OF_size )); 
    CUDA_GPU_ERR_CHECK( cudaMalloc( (void**)&PMX_dev, sizeof(unsigned int)*max_PMX_size )); 
    CUDA_GPU_ERR_CHECK( cudaMalloc( (void**)&FVH_dev, sizeof(unsigned int)*max_FVH_size ));
-   CUDA_GPU_ERR_CHECK( cudaMalloc( (void**)&SPH_dev, sizeof(unsigned int)*max_SPH_size )); 
+//   CUDA_GPU_ERR_CHECK( cudaMalloc( (void**)&SPH_dev, sizeof(unsigned int)*max_SPH_size )); 
    CUDA_GPU_ERR_CHECK( cudaMalloc( (void**)&KS_dev , sizeof(unsigned int)*max_KS_size  )); 
-   CUDA_GPU_ERR_CHECK( cudaMalloc( (void**)&TRA_dev, sizeof(unsigned int)*max_TRA_size )); 
-   CUDA_GPU_ERR_CHECK( cudaDeviceSynchronize() );
-   CUDA_GPU_ERR_CHECK( cudaPeekAtLastError() );
-   POP_RANGE;
+//   CUDA_GPU_ERR_CHECK( cudaMalloc( (void**)&TRA_dev, sizeof(unsigned int)*max_TRA_size )); 
+//   CUDA_GPU_ERR_CHECK( cudaDeviceSynchronize() );
+//   CUDA_GPU_ERR_CHECK( cudaPeekAtLastError() );
+   POP_RANGE; // dispatch malloc
 
-   PUSH_RANGE("dispatch memcy",1);
+   PUSH_RANGE("dispatch memcpy",1);
    CUDA_GPU_ERR_CHECK( cudaMemcpyAsync(
       data_dev, ua.internal_buffer.data(), sizeof(double)*(ua.internal_buffer.size()), cudaMemcpyHostToDevice, cuda_stream ));
    CUDA_GPU_ERR_CHECK( cudaMemcpyAsync(
@@ -666,7 +672,7 @@ void libGint::dispatch( bool skip_cpu ){
       ftable_dev, ftable, sizeof(double)*(nelem), cudaMemcpyHostToDevice, cuda_stream ));
    CUDA_GPU_ERR_CHECK( cudaMemcpyAsync(
       C2S_dev, c2s, sizeof(double)*245, cudaMemcpyHostToDevice, cuda_stream ));
-   POP_RANGE;
+   POP_RANGE; // dispatch memcpy
    // ! needed after async memcpy
    CUDA_GPU_ERR_CHECK( cudaStreamSynchronize(cuda_stream) );
 //   CUDA_GPU_ERR_CHECK( cudaPeekAtLastError() );
@@ -684,7 +690,6 @@ void libGint::dispatch( bool skip_cpu ){
       labcd = la+lb+lc+ld;
       int Nc = compute_Nc(la,lb,lc,ld);
       int Ns = compute_Ns(la,lb,lc,ld);
-      double corr = Lcorrection(la)*Lcorrection(lb)*Lcorrection(lc)*Lcorrection(ld);
 
       std::vector<int> * plan = NULL ;
       unsigned int vrr_blocksize, hrr_blocksize, numV, numVC, numVCH;   
@@ -815,6 +820,7 @@ void libGint::dispatch( bool skip_cpu ){
 //      CUDA_GPU_ERR_CHECK( cudaPeekAtLastError() );
 //      CUDA_GPU_ERR_CHECK( cudaDeviceSynchronize() );
 
+//      double corr = Lcorrection(la)*Lcorrection(lb)*Lcorrection(lc)*Lcorrection(ld);
 //      int corrBS = 64;
 //      int corrNB = (Nqrtt*Ns+corrBS-1)/corrBS;
 //      apply_correction<<<corrNB,corrBS>>>( Nqrtt*Ns, SPHER_dev, corr );
@@ -871,7 +877,7 @@ void libGint::dispatch( bool skip_cpu ){
    CUDA_GPU_ERR_CHECK( cudaStreamSynchronize(cuda_stream) );
 
    // TODO move to some resize / delete function
-   CUDA_GPU_ERR_CHECK( cudaFree(OUT_dev) );
+//   CUDA_GPU_ERR_CHECK( cudaFree(OUT_dev) );
    CUDA_GPU_ERR_CHECK( cudaFree(data_dev) );
    CUDA_GPU_ERR_CHECK( cudaFree(cell_h_dev) );
    CUDA_GPU_ERR_CHECK( cudaFree(neighs_dev) );
@@ -882,9 +888,9 @@ void libGint::dispatch( bool skip_cpu ){
    CUDA_GPU_ERR_CHECK( cudaFree( OF_dev) );
    CUDA_GPU_ERR_CHECK( cudaFree(PMX_dev) );
    CUDA_GPU_ERR_CHECK( cudaFree(FVH_dev) );
-   CUDA_GPU_ERR_CHECK( cudaFree(SPH_dev) );
+//   CUDA_GPU_ERR_CHECK( cudaFree(SPH_dev) );
    CUDA_GPU_ERR_CHECK( cudaFree( KS_dev) );
-   CUDA_GPU_ERR_CHECK( cudaFree(TRA_dev) );
+//   CUDA_GPU_ERR_CHECK( cudaFree(TRA_dev) );
   
    reset_indices();
 
