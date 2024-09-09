@@ -35,7 +35,9 @@ case "$with_dbcsr" in
       if [ -f dbcsr-${DBCSR_ver}.tar.gz ]; then
         echo "dbcsr-${DBCSR_ver}.tar.gz is found"
       else
-        wget "https://github.com/cp2k/dbcsr/archive/refs/tags/v${DBCSR_ver}.tar.gz" -O "dbcsr-${DBCSR_ver}.tar.gz"
+        download_pkg_from_urlpath "${DBCSR_sha256}" "v${DBCSR_ver}.tar.gz" \
+          https://github.com/cp2k/dbcsr/archive/refs/tags \
+          "dbcsr-${DBCSR_ver}.tar.gz"
       fi
       echo "Installing from scratch into ${pkg_install_dir}"
       [ -d dbcsr-${DBCSR_ver} ] && rm -rf dbcsr-${DBCSR_ver}
@@ -131,6 +133,7 @@ EOF
   cat "${BUILDDIR}/setup_dbcsr" >> $SETUPFILE
 fi
 cat << EOF >> "${BUILDDIR}/setup_dbcsr"
+export DBCSR_VER="${DBCSR_ver}"
 export DBCSR_CFLAGS="${DBCSR_CFLAGS}"
 export DBCSR_LDFLAGS="IF_CUDA(${DBCSR_CUDA_LDFLAGS}|IF_HIP(${DBCSR_HIP_LDFLAGS}|${DBCSR_LDFLAGS}))"
 export DBCSR_LIBS="${DBCSR_LIBS}"
