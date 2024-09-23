@@ -53,7 +53,7 @@ __global__ void compute_Fm_batched_low_gpu(
       double* __restrict__ cell,
       double* __restrict__ neighs,
       double* __restrict__ ftable, int ftable_ld,
-      const double R_cut, const double * const __restrict__ C0, const int ld_C0, int potential_type  );
+      const double R_cut, const double * const __restrict__ C0, const int ld_C0, int potential_type, const int Ng );
 
 
 #endif // COMPUTE_FM_H_COMPILE_GUARD

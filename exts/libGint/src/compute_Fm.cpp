@@ -38,14 +38,14 @@ __device__ void compute_Fm_batched_single( int p,
       const double R_cut, 
       const double * const __restrict__ C0,
       const int ld_C0,
-      int potential_type ){
+      int potential_type, const int Ng ){
 
-   unsigned int i    = OF[p];
-   unsigned int ipzn = PMX[p];
+   unsigned int i    = OF[p / Ng ];
+   unsigned int ipzn = PMX[p / Ng ];
    unsigned int ipa,ipb,ipc,ipd;
-   unsigned int n3;
+   unsigned int n3 = p % Ng ;
 
-   decode_prm( ipzn, &ipa, &ipb, &ipc, &ipd, &n3 );
+   decode4( ipzn, &ipa, &ipb, &ipc, &ipd );
 
    unsigned int idx_A  = FVH[i*FVH_SIZE+FVH_OFFSET_IDX_A];
    unsigned int idx_B  = FVH[i*FVH_SIZE+FVH_OFFSET_IDX_B];
@@ -99,12 +99,10 @@ __device__ void compute_Fm_batched_single( int p,
 //   printf(" shifting A %lf %lf %lf and B %lf %lf %lf by %lf %lf %lf \n", 
 //       Ao[0], Ao[1], Ao[2], Bo[0], Bo[1], Bo[2], ABs[0], ABs[1], ABs[2] );
 
-
-
    int F_size = L + 1;
    if (L > 0 ) { F_size += 4*3+5; }
 
-   int Of = p * F_size;
+   int Of = p * F_size ;
 
    // n1,n2 and n3 are the idx of the pbc cells for AB,CD and PQ \"
    // note that :
@@ -279,9 +277,9 @@ __global__ void compute_Fm_batched_low_gpu(
       double* __restrict__ cell,
       double* __restrict__ neighs,
       double* __restrict__ ftable, int ftable_ld,
-      const double R_cut, const double * const __restrict__ C0, const int ld_C0, int potential_type  ){
-   for( int p = threadIdx.x + blockIdx.x*blockDim.x ; p < NFm ; p += blockDim.x*gridDim.x ){
-      compute_Fm_batched_single( p, FVH, OF,PMX,data,Fm,NFm,L,periodic,cell,neighs,ftable,ftable_ld,R_cut,C0,ld_C0,potential_type );
+      const double R_cut, const double * const __restrict__ C0, const int ld_C0, int potential_type, const int Ng  ){
+   for( int p = threadIdx.x + blockIdx.x*blockDim.x ; p < NFm*Ng ; p += blockDim.x*gridDim.x ){
+      compute_Fm_batched_single( p, FVH, OF,PMX,data,Fm,NFm,L,periodic,cell,neighs,ftable,ftable_ld,R_cut,C0,ld_C0,potential_type,Ng );
    }
 }
 

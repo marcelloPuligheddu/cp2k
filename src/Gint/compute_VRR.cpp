@@ -517,7 +517,7 @@ __global__ void compute_VRR_batched_gpu_low(
       const double* const __restrict__ data,
       double* const __restrict__ AC,
       double* const __restrict__ ABCD,
-      int vrr_blocksize, int hrr_blocksize, int L, int numV, int numVC ){
+      int vrr_blocksize, int hrr_blocksize, int L, int numV, int numVC, const int Ng ){
 
    
 //   assert(num_vrr_teams*vrr_team_size == blockDim.x);
@@ -606,22 +606,20 @@ __global__ void compute_VRR_batched_gpu_low(
 //      }
 
 
-      for ( unsigned i = my_vrr_team; i < n_prm ;  i += num_vrr_teams ){
+      for ( unsigned i = my_vrr_team; i < n_prm * Ng ;  i += num_vrr_teams ){
 
-         unsigned int Of   = ( Ov + i ) * F_size;
-         unsigned int ipzn = PMX[(Ov + i )];
+         unsigned int Of   = ( Ov * Ng + i ) * F_size;
+         unsigned int ipzn = PMX[(Ov + i/Ng )];
          unsigned int ipa,ipb,ipc,ipd;
-         unsigned int n3;
 
-         // VRR does not need to know the cell, since it is already in the PA vectors
-         // we need to know the index of the pgfs to find the K coefficents
-         decode_prm( ipzn, &ipa,&ipb,&ipc,&ipd,&n3 );
+         // We need to know the index of the pgfs to find the K coefficents
+         decode4( ipzn, &ipa,&ipb,&ipc,&ipd );
 
 //         if (blockIdx.x == 0 and threadIdx.x == 0 ){
 //            printf(" VRR %u %u %u %u %u %d FVH: ", ipzn, ipa, ipb, ipc, ipd, n_cc );
 //            for ( int ii = 0 ; ii < FVH_SIZE ; ii++ ){
 //               printf( " %u " , FVH[ii] );
-//            } printf("\n"); ; 
+//            } printf("\n");
 //         }
 
          double* pr_mem = &AC[ (Ov + i) * vrr_blocksize ];

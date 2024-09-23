@@ -127,10 +127,10 @@ module libgint
    end interface
 
    interface
-   subroutine libgint_internal_add_prm( libgint_handle, ipa,ipb,ipc,ipd,n3 ) bind (C,name="libgint_add_prm")
+   subroutine libgint_internal_add_prm( libgint_handle, ipa,ipb,ipc,ipd ) bind (C,name="libgint_add_prm")
       import :: c_ptr, c_int
       implicit none
-      integer(kind=c_int), value :: ipa,ipb,ipc,ipd,n3
+      integer(kind=c_int), value :: ipa,ipb,ipc,ipd
       type (c_ptr), value :: libgint_handle
    end subroutine libgint_internal_add_prm
    end interface
@@ -329,10 +329,10 @@ contains
       call libgint_internal_set_max_n_cell( handle, max_periodic_cells )
    end subroutine libgint_set_max_n_cell
 
-   subroutine libgint_add_prm( handle, ipa, ipb, ipc, ipd, n3 )
+   subroutine libgint_add_prm( handle, ipa, ipb, ipc, ipd )
       type (c_ptr) :: handle
-      integer(kind=c_int), value :: ipa,ipb,ipc,ipd,n3
-      call libgint_internal_add_prm( handle, ipa,ipb,ipc,ipd,n3 )
+      integer(kind=c_int), value :: ipa,ipb,ipc,ipd
+      call libgint_internal_add_prm( handle, ipa,ipb,ipc,ipd )
    end subroutine libgint_add_prm
 
    subroutine libgint_add_shell( handle, i, j, k, l, n1, n2 )

@@ -2468,15 +2468,17 @@ CONTAINS
       logical, intent(out) :: screened
       logical :: cell_was_screened
 
-      integer  :: idx_n1,idx_n2,n1,n2,n3,idx_ij,idx_kl,o_ij,n_ij,o_kl,n_kl
+      integer  :: idx_n1,idx_n2,n1,n2,idx_ij,idx_kl,o_ij,n_ij,o_kl,n_kl !, n3
       integer  :: ipgf,jpgf,kpgf,lpgf,iatom_set,jatom_set,katom_set,latom_set
-      REAL(dp) :: Q(3), P(3), PQo(3), PQm(3), Qs(3), Qp(3), shift(3)
-      real(dp) :: pgf_max_1, pgf_max_2, R1, R2, rpq2
+!      REAL(dp) :: Q(3), P(3), PQo(3), PQm(3), Qs(3), Qp(3), shift(3)
+      real(dp) :: pgf_max_1, pgf_max_2 ! , R1, R2, rpq2
 
       integer :: nelements_ij, nelements_kl
 
       integer :: n1b, n2b
 
+      cell = cell
+      potential_parameter = potential_parameter
 
       screened = .true.
 
@@ -2518,10 +2520,10 @@ CONTAINS
                jpgf = bra%pgf_idx(2, idx_ij)
                n1b  = bra%pgf_idx(3, idx_ij)
                pgf_max_1 = bra%pgf_scr(1, idx_ij)
-               R1   = bra%pgf_scr(2,idx_ij)
-               P(1) = bra%pgf_scr(3,idx_ij)
-               P(2) = bra%pgf_scr(4,idx_ij)
-               P(3) = bra%pgf_scr(5,idx_ij)
+!               R1   = bra%pgf_scr(2,idx_ij)
+!               P(1) = bra%pgf_scr(3,idx_ij)
+!               P(2) = bra%pgf_scr(4,idx_ij)
+!               P(3) = bra%pgf_scr(5,idx_ij)
 
                do idx_kl = o_kl+1, o_kl+n_kl
                   kpgf = ket%pgf_idx(1,idx_kl)
@@ -2531,48 +2533,50 @@ CONTAINS
 
                   IF (pgf_max_1 + pgf_max_2 + log10_pmax < log10_eps_schwarz) CYCLE
 
-                  R2   = ket%pgf_scr(2,idx_kl)
-                  Q(1) = ket%pgf_scr(3,idx_kl)
-                  Q(2) = ket%pgf_scr(4,idx_kl)
-                  Q(3) = ket%pgf_scr(5,idx_kl)
+!                  R2   = ket%pgf_scr(2,idx_kl)
+!                  Q(1) = ket%pgf_scr(3,idx_kl)
+!                  Q(2) = ket%pgf_scr(4,idx_kl)
+!                  Q(3) = ket%pgf_scr(5,idx_kl)
                   ! Overall, the next 4 lines shift Q
                   ! by a lattice vector called shift
                   ! so that when n3.ijk = (000), 
                   ! PQ is at the minimum image
                   ! original value of PQ
-                  PQo = P-Q
+!                  PQo = P-Q
                   ! minimum value of PQ
-                  PQm = my_pbc(PQo,cell)
+!                  PQm = my_pbc(PQo,cell)
                   ! note shift must be a lattice translation vectors
-                  shift = - PQm + PQo
+!                  shift = - PQm + PQo
                   ! shifted Q
-                  Qs = Q + shift
+!                  Qs = Q + shift
                   ! Note: we have already done the same for the AB and CD pair,
                   ! it is done in the build_pair_list subroutine
 
+                  call libGint_add_prm( libGint_handle, ipgf-1,jpgf-1,kpgf-1,lpgf-1 )                
+                  cell_was_screened = .false.
+
                   ! BIG TODO move this loop to GPU
-                  do n3 = 1, SIZE(neighbor_cells)
-
-                     Qp = Qs + neighbor_cells(n3)%cell_r(:)
-                     rpq2 = (P(1) - Qp(1))**2 + (P(2) - Qp(2))**2 + (P(3) - Qp(3))**2
-                     IF ( potential_parameter%potential_type == do_potential_truncated .OR. &
-                          potential_parameter%potential_type == do_potential_short .OR. &
-                          potential_parameter%potential_type == do_potential_mix_cl_trunc) THEN
-                        IF (rpq2 > (R1 + R2 + potential_parameter%cutoff_radius)**2) CYCLE
-!                        write (*,*) " Adding " , ipgf-1,jpgf-1,kpgf-1,lpgf-1, n1-1, n2-1, n3-1, "->", P, Qp
-                        write (*,*)  "Adding", n1-1, n2-1,n3-1, "->", P(1), Qp(1), rpq2
-                     END IF
-
-                     IF (potential_parameter%potential_type == do_potential_TShPSC) THEN
-                        IF (rpq2 > (R1 + R2 + potential_parameter%cutoff_radius*2.0_dp)**2) CYCLE
-                     END IF
-
-                     call libGint_add_prm( libGint_handle, ipgf-1,jpgf-1,kpgf-1,lpgf-1, n3-1 )
-                     cell_was_screened = .false.
-
-                  end do
-               end do
-            end do
+!                  do n3 = 1, SIZE(neighbor_cells)
+!                     Qp = Qs + neighbor_cells(n3)%cell_r(:)
+!                     rpq2 = (P(1) - Qp(1))**2 + (P(2) - Qp(2))**2 + (P(3) - Qp(3))**2
+!                     IF ( potential_parameter%potential_type == do_potential_truncated .OR. &
+!                          potential_parameter%potential_type == do_potential_short .OR. &
+!                          potential_parameter%potential_type == do_potential_mix_cl_trunc) THEN
+!                        IF (rpq2 > (R1 + R2 + potential_parameter%cutoff_radius)**2) CYCLE
+!!                        write (*,*) " Adding " , ipgf-1,jpgf-1,kpgf-1,lpgf-1, n1-1, n2-1, n3-1, "->", P, Qp
+!!                        write (*,*)  "Adding", n1-1, n2-1,n3-1, "->", P(1), Qp(1), rpq2
+!                     END IF
+!
+!                     IF (potential_parameter%potential_type == do_potential_TShPSC) THEN
+!                        IF (rpq2 > (R1 + R2 + potential_parameter%cutoff_radius*2.0_dp)**2) CYCLE
+!                     END IF
+!
+!                     call libGint_add_prm( libGint_handle, ipgf-1,jpgf-1,kpgf-1,lpgf-1 )
+!                     cell_was_screened = .false.
+!
+!                  end do
+               end do ! ket pgf
+            end do ! bra pgf
 
             if ( .not. cell_was_screened ) then
 !               write(*,*) 'Adding ', iatom_set, jatom_set, katom_set, latom_set, n1-1, n2-1, 'shell'
@@ -2581,8 +2585,8 @@ CONTAINS
             end if
             call libGint_add_cell( libGint_handle ) ! ??
 
-         end do
-      end do
+         end do ! ket n2
+      end do ! bra n1
    end subroutine coulomb_4_gpu
 
 

@@ -33,7 +33,7 @@ __global__ void compute_VRR_batched_gpu_low(
       const double* const __restrict__ data,
       double* const __restrict__ AC,
       double* const __restrict__ ABCD,
-      int vrr_blocksize, int hrr_blocksize, int L, int numV, int numVC );
+      int vrr_blocksize, int hrr_blocksize, int L, int numV, int numVC, const int Ng );
 
 
 #endif // COMPUTE_VRR_H_COMPILE_GUARD

@@ -121,11 +121,11 @@ void libGint::set_Atom_L( int i, int l_, int nl_, double* K_ ){
    all_idx_K[i].push_back( ua.add( K_, np[i]*nl_ ) );
 }
 
-void libGint::add_prm( const int ipa, const int ipb, const int ipc, const int ipd, const int n3 ){
+void libGint::add_prm( const int ipa, const int ipb, const int ipc, const int ipd ){
 //   cout << "|" << ipa << ipb << ipc << ipd << '|' << n3 ;
 //   cout.flush();
-   unsigned int piabcdxyz = encode_prm(ipa,ipb,ipc,ipd,n3);
-   prm_tmp_list[ n_prm ] = piabcdxyz;
+   unsigned int piabcd = encode4(ipa,ipb,ipc,ipd);
+   prm_tmp_list[ n_prm ] = piabcd ;
    n_prm++;
 }
 
@@ -196,9 +196,9 @@ void libGint::add_shell ( int i, int j, int k, int l, int n1, int n2 ){
                FVH[L].insert( FVH[L].end(), tmp, tmp+FVH_SIZE );
 
                const int labcd = la+lb+lc+ld;
-               Fm_size[L] += (1+labcd) * n_prm;
+               Fm_size[L] += (1+labcd) * n_prm * max_ncells;
                if ( labcd > 0 ){
-                  Fm_size[L] += (4*3+5) * n_prm;
+                  Fm_size[L] += (4*3+5) * n_prm * max_ncells;
                }
 
                if ( all_moments[L] == false ){
@@ -217,7 +217,7 @@ void libGint::add_shell ( int i, int j, int k, int l, int n1, int n2 ){
                }
 
 //               cout << " AC size " << la<<lb<<lc<<ld << " += " << all_vrr_blocksize[L] << " " << n_prm << endl;
-               AC_size[L] += all_vrr_blocksize[L] * n_prm;
+               AC_size[L] += all_vrr_blocksize[L] * n_prm * max_ncells ;
                ABCD_size[L] += all_hrr_blocksize[L] * N_cc;
 
                offset_G[L] += N_cc;
@@ -749,7 +749,8 @@ void libGint::dispatch( bool skip_cpu ){
 
       compute_Fm_batched_low_gpu<<<Fm_numblocks,Fm_blocksize,0,cuda_stream>>>(
          FVH_dev, OF_dev, PMX_dev, data_dev, Fm_dev, Nprm, labcd,
-         periodic, cell_h_dev, neighs_dev, ftable_dev, ftable_ld,R_cut,C0_dev,ld_C0,potential_type );
+         periodic, cell_h_dev, neighs_dev, ftable_dev, ftable_ld,R_cut,C0_dev,ld_C0,potential_type,max_ncells );
+
       CUDA_GPU_ERR_CHECK( cudaPeekAtLastError() );
       CUDA_GPU_ERR_CHECK( cudaDeviceSynchronize() );
 
@@ -772,7 +773,7 @@ void libGint::dispatch( bool skip_cpu ){
 
       compute_VRR_batched_gpu_low<<<Ncells,32,0,cuda_stream>>>(
          Ncells, plan_dev, PMX_dev, FVH_dev, Fm_dev, data_dev,
-         AC_dev, ABCD_dev, vrr_blocksize, hrr_blocksize, labcd, numV, numVC ); 
+         AC_dev, ABCD_dev, vrr_blocksize, hrr_blocksize, labcd, numV, numVC, max_ncells ); 
 
       CUDA_GPU_ERR_CHECK( cudaPeekAtLastError() );
       CUDA_GPU_ERR_CHECK( cudaDeviceSynchronize() );
