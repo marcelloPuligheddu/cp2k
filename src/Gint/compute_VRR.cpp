@@ -622,7 +622,7 @@ __global__ void compute_VRR_batched_gpu_low(
 //            } printf("\n");
 //         }
 
-         double* pr_mem = &AC[ (Ov + i) * vrr_blocksize ];
+         double* pr_mem = &AC[ (Ov * Ng + i) * vrr_blocksize ];
 
          for( int il=0; il < L+1; il++ ){
             pr_mem[il] = Fm[Of+il];
