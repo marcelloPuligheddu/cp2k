@@ -936,6 +936,8 @@ CONTAINS
          call offload_activate_chosen_device()
 
          call libgint_init(libGint_handle)
+
+         ! Comunicate the chosen potential and its parameters to libGint
          potential_parameter = actual_x_data%potential_parameter
          libGint_select_potential: select case(potential_parameter%potential_type)
             ! coulomb is the default assumed by libGint, so no more info is needed
@@ -949,9 +951,9 @@ CONTAINS
 
          first_call = .false.
 
-!         do iatom=1, size(full_density_alpha, 1)
-!            full_density_alpha(iatom,1) = 1.0_dp / size(full_density_alpha, 1)
-!         end do
+         do iatom=1, size(full_density_alpha, 1)
+            full_density_alpha(iatom,1) = 1.0_dp ! / size(full_density_alpha, 1)
+         end do
 
 !      else
 !         !$omp master
@@ -1952,12 +1954,14 @@ CONTAINS
       write(*,*) " |  max abs dif: ", max_abs_delta_KS
       write(*,*) " ------------------------------------ "
 
-      if ( max_abs_delta_KS > 1.E-12_dp ) then
-         write (*,*) " K from CPU  |  K from GPU  |  Delta " 
+      if ( max_abs_delta_KS > 1.E-10_dp ) then
+         write (*,*) " K from CPU  |  K from GPU  |  Delta | Ratio " 
          do  i=1, size(full_ks_alpha)
             write (*,*) i, full_ks_alpha(i,1) , full_ks_alpha_from_gpu(i,1), &
-                           full_ks_alpha(i,1) - full_ks_alpha_from_gpu(i,1)
+                           full_ks_alpha(i,1) - full_ks_alpha_from_gpu(i,1), &
+                           full_ks_alpha(i,1) / full_ks_alpha_from_gpu(i,1)
          end do
+
       end if
 
 !$omp end single
@@ -2395,6 +2399,43 @@ CONTAINS
       CALL timestop(handle)
    END SUBROUTINE integrate_four_center
 
+   function my_wrap( s ) result( w_s )
+      REAL(KIND=DP) :: s, w_s
+      if ( s >  0.499 .and. s <  0.501 ) then 
+         w_s = s
+      else
+         if ( s < -0.499 .and. s > -0.501 ) then 
+            w_s = - s
+         else
+            w_s = s - anint(s)
+         end if
+      end if
+      
+   end function my_wrap
+
+   FUNCTION my_pbc(r, cell) RESULT(r_pbc)
+
+      REAL(KIND=dp), DIMENSION(3), INTENT(IN)            :: r
+      TYPE(cell_type), POINTER                           :: cell
+      REAL(KIND=dp), DIMENSION(3)                        :: r_pbc
+
+      REAL(KIND=dp), DIMENSION(3)                        :: s
+
+      CPASSERT(ASSOCIATED(cell))
+
+      s(1) = cell%h_inv(1, 1)*r(1) + cell%h_inv(1, 2)*r(2) + cell%h_inv(1, 3)*r(3)
+      s(2) = cell%h_inv(2, 1)*r(1) + cell%h_inv(2, 2)*r(2) + cell%h_inv(2, 3)*r(3)
+      s(3) = cell%h_inv(3, 1)*r(1) + cell%h_inv(3, 2)*r(2) + cell%h_inv(3, 3)*r(3)
+      s(1) = my_wrap(s(1)) !s(1) - cell%perd(1)*ANINT(s(1))
+      s(2) = my_wrap(s(2)) !s(2) - cell%perd(2)*ANINT(s(2))
+      s(3) = my_wrap(s(3)) !s(3) - cell%perd(3)*ANINT(s(3))
+      r_pbc(1) = cell%hmat(1, 1)*s(1) + cell%hmat(1, 2)*s(2) + cell%hmat(1, 3)*s(3)
+      r_pbc(2) = cell%hmat(2, 1)*s(1) + cell%hmat(2, 2)*s(2) + cell%hmat(2, 3)*s(3)
+      r_pbc(3) = cell%hmat(3, 1)*s(1) + cell%hmat(3, 2)*s(2) + cell%hmat(3, 3)*s(3)
+
+   END FUNCTION my_pbc
+
+
 !> \brief Assign two-electron integrals of a quartet/shell to the library
 !>      libGint in the periodic case for later dispatch
 !
@@ -2476,9 +2517,6 @@ CONTAINS
                ipgf = bra%pgf_idx(1, idx_ij)
                jpgf = bra%pgf_idx(2, idx_ij)
                n1b  = bra%pgf_idx(3, idx_ij)
-
-               CPASSERT(n1b == n1)
-
                pgf_max_1 = bra%pgf_scr(1, idx_ij)
                R1   = bra%pgf_scr(2,idx_ij)
                P(1) = bra%pgf_scr(3,idx_ij)
@@ -2489,10 +2527,6 @@ CONTAINS
                   kpgf = ket%pgf_idx(1,idx_kl)
                   lpgf = ket%pgf_idx(2,idx_kl)
                   n2b  = ket%pgf_idx(3,idx_kl)
-
-                  CPASSERT(n1b == n1)
-
-
                   pgf_max_2 = ket%pgf_scr(1,idx_kl)
 
                   IF (pgf_max_1 + pgf_max_2 + log10_pmax < log10_eps_schwarz) CYCLE
@@ -2508,9 +2542,9 @@ CONTAINS
                   ! original value of PQ
                   PQo = P-Q
                   ! minimum value of PQ
-                  PQm = pbc(PQo,cell)
+                  PQm = my_pbc(PQo,cell)
                   ! note shift must be a lattice translation vectors
-                  shift = PQo - PQm
+                  shift = - PQm + PQo
                   ! shifted Q
                   Qs = Q + shift
                   ! Note: we have already done the same for the AB and CD pair,
@@ -2525,7 +2559,10 @@ CONTAINS
                           potential_parameter%potential_type == do_potential_short .OR. &
                           potential_parameter%potential_type == do_potential_mix_cl_trunc) THEN
                         IF (rpq2 > (R1 + R2 + potential_parameter%cutoff_radius)**2) CYCLE
+!                        write (*,*) " Adding " , ipgf-1,jpgf-1,kpgf-1,lpgf-1, n1-1, n2-1, n3-1, "->", P, Qp
+                        write (*,*)  "Adding", n1-1, n2-1,n3-1, "->", P(1), Qp(1), rpq2
                      END IF
+
                      IF (potential_parameter%potential_type == do_potential_TShPSC) THEN
                         IF (rpq2 > (R1 + R2 + potential_parameter%cutoff_radius*2.0_dp)**2) CYCLE
                      END IF

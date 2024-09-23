@@ -114,35 +114,45 @@ __device__ void compute_Fm_batched_single( int p,
    // D starts from the min.image of the CD pair and it is then moved by n2, PQ_shift and n3
    double A[3], B[3], C[3], D[3];
    double ABs[3], CDs[3], PQs[3];
-   double P[3], Q[3], W[3];
+   double P[3], Q[3], W[3], shift[3];
+
    compute_pbc( Ao, Bo, cell, ABs );
-   compute_pbc( Co, Do, cell, CDs );
    A[0] = Ao[0];
    A[1] = Ao[1];
    A[2] = Ao[2];
    B[0] = Ao[0] + ABs[0] + neighs[n1*3+0];
    B[1] = Ao[1] + ABs[1] + neighs[n1*3+1];
    B[2] = Ao[2] + ABs[2] + neighs[n1*3+2];
+   compute_weighted_distance( P, A,B,za,zb,zab );
+
+   compute_pbc( Co, Do, cell, CDs );  
    C[0] = Co[0];
    C[1] = Co[1];
    C[2] = Co[2];
    D[0] = Co[0] + CDs[0] + neighs[n2*3+0];
    D[1] = Co[1] + CDs[1] + neighs[n2*3+1];
    D[2] = Co[2] + CDs[2] + neighs[n2*3+2];
-   compute_weighted_distance( P, A,B,za,zb,zab );
    compute_weighted_distance( Q, C,D,zc,zd,zcd );
-   compute_pbc_shift( Q, P, cell, PQs );
 
-   C[0] = Co[0]                           + PQs[0] + neighs[n3*3+0];
-   C[1] = Co[1]                           + PQs[1] + neighs[n3*3+1];
-   C[2] = Co[2]                           + PQs[2] + neighs[n3*3+2];
-   D[0] = Co[0] + CDs[0] + neighs[n2*3+0] + PQs[0] + neighs[n3*3+0];
-   D[1] = Co[1] + CDs[1] + neighs[n2*3+1] + PQs[1] + neighs[n3*3+1];
-   D[2] = Co[2] + CDs[2] + neighs[n2*3+2] + PQs[2] + neighs[n3*3+2];
+   compute_pbc( Q, P, cell, PQs );
+   shift[0] = P[0] - Q[0] - PQs[0]; 
+   shift[1] = P[1] - Q[1] - PQs[1]; 
+   shift[2] = P[2] - Q[2] - PQs[2];
+   double rho = zab*zcd*inv_z;
+   double Kab;
+   Kab = compute_K(za,zb,A,B);
 
-//   if ( n1 + n2 + n3 == 0 ){
-//      printf("FM PBC 0 0 0 : A %lf B %lf C %lf D %lf -> %lf %lf %lf %lf ", Ao[0], Bo[0], Co[0], Do[0], A[0], B[0], C[0], D[0] );
-//   }
+//   double Zn = 1./sqrt(z)/16./M_PI/M_PI; // libcint norm
+   double Zn = 1./sqrt(z); // cp2k uses the correct norm so we can use OS86 eq 44
+
+   // END OF SHARED INFO BEFORE N3
+
+   C[0] = Co[0]                           + shift[0] + neighs[n3*3+0];
+   C[1] = Co[1]                           + shift[1] + neighs[n3*3+1];
+   C[2] = Co[2]                           + shift[2] + neighs[n3*3+2];
+   D[0] = Co[0] + CDs[0] + neighs[n2*3+0] + shift[0] + neighs[n3*3+0];
+   D[1] = Co[1] + CDs[1] + neighs[n2*3+1] + shift[1] + neighs[n3*3+1];
+   D[2] = Co[2] + CDs[2] + neighs[n2*3+2] + shift[2] + neighs[n3*3+2];
 
 //   Q[0] = Q [0] + PQs[0] + neighs[n3*3+0];
 //   Q[1] = Q [1] + PQs[1] + neighs[n3*3+1];
@@ -151,14 +161,23 @@ __device__ void compute_Fm_batched_single( int p,
    compute_weighted_distance( Q, C,D,zc,zd,zcd );
    compute_weighted_distance( W, P,Q,zab,zcd,z );
    
-   double rho = zab*zcd*inv_z;
+
    double PQ[3] = { P[0]-Q[0], P[1]-Q[1], P[2]-Q[2] };
    double T = rho * (PQ[0]*PQ[0] + PQ[1]*PQ[1] + PQ[2]*PQ[2]);
-   double Kab,Kcd;
-   Kab = compute_K(za,zb,A,B);
+   double Kcd;
    Kcd = compute_K(zc,zd,C,D);
-//   double Zn = 1./sqrt(z)/16./M_PI/M_PI; // libcint norm
-   double Zn = 1./sqrt(z); // cp2k uses the correct norm so we can use OS86 eq 44
+
+//   double AB[3] = { A[0]-B[0], A[1]-B[1], A[2]-B[2] };
+//   double rab2 = (AB[0]*AB[0] + AB[1]*AB[1] + AB[2]*AB[2]);
+
+//   double CD[3] = { C[0]-D[0], C[1]-D[1], C[2]-D[2] };
+//   double rcd2 = (CD[0]*CD[0] + CD[1]*CD[1] + CD[2]*CD[2]);
+
+   double rpq2 = (PQ[0]*PQ[0] + PQ[1]*PQ[1] + PQ[2]*PQ[2]);
+   printf("PBC %lf %lf %lf %lf | %d %d %d -> %lf %lf %lf %lf -> | %lg %lg %lg | %lg %lg | %lg | \n", Ao[0],Bo[0],Co[0],Do[0], n1,n2,n3, A[0],B[0],C[0],D[0], ABs[0],CDs[0],shift[0], P[0],Q[0], rpq2 );
+//   printf("Y FM PBC A %lf B %lf C %lf D %lf n1 %d n2 %d n3 %d -> %lf %lf %lf %lf -> %lg %lg \n", Ao[1], Bo[1], Co[1], Do[1], n1,n2,n3, A[1], B[1], C[1], D[1], P[1], Q[1] );
+//   printf("Z FM PBC A %lf B %lf C %lf D %lf n1 %d n2 %d n3 %d -> %lf %lf %lf %lf -> %lg %lg \n", Ao[2], Bo[2], Co[2], Do[2], n1,n2,n3, A[2], B[2], C[2], D[2], P[2], Q[2] );
+
    double Kfactor = Zn * Kab * Kcd;
 
 //   printf(" shifting A %lf %lf %lf and B %lf %lf %lf by %lf %lf %lf \n", 
@@ -195,8 +214,6 @@ __device__ void compute_Fm_batched_single( int p,
 
    // Don't forget to scale by Zn, Ka and Kb
    for( unsigned int m=0; m < L+1; m++ ){ Fm[Of+m] *= Kfactor; }
-
-
 
    if ( L > 0 ){
       double inv_2zab = inv_zab * 0.5;
