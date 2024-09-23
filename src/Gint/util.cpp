@@ -106,6 +106,26 @@ int max( std::vector<int> x ){
    return ret;
 }
 
+
+__device__ __host__ double anint( double x ){
+
+   if ( x == 0.5 ) { return 1.0; }
+   if ( x == -0.5 ){ return -1.0;}
+   return round(x);
+
+}
+
+__device__ __host__ double my_round( double x ){
+   return x - floor(x) == 0.5 ? trunc(x) : round(x);
+}
+
+
+__device__ __host__ double my_wrap( double s ){
+   if ( s >  0.499 and s < 0.501 ){ return  s; }
+   if ( s < -0.499 and s >-0.501 ){ return -s; }
+   return s - round(s);
+}
+
 __device__ __host__ void compute_pbc( const double A[3], const double B[3], const double * cell, double * AB ){
    // modifies AB = B - A + R such that:
    // AB is inside cell
@@ -119,9 +139,18 @@ __device__ __host__ void compute_pbc( const double A[3], const double B[3], cons
    double s0 = h_inv[0*3+0] * AB[0] + h_inv[1*3+0] * AB[1] + h_inv[2*3+0] * AB[2] ;
    double s1 = h_inv[0*3+1] * AB[0] + h_inv[1*3+1] * AB[1] + h_inv[2*3+1] * AB[2] ;
    double s2 = h_inv[0*3+2] * AB[0] + h_inv[1*3+2] * AB[1] + h_inv[2*3+2] * AB[2] ;
-   s0 = s0 - rint( s0 );
-   s1 = s1 - rint( s1 );
-   s2 = s2 - rint( s2 );
+
+//   double old_s0 = s0;
+//   s0 = s0 - round( old_s0 );
+//   printf("wrapped %lg (%lg|%lg) to %lg \n", old_s0, old_s0 - 0.5, old_s0+0.5, s0 );
+
+//   printf("wrapping %lg(%lg,%lg) %lg(%lg,%lg) %lg(%lg,%lg) to %lg %lg %lg \n", s0,s0-0.5,s0+0.5, s1,s1-0.5,s1+0.5, s2,s2-0.5,s2+0.5, my_wrap(s0),my_wrap(s1),my_wrap(s2) );
+
+
+   s0 = my_wrap(s0); // s0 - my_round( s0 );
+   s1 = my_wrap(s1); // s1 = s1 - my_round( s1 );
+   s2 = my_wrap(s2); // s2 = s2 - my_round( s2 );
+
    // note it is a 3x3 by 3 matrix vector product
    AB[0] = h_mat[0*3+0] * s0 + h_mat[1*3+0] * s1 + h_mat[2*3+0] * s2;
    AB[1] = h_mat[0*3+1] * s0 + h_mat[1*3+1] * s1 + h_mat[2*3+1] * s2;
@@ -141,13 +170,18 @@ __device__ __host__ void compute_pbc_shift( const double A[3], const double B[3]
    double s0 = h_inv[0*3+0] * AB[0] + h_inv[1*3+0] * AB[1] + h_inv[2*3+0] * AB[2] ;
    double s1 = h_inv[0*3+1] * AB[0] + h_inv[1*3+1] * AB[1] + h_inv[2*3+1] * AB[2] ;
    double s2 = h_inv[0*3+2] * AB[0] + h_inv[1*3+2] * AB[1] + h_inv[2*3+2] * AB[2] ;
-   s0 = rint( s0 );
-   s1 = rint( s1 );
-   s2 = rint( s2 );
+//   s0 = rint( s0 );
+//   s1 = rint( s1 );
+//   s2 = rint( s2 );
+   s0 = nearbyint( s0 );
+   s1 = nearbyint( s1 );
+   s2 = nearbyint( s2 );
+
    // note it is a 3x3 by 3 matrix vector product
    shift[0] = h_mat[0*3+0] * s0 + h_mat[1*3+0] * s1 + h_mat[2*3+0] * s2;
    shift[1] = h_mat[0*3+1] * s0 + h_mat[1*3+1] * s1 + h_mat[2*3+1] * s2;
    shift[2] = h_mat[0*3+2] * s0 + h_mat[1*3+2] * s1 + h_mat[2*3+2] * s2;
+   printf( "PBC SHIFT OF %lg %lg is %lg \n", A[0], B[0], shift[0] );
 }
 
 

@@ -295,6 +295,7 @@ contains
       type (c_ptr) :: handle
       integer(kind=c_int) :: nneighs
       real(kind=8), dimension(:,:), target :: neighs
+      write (*,*) " Setting neigh as " , neighs
       call libgint_internal_set_neighs( handle, c_loc(neighs), nneighs )
    end subroutine libgint_set_neighs
 

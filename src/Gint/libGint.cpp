@@ -50,6 +50,7 @@ void libGint::init(){
    Timer timer;
    timer.start();
 
+   // TODO Better
    for( int la=0; la <= 1; la++ ){
    for( int lb=0; lb <= 1; lb++ ){
    for( int lc=0; lc <= 1; lc++ ){
@@ -70,7 +71,8 @@ void libGint::init(){
    timer.stop();
 //#pragma omp critical
 //   { cout << "Cuda create stream from omp: " << omp_get_thread_num() << " on dev " << dev << " is " << cuda_stream << " @ " << &cuda_stream << " \n" ; cout.flush(); }
-   POP_RANGE;
+
+   POP_RANGE; // libGint init
 }
 
 void libGint::set_Potential_Truncated( double R_cut_, double * C0_, int ld_C0_, int C0_size_ ){
@@ -359,7 +361,7 @@ void libGint::compute_max_vector_size(){
 //   out_size = 0;
 
    for ( unsigned int L : encoded_moments ){
-
+       // not really worth going throut it every set ...
 //      int la,lb,lc,ld;
 //      decodeL(L,&la,&lb,&lc,&ld);
 //      std::vector<int> * plan = NULL ;
@@ -388,7 +390,7 @@ size_t libGint::memory_needed( ){
    size_t tmp = (max_plan_size + max_OF_size + max_PMX_size + max_FVH_size + max_KS_size);
    size_t add1 = tmp * sizeof(unsigned int);
    size_t add2 = (max_integral_scratch_size) * sizeof(double);
-   size_t add3 = 2 * FP_size * sizeof(double);
+   size_t add3 = 2 * nspin * FP_size * sizeof(double);
    return add1+add2+add3;
 }
 
@@ -440,11 +442,14 @@ void libGint::set_P( double * P_a_, double * P_b_, int P_size ){
 
 #pragma omp single copyprivate(P_a_dev) // nowait
    {
+   // if this is the first call, P_a_dev is zero and no operation is performed.
+   CUDA_GPU_ERR_CHECK( cudaFree(P_a_dev));
    CUDA_GPU_ERR_CHECK( cudaMalloc( (void**)&P_a_dev, sizeof(double)*FP_size ));
    CUDA_GPU_ERR_CHECK( cudaMemcpy( P_a_dev, P_a_, sizeof(double)*FP_size, cudaMemcpyHostToDevice ));
    }
 #pragma omp single copyprivate(P_b_dev)
    {
+   CUDA_GPU_ERR_CHECK( cudaFree(P_b_dev));     
    CUDA_GPU_ERR_CHECK( cudaMalloc( (void**)&P_b_dev, sizeof(double)*FP_size ));
    CUDA_GPU_ERR_CHECK( cudaMemcpy( P_b_dev, P_b_, sizeof(double)*FP_size, cudaMemcpyHostToDevice ));
    }
@@ -461,7 +466,8 @@ void libGint::set_K( double * K_ , int K_size ){
    // if this is the first call, K_a_dev is zero and no operation is performed.
    CUDA_GPU_ERR_CHECK( cudaFree(K_a_dev));
    CUDA_GPU_ERR_CHECK( cudaMalloc( (void**)&K_a_dev, sizeof(double)*FP_size ));
-   CUDA_GPU_ERR_CHECK( cudaMemcpy( K_a_dev, K_, sizeof(double)*FP_size, cudaMemcpyHostToDevice ));
+//   CUDA_GPU_ERR_CHECK( cudaMemcpy( K_a_dev, K_, sizeof(double)*FP_size, cudaMemcpyHostToDevice ));
+   CUDA_GPU_ERR_CHECK( cudaMemset( K_a_dev, 0, sizeof(double)*FP_size ));
 //   cout <<" thr " << omp_get_thread_num() << ": setting K from " << K_ << " to " << K_a_dev << " x " << FP_size << endl;
    }
 
@@ -481,39 +487,40 @@ void libGint::set_K( double * K_a_, double * K_b_, int K_size ){
    FP_size = K_size;
 #pragma omp single copyprivate(K_a_dev) // nowait
    {
+   // if this is the first call, K_a_dev is zero and no operation is performed.
+   CUDA_GPU_ERR_CHECK( cudaFree(K_a_dev));
    CUDA_GPU_ERR_CHECK( cudaMalloc( (void**)&K_a_dev, sizeof(double)*FP_size ));
-   CUDA_GPU_ERR_CHECK( cudaMemcpy( K_a_dev, K_a_, sizeof(double)*FP_size, cudaMemcpyHostToDevice ));
+//   CUDA_GPU_ERR_CHECK( cudaMemcpy( K_a_dev, K_a_, sizeof(double)*FP_size, cudaMemcpyHostToDevice ));
+   CUDA_GPU_ERR_CHECK( cudaMemset( K_a_dev, 0, sizeof(double)*FP_size ));
    }
 #pragma omp single copyprivate(K_b_dev)
    {
+   CUDA_GPU_ERR_CHECK( cudaFree(K_b_dev));
    CUDA_GPU_ERR_CHECK( cudaMalloc( (void**)&K_b_dev, sizeof(double)*FP_size ));
-   CUDA_GPU_ERR_CHECK( cudaMemcpy( K_b_dev, K_b_, sizeof(double)*FP_size, cudaMemcpyHostToDevice ));
+//   CUDA_GPU_ERR_CHECK( cudaMemcpy( K_b_dev, K_b_, sizeof(double)*FP_size, cudaMemcpyHostToDevice ));
+   CUDA_GPU_ERR_CHECK( cudaMemset( K_b_dev, 0, sizeof(double)*FP_size ));
    }
 }
 void libGint::set_K( std::vector<double> & K_a_ , std::vector<double> & K_b_ ){ set_K( K_a_.data(), K_b_.data(), K_a_.size()); }
 
 void libGint::get_K( double * K_ ){
    assert( nspin == 1 );
-
-   dispatch(true);
-
 // make sure every thread is done with its calculations
+   dispatch(true);
 #pragma omp barrier
-   
+
+
 #pragma omp single
    CUDA_GPU_ERR_CHECK( cudaMemcpy( K_, K_a_dev, sizeof(double)*FP_size, cudaMemcpyDeviceToHost ));
-
 //#pragma omp critical
 //   cout << " Getting K from " << K_a_dev << " to " << K_ << " x " << FP_size << endl;
-
 }
 void libGint::get_K( std::vector<double> & K_a_ ){ get_K( K_a_.data()); }
 
 void libGint::get_K( double * K_a_,  double * K_b_ ){
    assert( nspin == 2 );
-
-   dispatch(true);
 // make sure every thread is done with its calculations
+   dispatch(true);
 #pragma omp barrier
  
 #pragma omp single nowait
@@ -524,6 +531,7 @@ void libGint::get_K( double * K_a_,  double * K_b_ ){
 void libGint::get_K( std::vector<double> & K_a_,  std::vector<double> & K_b_ ){ get_K( K_a_.data(), K_b_.data()); }
 
 void libGint::reset_indices(){
+
    max_integral_scratch_size = 0;
    max_plan_size = 0;
    max_OF_size = 0;
@@ -742,15 +750,15 @@ void libGint::dispatch( bool skip_cpu ){
       compute_Fm_batched_low_gpu<<<Fm_numblocks,Fm_blocksize,0,cuda_stream>>>(
          FVH_dev, OF_dev, PMX_dev, data_dev, Fm_dev, Nprm, labcd,
          periodic, cell_h_dev, neighs_dev, ftable_dev, ftable_ld,R_cut,C0_dev,ld_C0,potential_type );
-//      CUDA_GPU_ERR_CHECK( cudaPeekAtLastError() );
-//      CUDA_GPU_ERR_CHECK( cudaDeviceSynchronize() );
+      CUDA_GPU_ERR_CHECK( cudaPeekAtLastError() );
+      CUDA_GPU_ERR_CHECK( cudaDeviceSynchronize() );
 
-//      std::vector<double> FM_on_cpu(Fm_size[L]);
-//      CUDA_GPU_ERR_CHECK( cudaMemcpy( FM_on_cpu.data(),  Fm_dev, sizeof(double)*(Fm_size[L]), cudaMemcpyDeviceToHost) );
-//      cout << " FM " << endl;
-//      for( int ifm=0; ifm < Fm_size[L]; ifm++ ){
-//         cout << ifm << " " << std::setprecision(16) << FM_on_cpu[ifm] << endl;
-//      } cout << endl;
+      std::vector<double> FM_on_cpu(Fm_size[L]);
+      CUDA_GPU_ERR_CHECK( cudaMemcpy( FM_on_cpu.data(),  Fm_dev, sizeof(double)*(Fm_size[L]), cudaMemcpyDeviceToHost) );
+      cout << " FM " << endl;
+      for( int ifm=0; ifm < Fm_size[L]; ifm++ ){
+         cout << ifm << " " << std::setprecision(16) << FM_on_cpu[ifm] << endl;
+      } cout << endl;
 
 //      std::vector<unsigned int> FVH_on_cpu(FVH[L].size());
 //      CUDA_GPU_ERR_CHECK( cudaMemcpy( FVH_on_cpu.data(),  FVH_dev, sizeof(unsigned int )*(FVH[L].size()), cudaMemcpyDeviceToHost) );
@@ -765,22 +773,23 @@ void libGint::dispatch( bool skip_cpu ){
       compute_VRR_batched_gpu_low<<<Ncells,32,0,cuda_stream>>>(
          Ncells, plan_dev, PMX_dev, FVH_dev, Fm_dev, data_dev,
          AC_dev, ABCD_dev, vrr_blocksize, hrr_blocksize, labcd, numV, numVC ); 
-//      CUDA_GPU_ERR_CHECK( cudaPeekAtLastError() );
-//      CUDA_GPU_ERR_CHECK( cudaDeviceSynchronize() );
 
-//      std::vector<double> AC_on_cpu(AC_size[L]);
-//      CUDA_GPU_ERR_CHECK( cudaMemcpy( AC_on_cpu.data(),  AC_dev, sizeof(double)*(AC_size[L]), cudaMemcpyDeviceToHost) );
-//      cout << " AC " << AC_size[L] << endl;
-//      for( int ifm=0; ifm < AC_size[L]; ifm++ ){
-//         cout << ifm << " " << std::setprecision(16) << AC_on_cpu[ifm] << endl;
-//      } cout << endl;
+      CUDA_GPU_ERR_CHECK( cudaPeekAtLastError() );
+      CUDA_GPU_ERR_CHECK( cudaDeviceSynchronize() );
 
-//      std::vector<double> ABCD_on_cpu(ABCD_size[L]);
-//      CUDA_GPU_ERR_CHECK( cudaMemcpy( ABCD_on_cpu.data(),  ABCD_dev, sizeof(double)*(ABCD_size[L]), cudaMemcpyDeviceToHost) );
-//      cout << " ABCD " << ABCD_size[L] << endl;
-//      for( int ifm=0; ifm < ABCD_size[L]; ifm++ ){
-//         cout << ifm << " " << std::setprecision(16) << ABCD_on_cpu[ifm] << endl;
-//      } cout << endl;
+      std::vector<double> AC_on_cpu(AC_size[L]);
+      CUDA_GPU_ERR_CHECK( cudaMemcpy( AC_on_cpu.data(),  AC_dev, sizeof(double)*(AC_size[L]), cudaMemcpyDeviceToHost) );
+      cout << " AC " << AC_size[L] << endl;
+      for( int ifm=0; ifm < AC_size[L]; ifm++ ){
+         cout << ifm << " " << std::setprecision(16) << AC_on_cpu[ifm] << endl;
+      } cout << endl;
+
+      std::vector<double> ABCD_on_cpu(ABCD_size[L]);
+      CUDA_GPU_ERR_CHECK( cudaMemcpy( ABCD_on_cpu.data(),  ABCD_dev, sizeof(double)*(ABCD_size[L]), cudaMemcpyDeviceToHost) );
+      cout << " ABCD " << ABCD_size[L] << endl;
+      for( int ifm=0; ifm < ABCD_size[L]; ifm++ ){
+         cout << ifm << " " << std::setprecision(16) << ABCD_on_cpu[ifm] << endl;
+      } cout << endl;
 
 //      std::vector<unsigned int> FVH2_on_cpu(FVH[L].size());
 //      CUDA_GPU_ERR_CHECK( cudaMemcpy( FVH2_on_cpu.data(),  FVH_dev, sizeof(unsigned int )*(FVH[L].size()), cudaMemcpyDeviceToHost) );
@@ -801,12 +810,12 @@ void libGint::dispatch( bool skip_cpu ){
          periodic, cell_h_dev, neighs_dev,
          hrr_blocksize, Nc, numVC, numVCH );
 
-//      std::vector<double> ABCD0_on_cpu(ABCD0_size[L]);
-//      CUDA_GPU_ERR_CHECK( cudaMemcpy( ABCD0_on_cpu.data(),  ABCD0_dev, sizeof(double)*(ABCD0_size[L]), cudaMemcpyDeviceToHost) );
-//      cout << " ABCD0 " << endl;
-//      for( int ifm=0; ifm < ABCD0_size[L]; ifm++ ){
-//         cout << ifm << " " << std::setprecision(16) << ABCD0_on_cpu[ifm] << endl;
-//      } cout << endl;
+      std::vector<double> ABCD0_on_cpu(ABCD0_size[L]);
+      CUDA_GPU_ERR_CHECK( cudaMemcpy( ABCD0_on_cpu.data(),  ABCD0_dev, sizeof(double)*(ABCD0_size[L]), cudaMemcpyDeviceToHost) );
+      cout << " ABCD0 " << endl;
+      for( int ifm=0; ifm < ABCD0_size[L]; ifm++ ){
+         cout << ifm << " " << std::setprecision(16) << ABCD0_on_cpu[ifm] << endl;
+      } cout << endl;
 
 
       // Note: we need to DeviceSynchronize before going from kernels to cublas. TODO actually check it is true
