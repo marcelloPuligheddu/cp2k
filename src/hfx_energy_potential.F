@@ -272,6 +272,7 @@ CONTAINS
       integer :: iatom_set, jatom_set, katom_set, latom_set, shared_dev
       real(dp), dimension(:,:), allocatable :: cell_r
       type(c_ptr), save :: libGint_handle
+      logical :: use_libint, use_libgint
 !$OMP threadprivate( libGint_handle )
 
 
@@ -407,7 +408,7 @@ CONTAINS
 !$OMP                                  shm_atomic_pair_list,&
 !$OMP                                  shm_mem_compression_counter,&
 !$OMP                                  C0, shared_dev, &
-!$OMP                                  do_print_load_balance_info) &
+!$OMP                                  do_print_load_balance_info,use_libgint,use_libint) &
 !$OMP PRIVATE(ln_10,i_thread,actual_x_data,do_periodic,screening_parameter,potential_parameter,&
 !$OMP         general_parameter,load_balance_parameter,memory_parameter,cache_size,bits_max_val,&
 !$OMP         basis_parameter,basis_info,treat_lsd_in_core,ncpu,n_processes,neris_total,neris_incore,&
@@ -915,109 +916,129 @@ CONTAINS
 !$OMP END MASTER
 !$OMP BARRIER
 
-      !!!
-      ! Set up the gpu enviroment
-      if (first_call) then
+!$OMP MASTER
+      if (para_env%is_source()) then 
+         write(*,*) "OFFLOAD TYPE " , general_parameter%offload
+      end if
+!$OMP END MASTER
 
-!         !$omp critical
-!         write(*,*) " FIRST CALL ", para_env%mepos , omp_get_thread_num(), offload_get_chosen_device()
-!         !$omp end critical
-
-         ! APPARENTELY only the master thread has received a call to offload_set_chosen_device
-         ! BUT we need all omp threads with th same mpi process to be on the same physical device.
-         ! so they can share GPU memory for the density matrix P (full_density_alpha and full_density_beta)
-         !         and the Kohm-Sham matrix (full_ks_alpha and full_ks_beta)
-         !$omp master
-         shared_dev = offload_get_chosen_device()
-         !$omp end master
-         !$omp barrier
-
-         call offload_set_chosen_device( shared_dev )
-         call offload_activate_chosen_device()
-
-         call libgint_init(libGint_handle)
-
-         ! Comunicate the chosen potential and its parameters to libGint
-         potential_parameter = actual_x_data%potential_parameter
-         libGint_select_potential: select case(potential_parameter%potential_type)
-            ! coulomb is the default assumed by libGint, so no more info is needed
-            case (do_potential_coulomb)
-               exit libGint_select_potential
-            case (do_potential_truncated) 
-               call libgint_set_Potential_Truncated( libGint_handle, potential_parameter%cutoff_radius, C0(:,:) )
-            case default
-               CPASSERT(.false.) ! not (yet) implemented
-         end select libGint_select_potential
-
-         first_call = .false.
-
-         do iatom=1, size(full_density_alpha, 1)
-            full_density_alpha(iatom,1) = 1.0_dp ! / size(full_density_alpha, 1)
-         end do
-
-!      else
-!         !$omp master
-!         write(*,*) " NOT FIRST CALL "
-!         !$omp end master
-
+      if (general_parameter%offload == 0) then
+         use_libint = .true.
+         use_libGint = .false.
+      end if
+      if (general_parameter%offload == 1) then
+         use_libint = .false.
+         use_libGint = .true.
+      end if
+      if (general_parameter%offload == 2) then
+         use_libint = .true.
+         use_libGint = .true.
       end if
 
-      do_pbc = do_periodic
-      ! TODO is it possible for nneighbors to change when the cell is resized ?
-      call allocate_bra( bra, max_pgf, nneighbors )
-      call allocate_bra( ket, max_pgf, nneighbors )
+      !!!
+      ! Set up the gpu enviroment
+      if (use_libGint ) then
+         if( first_call) then
 
-      allocate(cell_r(3,nneighbors))
-      do i=1, nneighbors
-         cell_r(:,i) = actual_x_data%neighbor_cells(i)%cell_r(:)
-      end do
+!           !$omp critical
+!              write(*,*) " FIRST CALL ", para_env%mepos , omp_get_thread_num(), offload_get_chosen_device()
+!           !$omp end critical
 
-      call libgint_set_cell( libGint_handle, do_pbc, cell%hmat, cell%h_inv)
-      call libgint_set_neighs( libGint_handle, cell_r, nneighbors) 
+            ! APPARENTELY only the master thread has received a call to offload_set_chosen_device
+            ! BUT we need all omp threads with th same mpi process to be on the same physical device.
+            ! so they can share GPU memory for the density matrix P (full_density_alpha and full_density_beta)
+            !         and the Kohm-Sham matrix (full_ks_alpha and full_ks_beta)
+            !$omp master
+            shared_dev = offload_get_chosen_device()
+            !$omp end master
+            !$omp barrier
 
-!      write(*,*) 'libgint cell is ', cell%hmat, cell%h_inv
-!      write(*,*) 'libgint neig are', nneighbors, '|', cell_r
+            call offload_set_chosen_device( shared_dev )
+            call offload_activate_chosen_device()
 
-!      write (*,*) " Call to set P K "
-      call libgint_set_P( libGint_handle, full_density_alpha(:, 1) )
-      call libgint_set_K( libGint_handle, full_ks_alpha(:, 1), fac )
+            call libgint_init(libGint_handle)
 
-      jset = 1
-      allocate(first_set_of_atom(natom) )
-      do iatom = 1, natom
-         ikind = kind_of(iatom)
-         ra = particle_set(iatom)%r(:)
-         nseta = basis_parameter(ikind)%nset
-         npgfa => basis_parameter(ikind)%npgf
-         la_min => basis_parameter(ikind)%lmin
-         la_max => basis_parameter(ikind)%lmax
-         zeta => basis_parameter(ikind)%zet
-         nsgfa => basis_parameter(ikind)%nsgf
-         nsgfl_a => basis_parameter(ikind)%nsgfl
-         gcc => basis_parameter(ikind)%gcc
-         first_set_of_atom(iatom) = jset
-         do iset = 1, nseta
-!            ncoset(la_max(iset))
-!            nsgfa(iset)
-            call libgint_set_Atom( libGint_handle, jset-1 , ra, zeta(:,iset), npgfa(iset) )
-            inla = 1
-            do l = la_min( iset ) , la_max(iset)
-               nla = nsgfl_a(l,iset)
+            ! Comunicate the chosen potential and its parameters to libGint
+            potential_parameter = actual_x_data%potential_parameter
+            libGint_select_potential: select case(potential_parameter%potential_type)
+               ! coulomb is the default assumed by libGint, so no more info is needed
+               case (do_potential_coulomb)
+                  exit libGint_select_potential
+               case (do_potential_truncated) 
+                  call libgint_set_Potential_Truncated( libGint_handle, potential_parameter%cutoff_radius, C0(:,:) )
+               case default
+                  CPASSERT(.false.) ! not (yet) implemented
+            end select libGint_select_potential
 
-!               write (*,*) " CP2K setting atom set L ", jset ,l, nla,  gcc(1:npgfa(iset),inla:inla+nla-1,iset)
-!               write (*,*) "    note sphi is : " ,  basis_parameter(ikind)%sphi_ext(:, :, :, :)
-               call libgint_set_Atom_L( libGint_handle, jset-1, l, nla, gcc(1:npgfa(iset),inla:inla+nla-1,iset) )
+            first_call = .false.
 
-               inla = inla + nla
-            end do
-            jset = jset + 1
+!            do iatom=1, size(full_density_alpha, 1)
+!               full_density_alpha(iatom,1) = 1.0_dp ! / size(full_density_alpha, 1)
+!            end do
+
+!        else
+!            !$omp master
+!            write(*,*) " NOT FIRST CALL "
+!            !$omp end master
+
+         end if
+
+         do_pbc = do_periodic
+         ! TODO is it possible for nneighbors to change when the cell is resized ?
+         call allocate_bra( bra, max_pgf, nneighbors )
+         call allocate_bra( ket, max_pgf, nneighbors )
+
+         allocate(cell_r(3,nneighbors))
+         do i=1, nneighbors
+            cell_r(:,i) = actual_x_data%neighbor_cells(i)%cell_r(:)
+         end do
+
+         call libgint_set_cell( libGint_handle, do_pbc, cell%hmat, cell%h_inv)
+         call libgint_set_neighs( libGint_handle, cell_r, nneighbors) 
+
+   !      write(*,*) 'libgint cell is ', cell%hmat, cell%h_inv
+   !      write(*,*) 'libgint neig are', nneighbors, '|', cell_r
+
+   !      write (*,*) " Call to set P K "
+         call libgint_set_P( libGint_handle, full_density_alpha(:, 1) )
+         call libgint_set_K( libGint_handle, full_ks_alpha(:, 1), fac )
+
+         jset = 1
+         allocate(first_set_of_atom(natom) )
+         do iatom = 1, natom
+            ikind = kind_of(iatom)
+            ra = particle_set(iatom)%r(:)
+            nseta = basis_parameter(ikind)%nset
+            npgfa => basis_parameter(ikind)%npgf
+            la_min => basis_parameter(ikind)%lmin
+            la_max => basis_parameter(ikind)%lmax
+            zeta => basis_parameter(ikind)%zet
+            nsgfa => basis_parameter(ikind)%nsgf
+            nsgfl_a => basis_parameter(ikind)%nsgfl
+            gcc => basis_parameter(ikind)%gcc
+            first_set_of_atom(iatom) = jset
+            do iset = 1, nseta
+   !            ncoset(la_max(iset))
+   !            nsgfa(iset)
+               call libgint_set_Atom( libGint_handle, jset-1 , ra, zeta(:,iset), npgfa(iset) )
+               inla = 1
+               do l = la_min( iset ) , la_max(iset)
+                  nla = nsgfl_a(l,iset)
+
+   !               write (*,*) " CP2K setting atom set L ", jset ,l, nla,  gcc(1:npgfa(iset),inla:inla+nla-1,iset)
+   !               write (*,*) "    note sphi is : " ,  basis_parameter(ikind)%sphi_ext(:, :, :, :)
+                  call libgint_set_Atom_L( libGint_handle, jset-1, l, nla, gcc(1:npgfa(iset),inla:inla+nla-1,iset) )
+
+                  inla = inla + nla
+               end do
+               jset = jset + 1
+            
+            end do 
+         end do
          
-         end do 
-      end do
-      
-      call libgint_set_max_n_cell( libGint_handle, nneighbors )
-!      write(*,*) " PK set "
-
+         call libgint_set_max_n_cell( libGint_handle, nneighbors )
+   !      write(*,*) " PK set "
+      end if ! end of libGint setup
       !!!
 
 
@@ -1296,12 +1317,6 @@ CONTAINS
             katom_end = actual_x_data%blocks(katom_block)%iend
             latom_start = actual_x_data%blocks(latom_block)%istart
             latom_end = actual_x_data%blocks(latom_block)%iend
-
-
-            if ( mod( my_current_counter, 100000_int_8 ) == 0_int_8 ) then
-               write(*,*) "Counter: ", my_current_counter, " block: ", atom_block, '/', nblocks**4 - 1
-            end if
-
 
             pmax_blocks = MAX(shm_pmax_block(katom_block, iatom_block), &
                               shm_pmax_block(latom_block, jatom_block), &
@@ -1692,74 +1707,55 @@ CONTAINS
                                          sphi_c_ext_set, &
                                          sphi_d_ext_set, &
                                          ee_work, ee_work2, ee_buffer1, ee_buffer2, ee_primitives_tmp, &
-                                         nimages, do_periodic, p_work,screened)
+                                         nimages, do_periodic, p_work)
 
                            !!!
 
-                           iatom_set = first_set_of_atom(iatom)+iset-2
-                           jatom_set = first_set_of_atom(jatom)+jset-2
-                           katom_set = first_set_of_atom(katom)+kset-2
-                           latom_set = first_set_of_atom(latom)+lset-2
-
-                           ! TODO a more modern approach in which the call is more like
-                           ! call coulom_4_gpu( HFX_data, iset, jset, kset, lset, [bra, ket] )
-
-                           call coulomb_4_gpu( &
-                              libGint_handle, iatom_set, jatom_set, katom_set, latom_set, &
-                              ra, rb, rc, rd, &
-                              npgfa(iset), npgfb(jset), npgfc(kset), npgfd(lset), &
-                              zeta(1:npgfa(iset), iset), zetb(1:npgfb(jset), jset), &
-                              zetc(1:npgfc(kset), kset), zetd(1:npgfd(lset), lset), &
-                              potential_parameter, &
-                              screen_coeffs_set(jset, iset, jkind, ikind)%x, &
-                              screen_coeffs_set(lset, kset, lkind, kkind)%x, &
-                              log10_pmax, log10_eps_schwarz, &
-                              tmp_R_1, tmp_R_2, tmp_screen_pgf1, tmp_screen_pgf2, &
-                              bra, ket, & 
-                              actual_x_data%neighbor_cells, cell, do_periodic, screened )
-
-                           if ( .not. screened ) then
+                           if ( use_libGint ) then
+                              iatom_set = first_set_of_atom(iatom)+iset-2
+                              jatom_set = first_set_of_atom(jatom)+jset-2
+                              katom_set = first_set_of_atom(katom)+kset-2
+                              latom_set = first_set_of_atom(latom)+lset-2
 
                               ! TODO a more modern approach in which the call is more like
-                              ! call update_fock_matrix_gpu( HFX_data, iset, jset, kset, lset )
+                              ! call coulom_4_gpu( HFX_data, iset, jset, kset, lset, [bra, ket] )
 
-                              call update_fock_matrix_gpu( &
-                                 libGint_handle, symm_fac, &
-                                 iatom, jatom, katom, latom, &
-                                 iset, jset, kset, lset, &
-                                 atomic_offset_ac, atomic_offset_ad, atomic_offset_bc, atomic_offset_bd, &
-                                 offset_ac_set, offset_ad_set, offset_bc_set, offset_bd_set, &
-                                 nsgfa(iset), nsgfb(jset), nsgfc(kset), nsgfd(lset), &
-                                 la_min(iset), la_max(iset), lb_min(jset), lb_max(jset), &
-                                 lc_min(kset), lc_max(kset), ld_min(lset), ld_max(lset), &
-                                 nsgfl_a, nsgfl_b, nsgfl_c, nsgfl_d)
+                              call coulomb_4_gpu( &
+                                 libGint_handle, iatom_set, jatom_set, katom_set, latom_set, &
+                                 ra, rb, rc, rd, &
+                                 npgfa(iset), npgfb(jset), npgfc(kset), npgfd(lset), &
+                                 zeta(1:npgfa(iset), iset), zetb(1:npgfb(jset), jset), &
+                                 zetc(1:npgfc(kset), kset), zetd(1:npgfd(lset), lset), &
+                                 potential_parameter, &
+                                 screen_coeffs_set(jset, iset, jkind, ikind)%x, &
+                                 screen_coeffs_set(lset, kset, lkind, kkind)%x, &
+                                 log10_pmax, log10_eps_schwarz, &
+                                 tmp_R_1, tmp_R_2, tmp_screen_pgf1, tmp_screen_pgf2, &
+                                 bra, ket, & 
+                                 actual_x_data%neighbor_cells, cell, do_periodic, screened )
 
+                              if ( .not. screened ) then
+
+                                 ! TODO a more modern approach in which the call is more like
+                                 ! call update_fock_matrix_gpu( HFX_data, iset, jset, kset, lset )
+
+                                 call update_fock_matrix_gpu( &
+                                    libGint_handle, symm_fac, &
+                                    iatom, jatom, katom, latom, &
+                                    iset, jset, kset, lset, &
+                                    atomic_offset_ac, atomic_offset_ad, atomic_offset_bc, atomic_offset_bd, &
+                                    offset_ac_set, offset_ad_set, offset_bc_set, offset_bd_set, &
+                                    nsgfa(iset), nsgfb(jset), nsgfc(kset), nsgfd(lset), &
+                                    la_min(iset), la_max(iset), lb_min(jset), lb_max(jset), &
+                                    lc_min(kset), lc_max(kset), ld_min(lset), ld_max(lset), &
+                                    nsgfl_a, nsgfl_b, nsgfl_c, nsgfl_d)
+
+                              end if
                            end if
 
                            nints = nsgfa(iset)*nsgfb(jset)*nsgfc(kset)*nsgfd(lset)
                            neris_total = neris_total + nints
                            nprim_ints = nprim_ints + neris_tmp
-!                           IF (cartesian_estimate == 0.0_dp) cartesian_estimate = TINY(cartesian_estimate)
-!                           estimate_to_store_int = EXPONENT(cartesian_estimate)
-!                           estimate_to_store_int = MAX(estimate_to_store_int, -15_int_8)
-!                           cartesian_estimate = SET_EXPONENT(1.0_dp, estimate_to_store_int+1)
-!                           IF (.NOT. buffer_overflow .AND. my_geo_change) THEN
-!                              IF (cartesian_estimate < eps_schwarz) THEN
-!                                 IF (.NOT. use_disk_storage) THEN
-!                                    CALL hfx_add_single_cache_element( &
-!                                       estimate_to_store_int, 6, &
-!                                       maxval_cache, maxval_container, memory_parameter%actual_memory_usage, &
-!                                       use_disk_storage, max_val_memory)
-!                                 ELSE
-!                                    CALL hfx_add_single_cache_element( &
-!                                       estimate_to_store_int, 6, &
-!                                       maxval_cache_disk, maxval_container_disk, memory_parameter%actual_memory_usage_disk, &
-!                                       use_disk_storage)
-!                                 END IF
-!                              END IF
-!                           END IF
-!
-!                           IF (cartesian_estimate < eps_schwarz) CYCLE
 
                            !! Compress the array for storage
                            spherical_estimate = 0.0_dp
@@ -1935,38 +1931,39 @@ CONTAINS
 
       CALL para_env%sync()
 
-      allocate( full_ks_alpha_from_gpu, Mold = full_ks_alpha )
-! barrier needed after allocate  full_ks_alpha_from_gpu before libGint get K 
-! ? to feed libgint a valid position for full_ks_alpha_from_gpu ?
-!$OMP BARRIER
-      call libgint_get_K(libGint_handle, full_ks_alpha_from_gpu(:,1) )
+      if ( use_libGint .and. use_libint ) then
+
+         allocate( full_ks_alpha_from_gpu, Mold = full_ks_alpha )
+         ! barrier needed after allocate  full_ks_alpha_from_gpu before libGint get K 
+         ! ? to feed libgint a valid position for full_ks_alpha_from_gpu ?
+         !$OMP BARRIER
+         call libgint_get_K(libGint_handle, full_ks_alpha_from_gpu(:,1) )
 
 
-
-!$omp single
-
-      max_abs_delta_KS = 0.0_dp
-      do  i=1, size(full_ks_alpha)
-         max_abs_delta_KS = max( max_abs_delta_ks, abs(  full_ks_alpha(i,1) - full_ks_alpha_from_gpu(i,1) ) )
-      end do
-      write(*,*) " ------------------------------------ "
-      write(*,*) " | rank " , para_env%mepos
-      write(*,*) " |  max abs dif: ", max_abs_delta_KS
-      write(*,*) " ------------------------------------ "
-
-      if ( max_abs_delta_KS > 1.E-10_dp ) then
-         write (*,*) " K from CPU  |  K from GPU  |  Delta | Ratio " 
+         !$omp single
+         max_abs_delta_KS = 0.0_dp
          do  i=1, size(full_ks_alpha)
-            write (*,*) i, full_ks_alpha(i,1) , full_ks_alpha_from_gpu(i,1), &
-                           full_ks_alpha(i,1) - full_ks_alpha_from_gpu(i,1), &
-                           full_ks_alpha(i,1) / full_ks_alpha_from_gpu(i,1)
+            max_abs_delta_KS = max( max_abs_delta_ks, abs(  full_ks_alpha(i,1) - full_ks_alpha_from_gpu(i,1) ) )
          end do
+         write(*,*) " ------------------------------------ "
+         write(*,*) " | rank " , para_env%mepos
+         write(*,*) " |  max abs dif: ", max_abs_delta_KS
+         write(*,*) " ------------------------------------ "
 
+         if ( max_abs_delta_KS > 1.E-8_dp ) then
+            write (*,*) " K from CPU  |  K from GPU  |  Delta | Ratio " 
+            do  i=1, size(full_ks_alpha)
+               write (*,*) i, full_ks_alpha(i,1) , full_ks_alpha_from_gpu(i,1), &
+                              full_ks_alpha(i,1) - full_ks_alpha_from_gpu(i,1), &
+                              full_ks_alpha(i,1) / full_ks_alpha_from_gpu(i,1)
+            end do
+         end if
+         !$omp end single
       end if
 
-!$omp end single
-      !!!
-
+      if ( use_libGint .and. .not. use_libint ) then
+         call libgint_get_K(libGint_handle, full_ks_alpha(:,1) )
+      end if
 
 !$OMP MASTER
       logger => cp_get_default_logger()
@@ -2552,7 +2549,7 @@ CONTAINS
                   ! Note: we have already done the same for the AB and CD pair,
                   ! it is done in the build_pair_list subroutine
 
-                  call libGint_add_prm( libGint_handle, ipgf-1,jpgf-1,kpgf-1,lpgf-1 )                
+                  call libGint_add_prm( libGint_handle, ipgf-1,jpgf-1,kpgf-1,lpgf-1 )
                   cell_was_screened = .false.
 
                   ! BIG TODO move this loop to GPU
@@ -2857,7 +2854,7 @@ CONTAINS
                        nsgfl_d, &
                        sphi_a_ext, sphi_b_ext, sphi_c_ext, sphi_d_ext, &
                        ee_work, ee_work2, ee_buffer1, ee_buffer2, ee_primitives_tmp, &
-                       nimages, do_periodic, p_work, screened )
+                       nimages, do_periodic, p_work)
 
       TYPE(cp_libint_t)                                  :: lib
       REAL(dp), INTENT(IN)                               :: ra(3), rb(3), rc(3), rd(3)
@@ -2898,9 +2895,6 @@ CONTAINS
                  nsob, nsoc, nsod, s_offset_a, s_offset_b, s_offset_c, s_offset_d
       REAL(dp)                                           :: EtaInv, tmp_max, ZetaInv
 
-!      integer :: pgf_index
-      logical, intent(out) :: screened
-
 
       CALL build_pair_list_pgf(npgfa, npgfb, pgf_list_ij, zeta, zetb, screen1, screen2, &
                                pgf1, R1_pgf, log10_pmax, log10_eps_schwarz, ra, rb, &
@@ -2916,8 +2910,6 @@ CONTAINS
       neris_tmp = 0
       primitive_integrals = 0.0_dp
       max_l = la_max + lb_max + lc_max + ld_max
-
-      screened = .true.
 
       DO list_ij = 1, nelements_ij
          ZetaInv = pgf_list_ij(list_ij)%ZetaInv
