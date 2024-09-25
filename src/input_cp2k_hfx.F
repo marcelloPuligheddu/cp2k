@@ -61,7 +61,7 @@ CONTAINS
       CPASSERT(.NOT. ASSOCIATED(section))
       CALL section_create(section, __LOCATION__, name="HF", &
                           description="Sets up the Hartree-Fock parameters if requested ", &
-                          n_keywords=5, n_subsections=2, repeats=.TRUE., &
+                          n_keywords=6, n_subsections=2, repeats=.TRUE., &
                           citations=(/Guidon2008, Guidon2009/))
 
       NULLIFY (keyword, print_key, subsection)
@@ -80,6 +80,14 @@ CONTAINS
                           "If true, the beta spin density is included via a second in core call. "// &
                           "If false, alpha and beta spins are done in one shot ", &
                           usage="TREAT_LSD_IN_CORE TRUE", default_l_val=.FALSE.)
+      CALL section_add_keyword(section, keyword)
+      CALL keyword_release(keyword)
+
+      CALL keyword_create(keyword, __LOCATION__, name="HFX_OFFLOAD", &
+                          description="TEST. A value of 1 offloads to libGint. "// &
+                          "A value of 0 (default) offloads to libint."// &
+                          "A special value of 2 offloads to both and compare results ", &
+                          usage="OFFLOAD 1", default_i_val=0)
       CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
 
