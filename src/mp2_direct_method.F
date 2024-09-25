@@ -473,7 +473,6 @@ CONTAINS
       TYPE(pair_set_list_type), ALLOCATABLE, &
          DIMENSION(:)                                    :: set_list_ij, set_list_kl
       TYPE(particle_type), DIMENSION(:), POINTER         :: particle_set
-      logical :: dummy
 
       CALL timeset(routineN, handle)
 
@@ -811,7 +810,7 @@ CONTAINS
                                    sphi_c_ext_set, &
                                    sphi_d_ext_set, &
                                    ee_work, ee_work2, ee_buffer1, ee_buffer2, ee_primitives_tmp, &
-                                   nimages, do_periodic, p_work,dummy)
+                                   nimages, do_periodic, p_work)
 
                      nints = nsgfa(iset)*nsgfb(jset)*nsgfc(kset)*nsgfd(lset)
                      neris_total = neris_total + nints
