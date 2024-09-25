@@ -4,17 +4,18 @@
 #include "define.h"
 
 
+#define BASE4 100
 unsigned int encode4( int a, int b, int c, int d ){
-   return a*256*256*256 + b*256*256 + c*256 + d;
+   return a*BASE4*BASE4*BASE4 + b*BASE4*BASE4 + c*BASE4 + d;
 }
 
 __device__ __host__ void decode4(
    unsigned int abcd, unsigned int* a, unsigned int* b,
    unsigned int* c, unsigned int * d ){
-(*d) = abcd % 256;
-(*c) = abcd / 256 % 256 ;
-(*b) = abcd / (256*256) % 256 ;
-(*a) = abcd / (256*256*256) ;
+(*d) = abcd % BASE4;
+(*c) = abcd / BASE4 % BASE4 ;
+(*b) = abcd / (BASE4*BASE4) % BASE4 ;
+(*a) = abcd / (BASE4*BASE4*BASE4) ;
 }
 
 
@@ -28,7 +29,7 @@ __device__ __host__ void decodeL( unsigned int L, int* la, int* lb, int* lc, int
    (*lb) = L / NL2 % NL ;
    (*la) = L / NL3 ;
 }
-
+/*
 unsigned int encode_prm( const int ipa, const int ipb, const int ipc, const int ipd, const int n3 ){
     assert(ipa >= 0);
     assert(ipa < MAX_N_PRM);
@@ -61,7 +62,7 @@ __host__ __device__ void decode_prm(
    (*ipd) = (prm / (MAX_N_CELL)) % MAX_N_PRM;
    (*n3)  = (prm) % MAX_N_CELL;
 }
-
+*/
 unsigned int encode_shell( const int nla, const int nlb, const int nlc, const int nld, const int n1, const int n2 ){
     assert(nla >= 0);
     assert(nla < MAX_N_L);
@@ -120,9 +121,10 @@ __device__ __host__ double my_round( double x ){
 }
 
 
+
 __device__ __host__ double my_wrap( double s ){
-   if ( s >  0.499 and s < 0.501 ){ return  s; }
-   if ( s < -0.499 and s >-0.501 ){ return -s; }
+   if ( s >  0.5 - EPS_ROUNDING and s < 0.5 + EPS_ROUNDING ){ return s; }
+   if ( s < -0.5 + EPS_ROUNDING and s >-0.5 - EPS_ROUNDING ){ return s; }
    return s - round(s);
 }
 
@@ -143,9 +145,7 @@ __device__ __host__ void compute_pbc( const double A[3], const double B[3], cons
 //   double old_s0 = s0;
 //   s0 = s0 - round( old_s0 );
 //   printf("wrapped %lg (%lg|%lg) to %lg \n", old_s0, old_s0 - 0.5, old_s0+0.5, s0 );
-
 //   printf("wrapping %lg(%lg,%lg) %lg(%lg,%lg) %lg(%lg,%lg) to %lg %lg %lg \n", s0,s0-0.5,s0+0.5, s1,s1-0.5,s1+0.5, s2,s2-0.5,s2+0.5, my_wrap(s0),my_wrap(s1),my_wrap(s2) );
-
 
    s0 = my_wrap(s0); // s0 - my_round( s0 );
    s1 = my_wrap(s1); // s1 = s1 - my_round( s1 );

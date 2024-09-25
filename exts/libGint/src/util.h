@@ -33,13 +33,14 @@ __device__ __host__ void decode4(
 
 unsigned int encodeL( int la, int lb, int lc, int ld );
 __device__ __host__ void decodeL( unsigned int L, int* la, int* lb, int* lc, int* ld );
-
+/*
 unsigned int encode_prm( int ipa, int ipb, int ipc, int ipd, int n3 );
 __device__ __host__ void decode_prm(
       unsigned int ipzn,
       unsigned int* __restrict__ ipa, unsigned int* __restrict__ ipb,
       unsigned int* __restrict__ ipc, unsigned int* __restrict__ ipd,
       unsigned int* __restrict__ n3 );
+*/
 
 unsigned int encode_shell( int nla, int nlb, int nlc, int nld, int n1, int n2 );
 __device__ __host__ void decode_shell(

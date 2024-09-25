@@ -24,10 +24,17 @@ SOFTWARE.
 #ifndef DEFINE_COMPILE_GUARD
 #define DEFINE_COMPILE_GUARD
 
+// Due to accumulation of arith errors, it is possible for the QP wrapping
+// to become unstable and incompatible with the rounding used on the CPU side
+// for the bra and ket primitive screening.
+#define EPS_ROUNDING 1.e-9
+
 // max number of periodic cell, 2**8
-#define MAX_N_CELL 256 
+//#define MAX_N_CELL 256 
+#define MAX_N_CELL 100
 // max number of prm per STO, 2**6. Way larger than sanity should allow
-#define MAX_N_PRM   64
+//#define MAX_N_PRM   64
+#define MAX_N_PRM   10
 // max number of linear combinations of 
 // gassian in the same set and with the same ang. moment, 2**4.
 // E.g. this cp2k set with 23 linear combinations of 32 gaussians is not valid
@@ -35,7 +42,8 @@ SOFTWARE.
 // 1 0 0 32 23 
 // [exp and gcc omitted]
 //
-#define MAX_N_L     16
+//#define MAX_N_L     16
+#define MAX_N_L     10
 // Should be 8 + 4*6 = 32 bits
 static_assert( (unsigned long int) MAX_N_CELL * MAX_N_PRM * MAX_N_PRM * MAX_N_PRM * MAX_N_PRM <= 4294967296,
       "Error, MAX_N_PRM or MAX_N_CELL are too large" );

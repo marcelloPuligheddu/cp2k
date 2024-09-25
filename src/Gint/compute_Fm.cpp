@@ -40,10 +40,9 @@ __device__ void compute_Fm_batched_single( int p,
       const int ld_C0,
       int potential_type, const int Ng ){
 
-   unsigned int i    = OF[p / Ng ];
-   unsigned int ipzn = PMX[p / Ng ];
+   unsigned int i    =  OF[p];
+   unsigned int ipzn = PMX[p];
    unsigned int ipa,ipb,ipc,ipd;
-   unsigned int n3 = p % Ng ;
 
    decode4( ipzn, &ipa, &ipb, &ipc, &ipd );
 
@@ -102,7 +101,7 @@ __device__ void compute_Fm_batched_single( int p,
    int F_size = L + 1;
    if (L > 0 ) { F_size += 4*3+5; }
 
-   int Of = p * F_size ;
+
 
    // n1,n2 and n3 are the idx of the pbc cells for AB,CD and PQ \"
    // note that :
@@ -139,105 +138,112 @@ __device__ void compute_Fm_batched_single( int p,
    double rho = zab*zcd*inv_z;
    double Kab;
    Kab = compute_K(za,zb,A,B);
+   double Kcd; // Note Kcd does not depends on n3 !
+   Kcd = compute_K(zc,zd,C,D);
 
 //   double Zn = 1./sqrt(z)/16./M_PI/M_PI; // libcint norm
    double Zn = 1./sqrt(z); // cp2k uses the correct norm so we can use OS86 eq 44
 
    // END OF SHARED INFO BEFORE N3
+   //
+   for ( int n3 = 0; n3 < Ng ; n3++ ){
 
-   C[0] = Co[0]                           + shift[0] + neighs[n3*3+0];
-   C[1] = Co[1]                           + shift[1] + neighs[n3*3+1];
-   C[2] = Co[2]                           + shift[2] + neighs[n3*3+2];
-   D[0] = Co[0] + CDs[0] + neighs[n2*3+0] + shift[0] + neighs[n3*3+0];
-   D[1] = Co[1] + CDs[1] + neighs[n2*3+1] + shift[1] + neighs[n3*3+1];
-   D[2] = Co[2] + CDs[2] + neighs[n2*3+2] + shift[2] + neighs[n3*3+2];
+      int Of = (p * Ng + n3 ) * F_size ;
 
-//   Q[0] = Q [0] + PQs[0] + neighs[n3*3+0];
-//   Q[1] = Q [1] + PQs[1] + neighs[n3*3+1];
-//   Q[2] = Q [2] + PQs[2] + neighs[n3*3+2];
+      C[0] = Co[0]                           + shift[0] + neighs[n3*3+0];
+      C[1] = Co[1]                           + shift[1] + neighs[n3*3+1];
+      C[2] = Co[2]                           + shift[2] + neighs[n3*3+2];
+      D[0] = Co[0] + CDs[0] + neighs[n2*3+0] + shift[0] + neighs[n3*3+0];
+      D[1] = Co[1] + CDs[1] + neighs[n2*3+1] + shift[1] + neighs[n3*3+1];
+      D[2] = Co[2] + CDs[2] + neighs[n2*3+2] + shift[2] + neighs[n3*3+2];
 
-   compute_weighted_distance( Q, C,D,zc,zd,zcd );
-   compute_weighted_distance( W, P,Q,zab,zcd,z );
-   
+   //   Q[0] = Q [0] + PQs[0] + neighs[n3*3+0];
+   //   Q[1] = Q [1] + PQs[1] + neighs[n3*3+1];
+   //   Q[2] = Q [2] + PQs[2] + neighs[n3*3+2];
 
-   double PQ[3] = { P[0]-Q[0], P[1]-Q[1], P[2]-Q[2] };
-   double T = rho * (PQ[0]*PQ[0] + PQ[1]*PQ[1] + PQ[2]*PQ[2]);
-   double Kcd;
-   Kcd = compute_K(zc,zd,C,D);
+      compute_weighted_distance( Q, C,D,zc,zd,zcd );
+      compute_weighted_distance( W, P,Q,zab,zcd,z );
+    
+      double PQ[3] = { P[0]-Q[0], P[1]-Q[1], P[2]-Q[2] };
+      double rpq2 = (PQ[0]*PQ[0] + PQ[1]*PQ[1] + PQ[2]*PQ[2]);
+      double T = rho * rpq2 ;
 
-//   double AB[3] = { A[0]-B[0], A[1]-B[1], A[2]-B[2] };
-//   double rab2 = (AB[0]*AB[0] + AB[1]*AB[1] + AB[2]*AB[2]);
+   //   double AB[3] = { A[0]-B[0], A[1]-B[1], A[2]-B[2] };
+   //   double rab2 = (AB[0]*AB[0] + AB[1]*AB[1] + AB[2]*AB[2]);
 
-//   double CD[3] = { C[0]-D[0], C[1]-D[1], C[2]-D[2] };
-//   double rcd2 = (CD[0]*CD[0] + CD[1]*CD[1] + CD[2]*CD[2]);
+   //   double CD[3] = { C[0]-D[0], C[1]-D[1], C[2]-D[2] };
+   //   double rcd2 = (CD[0]*CD[0] + CD[1]*CD[1] + CD[2]*CD[2]);
+      
+   //   printf("PBC %lf %lf %lf %lf | %d %d %d -> %lf %lf %lf %lf -> | %lg %lg %lg | %lg %lg | %lg | \n", Ao[0],Bo[0],Co[0],Do[0], n1,n2,n3, A[0],B[0],C[0],D[0], ABs[0],CDs[0],shift[0], P[0],Q[0], rpq2 );
+   //   printf("Y FM PBC A %lf B %lf C %lf D %lf n1 %d n2 %d n3 %d -> %lf %lf %lf %lf -> %lg %lg \n", Ao[1], Bo[1], Co[1], Do[1], n1,n2,n3, A[1], B[1], C[1], D[1], P[1], Q[1] );
+   //   printf("Z FM PBC A %lf B %lf C %lf D %lf n1 %d n2 %d n3 %d -> %lf %lf %lf %lf -> %lg %lg \n", Ao[2], Bo[2], Co[2], Do[2], n1,n2,n3, A[2], B[2], C[2], D[2], P[2], Q[2] );
 
-   double rpq2 = (PQ[0]*PQ[0] + PQ[1]*PQ[1] + PQ[2]*PQ[2]);
-   printf("PBC %lf %lf %lf %lf | %d %d %d -> %lf %lf %lf %lf -> | %lg %lg %lg | %lg %lg | %lg | \n", Ao[0],Bo[0],Co[0],Do[0], n1,n2,n3, A[0],B[0],C[0],D[0], ABs[0],CDs[0],shift[0], P[0],Q[0], rpq2 );
-//   printf("Y FM PBC A %lf B %lf C %lf D %lf n1 %d n2 %d n3 %d -> %lf %lf %lf %lf -> %lg %lg \n", Ao[1], Bo[1], Co[1], Do[1], n1,n2,n3, A[1], B[1], C[1], D[1], P[1], Q[1] );
-//   printf("Z FM PBC A %lf B %lf C %lf D %lf n1 %d n2 %d n3 %d -> %lf %lf %lf %lf -> %lg %lg \n", Ao[2], Bo[2], Co[2], Do[2], n1,n2,n3, A[2], B[2], C[2], D[2], P[2], Q[2] );
+   //   double F0 = 0.0;
+   //   fgamma0( 0, T, &F0, ftable, ftable_ld );
+   //   printf("F @ %d %d %d (%d %d | %d %d)[ %d %d %d %d ] + | %d %d %d | = %lg * %lg * %lg * %lg \n", blockIdx.x, threadIdx.x, Of, idx_A, idx_B, idx_C, idx_D, ipa,ipb,ipc,ipd, n1, n2, n3, Zn, Kab, Kcd, F0 );
 
-   double Kfactor = Zn * Kab * Kcd;
+      double Kfactor = Zn * Kab * Kcd;
 
-//   printf(" shifting A %lf %lf %lf and B %lf %lf %lf by %lf %lf %lf \n", 
-//       Ao[0], Ao[1], Ao[2], Bo[0], Bo[1], Bo[2], ABs[0], ABs[1], ABs[2] );
-//   printf(" shifting A %lf %lf %lf and B %lf %lf %lf by %lf %lf %lf \n", 
-//       Ao[0], Ao[1], Ao[2], Bo[0], Bo[1], Bo[2], ABs[0], ABs[1], ABs[2] );
-//   printf(" shifting P %lf %lf %lf and Q %lf %lf %lf by %lf %lf %lf \n", 
-//       P [0], P [1], P [2], Q [0], Q [1], Q [2], PQs[0], PQs[1], PQs[2] );
+   //   printf(" shifting A %lf %lf %lf and B %lf %lf %lf by %lf %lf %lf \n", 
+   //       Ao[0], Ao[1], Ao[2], Bo[0], Bo[1], Bo[2], ABs[0], ABs[1], ABs[2] );
+   //   printf(" shifting A %lf %lf %lf and B %lf %lf %lf by %lf %lf %lf \n", 
+   //       Ao[0], Ao[1], Ao[2], Bo[0], Bo[1], Bo[2], ABs[0], ABs[1], ABs[2] );
+   //   printf(" shifting P %lf %lf %lf and Q %lf %lf %lf by %lf %lf %lf \n", 
+   //       P [0], P [1], P [2], Q [0], Q [1], Q [2], PQs[0], PQs[1], PQs[2] );
 
-//   printf( " p: %d | P: [ %d ]  %lf %lf %lf \n", p, 0, P[0], P[1], P[2] );
-//   printf( " p: %d | Q: [ %d ]  %lf %lf %lf \n", p, 0, Q[0], Q[1], Q[2] );
+   //   printf( " p: %d | P: [ %d ]  %lf %lf %lf \n", p, 0, P[0], P[1], P[2] );
+   //   printf( " p: %d | Q: [ %d ]  %lf %lf %lf \n", p, 0, Q[0], Q[1], Q[2] );
 
 
-   // TODO it may be good to split the calculation of T,R,PA,WP,QC,WQ,Kfac
-   // and the calculation of Fm to separate kernels to limit reg pressure
-   switch ( potential_type ){
-      case COULOMB :
-         fgamma0( L, T, &Fm[Of], ftable, ftable_ld );
-      break;
-      case TRUNCATED :
-         double R = R_cut * sqrt(rho) ;
-         bool use_gamma = t_c_g0_n( &Fm[Of], R, T, L, C0, ld_C0 );
-         if (use_gamma) { fgamma0( L, T, &Fm[Of], ftable, ftable_ld ); }
-      break;
-   } // end switch potential_type
 
-//   for( unsigned int m=0; m < L+1; m++ ){
-//      double tmp = Fm[Of+m]*Kfactor;
-//      double F0 = 0.0;
-//      double R = R_cut * sqrt(rho) ;
-//      fgamma0( 0, T, &F0, ftable, ftable_ld );
-//      printf ( " Fm[%d @ %d](T=%lg,R=%lg) = %4.12lg = %4.12lg * %4.12lg || F00 = %4.12lg \n", p, m, T, R, tmp, Fm[Of+m], Kfactor, F0 );
-//   }
+      // TODO it may be good to split the calculation of T,R,PA,WP,QC,WQ,Kfac
+      // and the calculation of Fm to separate kernels to limit reg pressure
+      switch ( potential_type ){
+         case COULOMB :
+            fgamma0( L, T, &Fm[Of], ftable, ftable_ld );
+         break;
+         case TRUNCATED :
+            double R = R_cut * sqrt(rho) ;
+            bool use_gamma = t_c_g0_n( &Fm[Of], R, T, L, C0, ld_C0 );
+            if (use_gamma) { fgamma0( L, T, &Fm[Of], ftable, ftable_ld ); }
+         break;
+      } // end switch potential_type
 
-   // Don't forget to scale by Zn, Ka and Kb
-   for( unsigned int m=0; m < L+1; m++ ){ Fm[Of+m] *= Kfactor; }
+   //   for( unsigned int m=0; m < L+1; m++ ){
+   //      double tmp = Fm[Of+m]*Kfactor;
+   //      double F0 = 0.0;
+   //      double R = R_cut * sqrt(rho) ;
+   //      printf ( " Fm[%d @ %d](T=%lg,R=%lg) = %4.12lg = %4.12lg * %4.12lg || F00 = %4.12lg \n", p, m, T, R, tmp, Fm[Of+m], Kfactor, F0 );
+   //   }
 
-   if ( L > 0 ){
-      double inv_2zab = inv_zab * 0.5;
-      double inv_2zcd = inv_zcd * 0.5;
-      double inv_2z = inv_z * 0.5;
-      double rho_zab = rho*inv_zab;
-      double rho_zcd = rho*inv_zcd;
-      Fm[Of+L+ 1] = P[0]-A[0];
-      Fm[Of+L+ 2] = P[1]-A[1];
-      Fm[Of+L+ 3] = P[2]-A[2];
-      Fm[Of+L+ 4] = W[0]-P[0];
-      Fm[Of+L+ 5] = W[1]-P[1];
-      Fm[Of+L+ 6] = W[2]-P[2];
-      Fm[Of+L+ 7] = Q[0]-C[0];
-      Fm[Of+L+ 8] = Q[1]-C[1];
-      Fm[Of+L+ 9] = Q[2]-C[2];
-      Fm[Of+L+10] = W[0]-Q[0];
-      Fm[Of+L+11] = W[1]-Q[1];
-      Fm[Of+L+12] = W[2]-Q[2];
-      Fm[Of+L+13] = inv_2zab;
-      Fm[Of+L+14] = - inv_2zab * rho_zab;
-      Fm[Of+L+15] = inv_2zcd;
-      Fm[Of+L+16] = - inv_2zcd * rho_zcd;
-      Fm[Of+L+17] = inv_2z;
+      // Don't forget to scale by Zn, Ka and Kb
+      for( unsigned int m=0; m < L+1; m++ ){ Fm[Of+m] *= Kfactor; }
+
+      if ( L > 0 ){
+         double inv_2zab = inv_zab * 0.5;
+         double inv_2zcd = inv_zcd * 0.5;
+         double inv_2z = inv_z * 0.5;
+         double rho_zab = rho*inv_zab;
+         double rho_zcd = rho*inv_zcd;
+         Fm[Of+L+ 1] = P[0]-A[0];
+         Fm[Of+L+ 2] = P[1]-A[1];
+         Fm[Of+L+ 3] = P[2]-A[2];
+         Fm[Of+L+ 4] = W[0]-P[0];
+         Fm[Of+L+ 5] = W[1]-P[1];
+         Fm[Of+L+ 6] = W[2]-P[2];
+         Fm[Of+L+ 7] = Q[0]-C[0];
+         Fm[Of+L+ 8] = Q[1]-C[1];
+         Fm[Of+L+ 9] = Q[2]-C[2];
+         Fm[Of+L+10] = W[0]-Q[0];
+         Fm[Of+L+11] = W[1]-Q[1];
+         Fm[Of+L+12] = W[2]-Q[2];
+         Fm[Of+L+13] = inv_2zab;
+         Fm[Of+L+14] = - inv_2zab * rho_zab;
+         Fm[Of+L+15] = inv_2zcd;
+         Fm[Of+L+16] = - inv_2zcd * rho_zcd;
+         Fm[Of+L+17] = inv_2z;
+      }
    }
-
 //   if (p == 0 ){
 //      printf(" Fm2  FVH: " );
 //      for ( int ii = 0 ; ii < FVH_SIZE ; ii++ ){
@@ -278,7 +284,7 @@ __global__ void compute_Fm_batched_low_gpu(
       double* __restrict__ neighs,
       double* __restrict__ ftable, int ftable_ld,
       const double R_cut, const double * const __restrict__ C0, const int ld_C0, int potential_type, const int Ng  ){
-   for( int p = threadIdx.x + blockIdx.x*blockDim.x ; p < NFm*Ng ; p += blockDim.x*gridDim.x ){
+   for( int p = threadIdx.x + blockIdx.x*blockDim.x ; p < NFm ; p += blockDim.x*gridDim.x ){
       compute_Fm_batched_single( p, FVH, OF,PMX,data,Fm,NFm,L,periodic,cell,neighs,ftable,ftable_ld,R_cut,C0,ld_C0,potential_type,Ng );
    }
 }

@@ -45,9 +45,7 @@ using std::max;
 
 class libGint {
    public:
-   libGint(){ 
-      my_thr = omp_get_thread_num() ;
-   }
+   libGint(){ my_thr = omp_get_thread_num() ; }
    void add_prm ( const int ipa, const int ipb, const int ipc, const int ipd ) ;
    void add_shell (int i, int j , int k, int l, int n1, int n2);
    void add_cell();
@@ -77,6 +75,9 @@ class libGint {
    void report_througput(bool skip_gpu);
 //   private:
 
+   Timer prm_timer, shl_timer, qrt_timer, qrtt_timer, set_timer, dis_timer;
+   double prm_ms=0.0, shl_ms=0.0, qrt_ms=0.0, qrtt_ms=0.0, set_ms=0.0, dis_ms=0.0;
+   int prm_cnt = 0, shl_cnt=0, qrt_cnt=0, qrtt_cnt=0, set_cnt=0, dis_cnt;
    void reset_indices();
    int my_thr = 0;
    std::vector<int> np;

@@ -6,8 +6,8 @@ extern "C" {
 void * libgint_create_handle () {
    libGint * handle;
    handle = new libGint() ;
-#pragma omp critical
-   cout << "Thr " << omp_get_thread_num() << " using handle " << handle << endl;
+//#pragma omp critical
+//   cout << "Thr " << omp_get_thread_num() << " using handle " << handle << endl;
    return (void*) handle ;
 }
 
