@@ -310,7 +310,7 @@ contains
    subroutine libgint_set_Atom_L( handle, i, l, nl, K )
       type (c_ptr) :: handle
       integer(kind=c_int), value :: i, l , nl
-      real(kind=8), dimension(:,:), target :: K
+      real(kind=8), dimension(:), target :: K
 !      write(*,*) " calling set Atom L ", i, l, nl , K
       call libgint_internal_set_Atom_L( handle, i, l, nl, c_loc(K) )
    end subroutine libgint_set_Atom_L

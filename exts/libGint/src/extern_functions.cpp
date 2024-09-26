@@ -82,7 +82,12 @@ double compute_norm_psi( double * K, double * z, int np, int l ){
       }
    }
    ans *= pow(M_PI,1.5) / pow(2.0,l);
-//   cout << " norm at l " << l << " of " << K[0] << " ^ " << z[0] << " [." << np << ".] = " << K[0] / sqrt(ans) << endl ;
+//   cout << " norm at l " << l << " of " ;
+//   for (int i=0; i<np;i++){
+//      if (i!=0){cout << " + " ;}
+//      cout << K[i] << " ^ " << z[i] << " " ;
+//   }
+//   cout << "[" << np << "] = " << sqrt(ans) << endl ;
    return sqrt(ans);
 
 }

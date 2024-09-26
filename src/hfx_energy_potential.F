@@ -271,6 +271,7 @@ CONTAINS
       type(bra_t) :: bra, ket
       integer :: iatom_set, jatom_set, katom_set, latom_set, shared_dev
       real(dp), dimension(:,:), allocatable :: cell_r
+      real(dp), dimension(:), allocatable :: flat_gcc
       type(c_ptr), save :: libGint_handle
       logical :: use_libint, use_libgint
 !$OMP threadprivate( libGint_handle )
@@ -440,7 +441,7 @@ CONTAINS
 !$OMP         ene_x_bb_diag,act_atomic_block_offset,act_set_offset,j,handle_dist_ks,tmp_i8,tmp_i4,dft_control,&
 !$OMP         etmp,nkimages,img,bin,eps_scaling_str,eps_schwarz_min_str, &
 !$OMP         i,inla,nla,gcc,first_set_of_atom,max_abs_delta_KS, screened, &
-!$OMP         bra,ket,iatom_set,jatom_set,katom_set,latom_set,do_pbc,cell_r) 
+!$OMP         bra,ket,iatom_set,jatom_set,katom_set,latom_set,do_pbc,cell_r,flat_gcc) 
 
 
       ln_10 = LOG(10.0_dp)
@@ -1025,9 +1026,12 @@ CONTAINS
                do l = la_min( iset ) , la_max(iset)
                   nla = nsgfl_a(l,iset)
 
-   !               write (*,*) " CP2K setting atom set L ", jset ,l, nla,  gcc(1:npgfa(iset),inla:inla+nla-1,iset)
-   !               write (*,*) "    note sphi is : " ,  basis_parameter(ikind)%sphi_ext(:, :, :, :)
-                  call libgint_set_Atom_L( libGint_handle, jset-1, l, nla, gcc(1:npgfa(iset),inla:inla+nla-1,iset) )
+!                  write (*,*) " CP2K setting atom set L ", jset ,l, nla,  gcc(1:npgfa(iset),inla:inla+nla-1,iset)
+!                  write (*,*) "    note sphi is : " ,  basis_parameter(ikind)%sphi_ext(:, :, :, :)
+                  IF( ALLOCATED(flat_gcc) )  DEALLOCATE( flat_gcc ) 
+                  allocate(flat_gcc(npgfa(iset)*nla))
+                  flat_gcc = pack(gcc(1:npgfa(iset),inla:inla+nla-1,iset),.true.)
+                  call libgint_set_Atom_L( libGint_handle, jset-1, l, nla, flat_gcc )
 
                   inla = inla + nla
                end do
@@ -1950,7 +1954,8 @@ CONTAINS
          write(*,*) " |  max abs dif: ", max_abs_delta_KS
          write(*,*) " ------------------------------------ "
 
-         if ( max_abs_delta_KS > 1.E-8_dp ) then
+         ! Print all F if delta is too large or (suspiciously) too small
+         if ( max_abs_delta_KS > 1.E-8_dp .or. max_abs_delta_KS < 1.E-18 ) then
             write (*,*) " K from CPU  |  K from GPU  |  Delta | Ratio " 
             do  i=1, size(full_ks_alpha)
                write (*,*) i, full_ks_alpha(i,1) , full_ks_alpha_from_gpu(i,1), &
