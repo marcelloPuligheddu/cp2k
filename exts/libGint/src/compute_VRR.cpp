@@ -547,15 +547,7 @@ __global__ void compute_VRR_batched_gpu_low(
       decode_shell( nlabcd, &nla,&nlb,&nlc,&nld, &n1,&n2);
       decode4( npabcd, &npa,&npb,&npc,&npd );
 
-      // TODO recheck no other block can do the same op
-      // TODO !! all Ng blocks share this region now !! TODO 
-//      int n_cc = nla*nlb*nlc*nld;
       double* sh_mem = &ABCD[ Og * hrr_blocksize ];
-//      for ( unsigned i= threadIdx.x; i < hrr_blocksize * n_cc ; i+= blockDim.x ){
-//         sh_mem[i] = 0.0 ;
-//      }
-
-      __syncthreads();
 
       int best_vrr_team_size = max( 1, (L*L+1) / n_prm );
       int vrr_team_size = blockDim.x;
@@ -566,17 +558,18 @@ __global__ void compute_VRR_batched_gpu_low(
       int num_vrr_teams = blockDim.x / vrr_team_size;
       int my_vrr_team = threadIdx.x / vrr_team_size;
       int my_vrr_rank = threadIdx.x % vrr_team_size;
+      int n3 = block % Ng; 
 
       for ( unsigned i = my_vrr_team; i < n_prm ;  i += num_vrr_teams ){
 
-         unsigned int Of   = ( Ov * Ng + i ) * F_size;
-         unsigned int ipzn = PMX[(Ov + i/Ng )];
+         unsigned int Of   = ( (Ov+i) * Ng + n3 ) * F_size;
+         unsigned int ipzn = PMX[Ov+i];
          unsigned int ipa,ipb,ipc,ipd;
 
          // We need to know the index of the pgfs to find the K coefficents
          decode4( ipzn, &ipa,&ipb,&ipc,&ipd );
 
-         double* pr_mem = &AC[ (Ov * Ng + i) * vrr_blocksize ];
+         double* pr_mem = &AC[ ((Ov+i) * Ng + n3) * vrr_blocksize ];
          for( int il=0; il < L+1; il++ ){
             pr_mem[il] = Fm[Of+il];
          }

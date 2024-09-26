@@ -101,8 +101,6 @@ __device__ void compute_Fm_batched_single( int p,
    int F_size = L + 1;
    if (L > 0 ) { F_size += 4*3+5; }
 
-
-
    // n1,n2 and n3 are the idx of the pbc cells for AB,CD and PQ \"
    // note that :
    // A does not move
@@ -143,6 +141,7 @@ __device__ void compute_Fm_batched_single( int p,
 
 //   double Zn = 1./sqrt(z)/16./M_PI/M_PI; // libcint norm
    double Zn = 1./sqrt(z); // cp2k uses the correct norm so we can use OS86 eq 44
+   double Kfactor = Zn * Kab * Kcd;
 
    // END OF SHARED INFO BEFORE N3
    //
@@ -182,7 +181,7 @@ __device__ void compute_Fm_batched_single( int p,
    //   fgamma0( 0, T, &F0, ftable, ftable_ld );
    //   printf("F @ %d %d %d (%d %d | %d %d)[ %d %d %d %d ] + | %d %d %d | = %lg * %lg * %lg * %lg \n", blockIdx.x, threadIdx.x, Of, idx_A, idx_B, idx_C, idx_D, ipa,ipb,ipc,ipd, n1, n2, n3, Zn, Kab, Kcd, F0 );
 
-      double Kfactor = Zn * Kab * Kcd;
+
 
    //   printf(" shifting A %lf %lf %lf and B %lf %lf %lf by %lf %lf %lf \n", 
    //       Ao[0], Ao[1], Ao[2], Bo[0], Bo[1], Bo[2], ABs[0], ABs[1], ABs[2] );
@@ -193,8 +192,6 @@ __device__ void compute_Fm_batched_single( int p,
 
    //   printf( " p: %d | P: [ %d ]  %lf %lf %lf \n", p, 0, P[0], P[1], P[2] );
    //   printf( " p: %d | Q: [ %d ]  %lf %lf %lf \n", p, 0, Q[0], Q[1], Q[2] );
-
-
 
       // TODO it may be good to split the calculation of T,R,PA,WP,QC,WQ,Kfac
       // and the calculation of Fm to separate kernels to limit reg pressure
