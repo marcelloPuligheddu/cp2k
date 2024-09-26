@@ -501,8 +501,8 @@ __device__ void execute_CP2S_gpu(
       double K = Ka[ a*nga + ipa ] * Kb[ b*ngb + ipb ] * Kc[ c*ngc + ipc ] * Kd[ d*ngd + ipd ];
 
       for( int i=my_vrr_rank; i < NcoAC; i+=vrr_team_size){
-        // must be atomic if different blocks share the ABCD array
-//        printf("CP2S %d %d adding %lg @ %p \n", blockIdx.x, threadIdx.x,  K * pr_mem[i], &sh_mem[ilabcd*hrr_blocksize+i] );
+        // must be atomic if different warps/blocks share the ABCD array
+//        printf("CP2S %d %d adding %lg %lg @ %p : %lg \n", blockIdx.x, threadIdx.x, K , pr_mem[i], &sh_mem[ilabcd*hrr_blocksize+i], sh_mem[ilabcd*hrr_blocksize+i] );
         atomicAdd( &sh_mem[ ilabcd*hrr_blocksize + i ] , K * pr_mem[i]);
 //        sh_mem[ ilabcd*hrr_blocksize + i ] += K * pr_mem[i];
       }
@@ -541,7 +541,7 @@ __global__ void compute_VRR_batched_gpu_low(
       const double* Kc = &data[idx_Kc];
       const double* Kd = &data[idx_Kd];
 
-       // Note: VRR does not need to know the cell, since it is already in the PA vectors     
+       // Note: VRR does not need to know the n1 n2 cell, since it is already in the PA vectors     
       unsigned int nla,nlb,nlc,nld,npa,npb,npc,npd;
       unsigned int n1,n2;
       decode_shell( nlabcd, &nla,&nlb,&nlc,&nld, &n1,&n2);
@@ -562,7 +562,7 @@ __global__ void compute_VRR_batched_gpu_low(
 
       for ( unsigned i = my_vrr_team; i < n_prm ;  i += num_vrr_teams ){
 
-         unsigned int Of   = ( (Ov+i) * Ng + n3 ) * F_size;
+         unsigned int Of   = ((Ov+i) * Ng + n3 ) * F_size;
          unsigned int ipzn = PMX[Ov+i];
          unsigned int ipa,ipb,ipc,ipd;
 
@@ -573,6 +573,8 @@ __global__ void compute_VRR_batched_gpu_low(
          for( int il=0; il < L+1; il++ ){
             pr_mem[il] = Fm[Of+il];
          }
+
+         if (pr_mem[0] < 1.e-20 ){ continue; }
 
          const double* PA = nullptr;
          const double* WP = nullptr;

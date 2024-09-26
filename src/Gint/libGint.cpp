@@ -745,19 +745,19 @@ void libGint::dispatch( bool skip_cpu ){
 
       std::string Lname = std::to_string(la) + "_" + std::to_string(lb) + "_" + std::to_string(lc) + "_" + std::to_string(ld);
 
-#pragma omp critical
-      {
-      cout << " L " << la << "" << lb << "" << lc << "" << ld << " | ";
-      cout << Nprm << " prms " << Ncells << " cells " << Nqrtt << " qrtts " << max_ncells << " Ng | " ;
-      cout << dis_timer.elapsedMilliseconds() << " | " ;
-//      cout << endl; cout.flush();
-      }
+//#pragma omp critical
+//      {
+//      cout << " L " << la << "" << lb << "" << lc << "" << ld << " | ";
+//      cout << Nprm << " prms " << Ncells << " cells " << Nqrtt << " qrtts " << max_ncells << " Ng | " ;
+//      cout << dis_timer.elapsedMilliseconds() << " | " ;
+//      }
 
       PUSH_RANGE(Lname.c_str(),3);
 
       plans.get( la, lb, lc, ld, &plan, &vrr_blocksize, &hrr_blocksize, &numV, &numVC, &numVCH );
 
-      t1 = t0; t0 = dis_timer.elapsedMilliseconds() ; cout << t0 - t1 << " " ;
+//      t1 = t0; t0 = dis_timer.elapsedMilliseconds() ; cout << t0 - t1 << " " ;
+
       // it is possible that we reach this point before the previous loop completed, so we sync
       CUDA_GPU_ERR_CHECK( cudaStreamSynchronize(cuda_stream) );
       
@@ -790,9 +790,9 @@ void libGint::dispatch( bool skip_cpu ){
          FVH_dev, OF_dev, PMX_dev, data_dev, Fm_dev, Nprm, labcd,
          periodic, cell_h_dev, neighs_dev, ftable_dev, ftable_ld,R_cut,C0_dev,ld_C0,potential_type,max_ncells );
 
-      CUDA_GPU_ERR_CHECK( cudaPeekAtLastError() );
-      CUDA_GPU_ERR_CHECK( cudaDeviceSynchronize() );
-      t1 = t0; t0 = dis_timer.elapsedMilliseconds() ; cout << t0 - t1 << " " ;
+//      CUDA_GPU_ERR_CHECK( cudaPeekAtLastError() );
+//      CUDA_GPU_ERR_CHECK( cudaDeviceSynchronize() );
+//      t1 = t0; t0 = dis_timer.elapsedMilliseconds() ; cout << t0 - t1 << " " ;
 
 //      std::vector<double> FM_on_cpu(Fm_size[L]);
 //      CUDA_GPU_ERR_CHECK( cudaMemcpy( FM_on_cpu.data(),  Fm_dev, sizeof(double)*(Fm_size[L]), cudaMemcpyDeviceToHost) );
@@ -815,9 +815,9 @@ void libGint::dispatch( bool skip_cpu ){
          Ncells, plan_dev, PMX_dev, FVH_dev, Fm_dev, data_dev,
          AC_dev, ABCD_dev, vrr_blocksize, hrr_blocksize, labcd, numV, numVC, max_ncells ); 
 
-      CUDA_GPU_ERR_CHECK( cudaPeekAtLastError() );
-      CUDA_GPU_ERR_CHECK( cudaDeviceSynchronize() );
-      t1 = t0; t0 = dis_timer.elapsedMilliseconds() ; cout << t0 - t1 << " " ;
+//      CUDA_GPU_ERR_CHECK( cudaPeekAtLastError() );
+//      CUDA_GPU_ERR_CHECK( cudaDeviceSynchronize() );
+//      t1 = t0; t0 = dis_timer.elapsedMilliseconds() ; cout << t0 - t1 << " " ;
 
 //      std::vector<double> AC_on_cpu(AC_size[L]);
 //      CUDA_GPU_ERR_CHECK( cudaMemcpy( AC_on_cpu.data(),  AC_dev, sizeof(double)*(AC_size[L]), cudaMemcpyDeviceToHost) );
@@ -852,9 +852,9 @@ void libGint::dispatch( bool skip_cpu ){
          periodic, cell_h_dev, neighs_dev,
          hrr_blocksize, Nc, numVC, numVCH );
 
-      CUDA_GPU_ERR_CHECK( cudaPeekAtLastError() );
-      CUDA_GPU_ERR_CHECK( cudaDeviceSynchronize() );
-      t1 = t0; t0 = dis_timer.elapsedMilliseconds() ; cout << t0 - t1 << " " ;
+//      CUDA_GPU_ERR_CHECK( cudaPeekAtLastError() );
+//      CUDA_GPU_ERR_CHECK( cudaDeviceSynchronize() );
+//      t1 = t0; t0 = dis_timer.elapsedMilliseconds() ; cout << t0 - t1 << " " ;
 
 //      std::vector<double> ABCD0_on_cpu(ABCD0_size[L]);
 //      CUDA_GPU_ERR_CHECK( cudaMemcpy( ABCD0_on_cpu.data(),  ABCD0_dev, sizeof(double)*(ABCD0_size[L]), cudaMemcpyDeviceToHost) );
@@ -871,10 +871,9 @@ void libGint::dispatch( bool skip_cpu ){
       // note: uses ABCD as a scratch space
       compute_SPH_batched_gpu_alt ( Nqrtt, la, lb, lc, ld, ABCD0_dev, SPHER_dev, ABCD_dev, C2S_dev, cublas_handle );
 
-      // same note as above
-      CUDA_GPU_ERR_CHECK( cudaPeekAtLastError() );
-      CUDA_GPU_ERR_CHECK( cudaDeviceSynchronize() );
-      t1 = t0; t0 = dis_timer.elapsedMilliseconds() ; cout << t0 - t1 << " " ;
+//      CUDA_GPU_ERR_CHECK( cudaPeekAtLastError() );
+//      CUDA_GPU_ERR_CHECK( cudaDeviceSynchronize() );
+//      t1 = t0; t0 = dis_timer.elapsedMilliseconds() ; cout << t0 - t1 << " " ;
 
 //      CUDA_GPU_ERR_CHECK( cudaPeekAtLastError() );
 //      CUDA_GPU_ERR_CHECK( cudaDeviceSynchronize() );
@@ -908,10 +907,10 @@ void libGint::dispatch( bool skip_cpu ){
       if ( nspin == 2 ){
          compute_KS_gpu<<<Nqrtt,128,0,cuda_stream>>>( Nqrtt, KS_dev, la,lb,lc,ld, P_b_dev, SPHER_dev, K_b_dev, data_dev, hf_fac );
       }
-      CUDA_GPU_ERR_CHECK( cudaPeekAtLastError() );
-      CUDA_GPU_ERR_CHECK( cudaDeviceSynchronize() );
-      t1 = t0; t0 = dis_timer.elapsedMilliseconds() ; cout << t0 - t1 << " " ;
-      cout << endl;
+//      CUDA_GPU_ERR_CHECK( cudaPeekAtLastError() );
+//      CUDA_GPU_ERR_CHECK( cudaDeviceSynchronize() );
+//      t1 = t0; t0 = dis_timer.elapsedMilliseconds() ; cout << t0 - t1 << " " ;
+//      cout << endl;
 
 //      compute_TRA_batched_gpu_low<<<Nshell,128>>>( Nshell, la, lb, lc, ld, TRA_dev, SPHER_dev, OUT_dev );
 
