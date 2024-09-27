@@ -270,7 +270,7 @@ CONTAINS
       real(dp) :: max_abs_delta_KS
       type(bra_t) :: bra, ket
       integer :: iatom_set, jatom_set, katom_set, latom_set, shared_dev
-      integer :: handle_c4g, handle_ufg
+!      integer :: handle_c4g, handle_ufg
       real(dp), dimension(:,:), allocatable :: cell_r
       real(dp), dimension(:), allocatable :: flat_gcc
       type(c_ptr), save :: libGint_handle
@@ -442,7 +442,9 @@ CONTAINS
 !$OMP         ene_x_bb_diag,act_atomic_block_offset,act_set_offset,j,handle_dist_ks,tmp_i8,tmp_i4,dft_control,&
 !$OMP         etmp,nkimages,img,bin,eps_scaling_str,eps_schwarz_min_str, &
 !$OMP         i,inla,nla,gcc,first_set_of_atom,max_abs_delta_KS, screened, &
-!$OMP         bra,ket,iatom_set,jatom_set,katom_set,latom_set,do_pbc,cell_r,flat_gcc,handle_c4g,handle_ufg) 
+!$OMP         bra,ket,iatom_set,jatom_set,katom_set,latom_set,do_pbc,cell_r,flat_gcc)
+
+! ,handle_c4g,handle_ufg) 
 
 
       ln_10 = LOG(10.0_dp)
@@ -1729,7 +1731,7 @@ CONTAINS
                               ! TODO a more modern approach in which the call is more like
                               ! call coulom_4_gpu( HFX_data, iset, jset, kset, lset, [bra, ket] )
 
-                              CALL timeset(routineN//"_c4g", handle_c4g)
+!                              CALL timeset(routineN//"_c4g", handle_c4g)
                               call coulomb_4_gpu( &
                                  libGint_handle, iatom_set, jatom_set, katom_set, latom_set, &
                                  ra, rb, rc, rd, &
@@ -1741,14 +1743,14 @@ CONTAINS
                                  tmp_screen_pgf1, tmp_screen_pgf2, &
                                  bra, ket, & 
                                  actual_x_data%neighbor_cells, cell, do_periodic, screened )
-                              call timestop(handle_c4g)
+!                              call timestop(handle_c4g)
 
                               if ( .not. screened ) then
 
                                  ! TODO a more modern approach in which the call is more like
                                  ! call update_fock_matrix_gpu( HFX_data, iset, jset, kset, lset )
 
-                                 CALL timeset(routineN//"_ufg", handle_ufg)
+!                                 CALL timeset(routineN//"_ufg", handle_ufg)
                                  call update_fock_matrix_gpu( &
                                     libGint_handle, symm_fac, &
                                     iatom, jatom, katom, latom, &
@@ -1759,7 +1761,7 @@ CONTAINS
                                     la_min(iset), la_max(iset), lb_min(jset), lb_max(jset), &
                                     lc_min(kset), lc_max(kset), ld_min(lset), ld_max(lset), &
                                     nsgfl_a, nsgfl_b, nsgfl_c, nsgfl_d)
-                                 call timestop(handle_ufg)
+!                                 call timestop(handle_ufg)
 
                               end if
                            end if
