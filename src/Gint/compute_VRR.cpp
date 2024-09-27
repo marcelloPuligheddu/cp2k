@@ -541,15 +541,16 @@ __global__ void compute_VRR_batched_gpu_low(
       const double* Kc = &data[idx_Kc];
       const double* Kd = &data[idx_Kd];
 
-       // Note: VRR does not need to know the n1 n2 cell, since it is already in the PA vectors     
+       // Note: VRR does not need to know the n1 n2 cell, since it is already in the PA vectors
+       // so we use npa and npb as dummy
       unsigned int nla,nlb,nlc,nld,npa,npb,npc,npd;
-      unsigned int n1,n2;
-      decode_shell( nlabcd, &nla,&nlb,&nlc,&nld, &n1,&n2);
+      decode_shell( nlabcd, &nla,&nlb,&nlc,&nld, &npa,&npb);
       decode4( npabcd, &npa,&npb,&npc,&npd );
 
       double* sh_mem = &ABCD[ Og * hrr_blocksize ];
 
-      int best_vrr_team_size = max( 1, (L*L+1) / n_prm );
+      // arguable
+      const int best_vrr_team_size = (L+1) * (L+2) ;
       int vrr_team_size = blockDim.x;
       while ( vrr_team_size > best_vrr_team_size ){ vrr_team_size /= 2; }
 

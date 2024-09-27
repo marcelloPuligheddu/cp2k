@@ -122,16 +122,22 @@ void libGint::set_Atom_L( int i, int l_, int nl_, double* K_ ){
 }
 
 void libGint::add_prm( const int ipa, const int ipb, const int ipc, const int ipd ){
+
 //   cout << "|" << ipa << ipb << ipc << ipd << '|' << n3 ;
 //   cout.flush();
 //
-   prm_timer.start();
+
+//   prm_timer.start();
+
    unsigned int piabcd = encode4(ipa,ipb,ipc,ipd);
    prm_tmp_list[ n_prm ] = piabcd ;
    n_prm++;
-   prm_timer.stop();
-   prm_ms += prm_timer.elapsedMilliseconds(); 
-   prm_cnt++;
+
+   // prm_tmp_list[ n_prm ] = encode4(ipa,ipb,ipc,ipd); n_prm++;
+
+//   prm_timer.stop();
+//   prm_ms += prm_timer.elapsedMilliseconds(); 
+//   prm_cnt++;
 }
 
 void libGint::add_shell ( int i, int j, int k, int l, int n1, int n2 ){
@@ -143,7 +149,7 @@ void libGint::add_shell ( int i, int j, int k, int l, int n1, int n2 ){
       return;
    }
 
-   shl_timer.start();
+//   shl_timer.start();
 
    int nnla = all_l[i].size();
    int nnlb = all_l[j].size();
@@ -232,63 +238,35 @@ void libGint::add_shell ( int i, int j, int k, int l, int n1, int n2 ){
                offset_F[L] ++ ;
 
                encoded_moments.insert(L);
-}}}}
-   shl_timer.stop();
-   shl_ms += shl_timer.elapsedMilliseconds(); 
-   shl_cnt++;
-}
-
-void libGint::add_cell() {
-
-//   cout << " TH " << my_thr << " Adding cell with " << n_prm << endl;
-   if (n_prm == 0){
-      return;
-   }
+   }}}}
 
    cell_in_set++;
    n_prm = 0;
 
+//   shl_timer.stop();
+//   shl_ms += shl_timer.elapsedMilliseconds(); 
+//   shl_cnt++;
+
+
 }
 
-int libGint::add_qrt( int la, int lb, int lc, int ld, int nla, int nlb, int nlc, int nld ){
+void libGint::add_cell() {}
 
-   qrt_timer.start();
+void libGint::add_qrt( int la, int lb, int lc, int ld, int nla, int nlb, int nlc, int nld ){
+
+//   qrt_timer.start();
 
    unsigned int nlabcd = nla*nlb*nlc*nld;
    unsigned int L = encodeL(la,lb,lc,ld);
-
-//   unsigned int SPH_idxs[SPH_SIZE] = {0} ;
-//   SPH_idxs[SPH_OFFSET_Q     ] = offset_Q[L];
-//   SPH_idxs[SPH_OFFSET_NLABCD] = nlabcd;
-//   SPH[L].insert(SPH[L].end(), SPH_idxs, SPH_idxs+SPH_SIZE);
-
-//   unsigned int nla_as_uint = (unsigned int) nla ;
-//   unsigned int nlb_as_uint = (unsigned int) nlb ;
-//   unsigned int nlc_as_uint = (unsigned int) nlc ;
-//   unsigned int nld_as_uint = (unsigned int) nld ;
-//   unsigned int TRA_idxs[TRA_SIZE] = {0};
-//   TRA_idxs[TRA_OFFSET_Q   ] = offset_Q[L];
-//   TRA_idxs[TRA_OFFSET_NLA ] = nla_as_uint;
-//   TRA_idxs[TRA_OFFSET_NLB ] = nlb_as_uint;
-//   TRA_idxs[TRA_OFFSET_NLC ] = nlc_as_uint;
-//   TRA_idxs[TRA_OFFSET_NLD ] = nld_as_uint;
-//   TRA_idxs[TRA_OFFSET_DEST] = dest;
-//   TRA[L].insert(TRA[L].end(), TRA_idxs, TRA_idxs+TRA_SIZE );
-
    ABCD0_size[L] += compute_Nc(la,lb,lc,ld) * nlabcd ;
    SPHER_size[L] += compute_Ns(la,lb,lc,ld) * nlabcd ;
-//   OUT_size[L] += compute_Ns(la,lb,lc,ld) * nlabcd ; 
    offset_Q[L] += nlabcd ;
    offset_T[L] += 1 ;
 
-//   unsigned int prev_dest = dest;
-//   dest += compute_Ns(la,lb,lc,ld) * nlabcd ;
-//   return prev_dest;
-//
-   qrt_timer.stop();
-   qrt_ms += qrt_timer.elapsedMilliseconds(); 
-   qrt_cnt++;
-   return 0;
+//   qrt_timer.stop();
+//   qrt_ms += qrt_timer.elapsedMilliseconds(); 
+//   qrt_cnt++;
+
 }
 
 void libGint::add_qrtt(
@@ -299,7 +277,7 @@ void libGint::add_qrtt(
       unsigned int offset_bc_L_set, unsigned int offset_bd_L_set, 
       bool Tac, bool Tad, bool Tbc, bool Tbd ){ 
 
-   qrtt_timer.start();
+//   qrtt_timer.start();
 
    // The symm_fac can be only 2,1,0.5 or 0.25 (or 0 in dev version). We assign them to 0,1,2 and 3 (and 4) respectively
    // We encode it here, decode it inside compute_KS
@@ -331,13 +309,15 @@ void libGint::add_qrtt(
    KS[L].insert( KS[L].end(), KS_idxs, KS_idxs+KS_SIZE );
 
 //   cout << " KS done " << endl ; cout.flush();
-   qrtt_timer.stop();
-   qrtt_ms += qrtt_timer.elapsedMilliseconds(); 
-   qrtt_cnt++;
+//   qrtt_timer.stop();
+//   qrtt_ms += qrtt_timer.elapsedMilliseconds(); 
+//   qrtt_cnt++;
 }
 
 void libGint::add_set(){
-   set_timer.start();
+   
+//   set_timer.start();
+
    prm_in_set = 0;
    n_set += 1;
 
@@ -352,9 +332,10 @@ void libGint::add_set(){
          set_timer.start();
       }
    }
-   set_timer.stop();
-   set_ms += set_timer.elapsedMilliseconds();
-   set_cnt++;
+
+//   set_timer.stop();
+//   set_ms += set_timer.elapsedMilliseconds();
+//   set_cnt++;
 }
 
 double Lcorrection(int L){
@@ -606,6 +587,7 @@ void libGint::reset_indices(){
 }
 
 void libGint::dispatch( bool skip_cpu ){
+
    dis_timer.start();
 //   #pragma omp critical
 //   { cout << "Dispatch on stream " << cuda_stream << " @ " << &cuda_stream << endl; cout.flush(); }
@@ -745,18 +727,19 @@ void libGint::dispatch( bool skip_cpu ){
 
       std::string Lname = std::to_string(la) + "_" + std::to_string(lb) + "_" + std::to_string(lc) + "_" + std::to_string(ld);
 
-//#pragma omp critical
-//      {
-//      cout << " L " << la << "" << lb << "" << lc << "" << ld << " | ";
-//      cout << Nprm << " prms " << Ncells << " cells " << Nqrtt << " qrtts " << max_ncells << " Ng | " ;
-//      cout << dis_timer.elapsedMilliseconds() << " | " ;
-//      }
+#pragma omp critical
+      {
+      cout << " L " << la << "" << lb << "" << lc << "" << ld << " | ";
+      cout << Nprm << " prms " << Ncells << " cells " << Nqrtt << " qrtts " << max_ncells << " Ng | " ;
+      cout << Fm_size[L] << " " << AC_size[L] << " " << ABCD_size[L] << " " << ABCD0_size[L] << " " << SPHER_size[L] << " | " ;
+      cout << dis_timer.elapsedMilliseconds() << " | " ;
+      }
 
       PUSH_RANGE(Lname.c_str(),3);
 
       plans.get( la, lb, lc, ld, &plan, &vrr_blocksize, &hrr_blocksize, &numV, &numVC, &numVCH );
 
-//      t1 = t0; t0 = dis_timer.elapsedMilliseconds() ; cout << t0 - t1 << " " ;
+      t1 = t0; t0 = dis_timer.elapsedMilliseconds() ; cout << t0 - t1 << " " ;
 
       // it is possible that we reach this point before the previous loop completed, so we sync
       CUDA_GPU_ERR_CHECK( cudaStreamSynchronize(cuda_stream) );
@@ -790,9 +773,9 @@ void libGint::dispatch( bool skip_cpu ){
          FVH_dev, OF_dev, PMX_dev, data_dev, Fm_dev, Nprm, labcd,
          periodic, cell_h_dev, neighs_dev, ftable_dev, ftable_ld,R_cut,C0_dev,ld_C0,potential_type,max_ncells );
 
-//      CUDA_GPU_ERR_CHECK( cudaPeekAtLastError() );
-//      CUDA_GPU_ERR_CHECK( cudaDeviceSynchronize() );
-//      t1 = t0; t0 = dis_timer.elapsedMilliseconds() ; cout << t0 - t1 << " " ;
+      CUDA_GPU_ERR_CHECK( cudaPeekAtLastError() );
+      CUDA_GPU_ERR_CHECK( cudaDeviceSynchronize() );
+      t1 = t0; t0 = dis_timer.elapsedMilliseconds() ; cout << t0 - t1 << " " ;
 
 //      std::vector<double> FM_on_cpu(Fm_size[L]);
 //      CUDA_GPU_ERR_CHECK( cudaMemcpy( FM_on_cpu.data(),  Fm_dev, sizeof(double)*(Fm_size[L]), cudaMemcpyDeviceToHost) );
@@ -811,13 +794,13 @@ void libGint::dispatch( bool skip_cpu ){
 //      CUDA_GPU_ERR_CHECK( cudaPeekAtLastError() );
 //      CUDA_GPU_ERR_CHECK( cudaDeviceSynchronize() );
 
-      compute_VRR_batched_gpu_low<<<Ncells*max_ncells,32,0,cuda_stream>>>(
+      compute_VRR_batched_gpu_low<<<Ncells*max_ncells,128,0,cuda_stream>>>(
          Ncells, plan_dev, PMX_dev, FVH_dev, Fm_dev, data_dev,
          AC_dev, ABCD_dev, vrr_blocksize, hrr_blocksize, labcd, numV, numVC, max_ncells ); 
 
-//      CUDA_GPU_ERR_CHECK( cudaPeekAtLastError() );
-//      CUDA_GPU_ERR_CHECK( cudaDeviceSynchronize() );
-//      t1 = t0; t0 = dis_timer.elapsedMilliseconds() ; cout << t0 - t1 << " " ;
+      CUDA_GPU_ERR_CHECK( cudaPeekAtLastError() );
+      CUDA_GPU_ERR_CHECK( cudaDeviceSynchronize() );
+      t1 = t0; t0 = dis_timer.elapsedMilliseconds() ; cout << t0 - t1 << " " ;
 
 //      std::vector<double> AC_on_cpu(AC_size[L]);
 //      CUDA_GPU_ERR_CHECK( cudaMemcpy( AC_on_cpu.data(),  AC_dev, sizeof(double)*(AC_size[L]), cudaMemcpyDeviceToHost) );
@@ -852,9 +835,9 @@ void libGint::dispatch( bool skip_cpu ){
          periodic, cell_h_dev, neighs_dev,
          hrr_blocksize, Nc, numVC, numVCH );
 
-//      CUDA_GPU_ERR_CHECK( cudaPeekAtLastError() );
-//      CUDA_GPU_ERR_CHECK( cudaDeviceSynchronize() );
-//      t1 = t0; t0 = dis_timer.elapsedMilliseconds() ; cout << t0 - t1 << " " ;
+      CUDA_GPU_ERR_CHECK( cudaPeekAtLastError() );
+      CUDA_GPU_ERR_CHECK( cudaDeviceSynchronize() );
+      t1 = t0; t0 = dis_timer.elapsedMilliseconds() ; cout << t0 - t1 << " " ;
 
 //      std::vector<double> ABCD0_on_cpu(ABCD0_size[L]);
 //      CUDA_GPU_ERR_CHECK( cudaMemcpy( ABCD0_on_cpu.data(),  ABCD0_dev, sizeof(double)*(ABCD0_size[L]), cudaMemcpyDeviceToHost) );
@@ -871,9 +854,9 @@ void libGint::dispatch( bool skip_cpu ){
       // note: uses ABCD as a scratch space
       compute_SPH_batched_gpu_alt ( Nqrtt, la, lb, lc, ld, ABCD0_dev, SPHER_dev, ABCD_dev, C2S_dev, cublas_handle );
 
-//      CUDA_GPU_ERR_CHECK( cudaPeekAtLastError() );
-//      CUDA_GPU_ERR_CHECK( cudaDeviceSynchronize() );
-//      t1 = t0; t0 = dis_timer.elapsedMilliseconds() ; cout << t0 - t1 << " " ;
+      CUDA_GPU_ERR_CHECK( cudaPeekAtLastError() );
+      CUDA_GPU_ERR_CHECK( cudaDeviceSynchronize() );
+      t1 = t0; t0 = dis_timer.elapsedMilliseconds() ; cout << t0 - t1 << " " ;
 
 //      CUDA_GPU_ERR_CHECK( cudaPeekAtLastError() );
 //      CUDA_GPU_ERR_CHECK( cudaDeviceSynchronize() );
@@ -884,19 +867,11 @@ void libGint::dispatch( bool skip_cpu ){
 //         cout << ifm << " " << std::setprecision(16) << SPHER_on_cpu[ifm] << endl;
 //      } cout << endl;
 
-//      double corr = Lcorrection(la)*Lcorrection(lb)*Lcorrection(lc)*Lcorrection(ld);
-//      int corrBS = 64;
-//      int corrNB = (Nqrtt*Ns+corrBS-1)/corrBS;
-//      apply_correction<<<corrNB,corrBS>>>( Nqrtt*Ns, SPHER_dev, corr );
-//      CUDA_GPU_ERR_CHECK( cudaPeekAtLastError() );
-//      CUDA_GPU_ERR_CHECK( cudaDeviceSynchronize() );
-
 //      #pragma omp critical
 //      {
 //         cout << " Preparing to compute KS " << Nqrtt << " " << KS_dev << " [" << KS[L].size() << "] "
-//                                                             << P_a_dev << " [" << FP_size      << " ]" 
-//                                                             << SPHER_dev << " [" << SPHER_size[L] << "]"
-//                                                             << K_a_dev << " " << hf_fac << " on stream " << cuda_stream << endl;
+//              << P_a_dev << " [" << FP_size      << " ]" << SPHER_dev << " [" << SPHER_size[L] << "]"
+//              << K_a_dev << " " << hf_fac << " on stream " << cuda_stream << endl;
 //
 //         for (int q=0; q < KS[L].size() ; q++ ){
 //            cout << KS[L][q] << "  ";
@@ -907,10 +882,11 @@ void libGint::dispatch( bool skip_cpu ){
       if ( nspin == 2 ){
          compute_KS_gpu<<<Nqrtt,128,0,cuda_stream>>>( Nqrtt, KS_dev, la,lb,lc,ld, P_b_dev, SPHER_dev, K_b_dev, data_dev, hf_fac );
       }
-//      CUDA_GPU_ERR_CHECK( cudaPeekAtLastError() );
-//      CUDA_GPU_ERR_CHECK( cudaDeviceSynchronize() );
-//      t1 = t0; t0 = dis_timer.elapsedMilliseconds() ; cout << t0 - t1 << " " ;
-//      cout << endl;
+
+      CUDA_GPU_ERR_CHECK( cudaPeekAtLastError() );
+      CUDA_GPU_ERR_CHECK( cudaDeviceSynchronize() );
+      t1 = t0; t0 = dis_timer.elapsedMilliseconds() ; cout << t0 - t1 << " " ;
+      cout << endl;
 
 //      compute_TRA_batched_gpu_low<<<Nshell,128>>>( Nshell, la, lb, lc, ld, TRA_dev, SPHER_dev, OUT_dev );
 

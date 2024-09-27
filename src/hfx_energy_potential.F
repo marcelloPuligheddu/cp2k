@@ -270,6 +270,7 @@ CONTAINS
       real(dp) :: max_abs_delta_KS
       type(bra_t) :: bra, ket
       integer :: iatom_set, jatom_set, katom_set, latom_set, shared_dev
+      integer :: handle_c4g, handle_ufg
       real(dp), dimension(:,:), allocatable :: cell_r
       real(dp), dimension(:), allocatable :: flat_gcc
       type(c_ptr), save :: libGint_handle
@@ -441,7 +442,7 @@ CONTAINS
 !$OMP         ene_x_bb_diag,act_atomic_block_offset,act_set_offset,j,handle_dist_ks,tmp_i8,tmp_i4,dft_control,&
 !$OMP         etmp,nkimages,img,bin,eps_scaling_str,eps_schwarz_min_str, &
 !$OMP         i,inla,nla,gcc,first_set_of_atom,max_abs_delta_KS, screened, &
-!$OMP         bra,ket,iatom_set,jatom_set,katom_set,latom_set,do_pbc,cell_r,flat_gcc) 
+!$OMP         bra,ket,iatom_set,jatom_set,katom_set,latom_set,do_pbc,cell_r,flat_gcc,handle_c4g,handle_ufg) 
 
 
       ln_10 = LOG(10.0_dp)
@@ -1254,7 +1255,9 @@ CONTAINS
       bins_left = .TRUE.
       do_it = .TRUE.
       bin = 0
+      ! Main cycle starts here
       DO WHILE (bins_left)
+         ! Check if this thread can run this bin
          IF (.NOT. do_dynamic_load_balancing) THEN
             bin = bin + 1
             IF (bin > my_bin_size) THEN
@@ -1290,11 +1293,12 @@ CONTAINS
             END IF
 !$OMP END CRITICAL(hfxenergy_critical)
          END IF
-
          IF (.NOT. do_it) CYCLE
+
 !$OMP MASTER
          CALL timeset(routineN//"_bin", handle_bin)
 !$OMP END MASTER
+
          bintime_start = m_walltime()
          my_istart = distribution_energy%istart
          my_current_counter = 0
@@ -1677,6 +1681,7 @@ CONTAINS
                         END IF
                         !! Calculate integrals if we run out of buffer or the geometry did change
                         IF (my_geo_change .OR. buffer_overflow) THEN
+
                            max_contraction_val = max_contraction(iset, iatom)* &
                                                  max_contraction(jset, jatom)* &
                                                  max_contraction(kset, katom)* &
@@ -1686,7 +1691,8 @@ CONTAINS
                            tmp_screen_pgf1 => screen_coeffs_pgf(:, :, jset, iset, jkind, ikind)
                            tmp_screen_pgf2 => screen_coeffs_pgf(:, :, lset, kset, lkind, kkind)
 
-                           CALL coulomb4(private_lib, ra, rb, rc, rd, npgfa(iset), npgfb(jset), npgfc(kset), npgfd(lset), &
+                           if ( use_libint ) then
+                              CALL coulomb4(private_lib, ra, rb, rc, rd, npgfa(iset), npgfb(jset), npgfc(kset), npgfd(lset), &
                                          la_min(iset), la_max(iset), lb_min(jset), lb_max(jset), &
                                          lc_min(kset), lc_max(kset), ld_min(lset), ld_max(lset), &
                                          nsgfa(iset), nsgfb(jset), nsgfc(kset), nsgfd(lset), &
@@ -1712,8 +1718,7 @@ CONTAINS
                                          sphi_d_ext_set, &
                                          ee_work, ee_work2, ee_buffer1, ee_buffer2, ee_primitives_tmp, &
                                          nimages, do_periodic, p_work)
-
-                           !!!
+                           end if
 
                            if ( use_libGint ) then
                               iatom_set = first_set_of_atom(iatom)+iset-2
@@ -1724,25 +1729,26 @@ CONTAINS
                               ! TODO a more modern approach in which the call is more like
                               ! call coulom_4_gpu( HFX_data, iset, jset, kset, lset, [bra, ket] )
 
+                              CALL timeset(routineN//"_c4g", handle_c4g)
                               call coulomb_4_gpu( &
                                  libGint_handle, iatom_set, jatom_set, katom_set, latom_set, &
                                  ra, rb, rc, rd, &
                                  npgfa(iset), npgfb(jset), npgfc(kset), npgfd(lset), &
-                                 zeta(1:npgfa(iset), iset), zetb(1:npgfb(jset), jset), &
-                                 zetc(1:npgfc(kset), kset), zetd(1:npgfd(lset), lset), &
                                  potential_parameter, &
                                  screen_coeffs_set(jset, iset, jkind, ikind)%x, &
                                  screen_coeffs_set(lset, kset, lkind, kkind)%x, &
                                  log10_pmax, log10_eps_schwarz, &
-                                 tmp_R_1, tmp_R_2, tmp_screen_pgf1, tmp_screen_pgf2, &
+                                 tmp_screen_pgf1, tmp_screen_pgf2, &
                                  bra, ket, & 
                                  actual_x_data%neighbor_cells, cell, do_periodic, screened )
+                              call timestop(handle_c4g)
 
                               if ( .not. screened ) then
 
                                  ! TODO a more modern approach in which the call is more like
                                  ! call update_fock_matrix_gpu( HFX_data, iset, jset, kset, lset )
 
+                                 CALL timeset(routineN//"_ufg", handle_ufg)
                                  call update_fock_matrix_gpu( &
                                     libGint_handle, symm_fac, &
                                     iatom, jatom, katom, latom, &
@@ -1753,6 +1759,7 @@ CONTAINS
                                     la_min(iset), la_max(iset), lb_min(jset), lb_max(jset), &
                                     lc_min(kset), lc_max(kset), ld_min(lset), ld_max(lset), &
                                     nsgfl_a, nsgfl_b, nsgfl_c, nsgfl_d)
+                                 call timestop(handle_ufg)
 
                               end if
                            end if
@@ -2445,26 +2452,22 @@ CONTAINS
 ! possible if we remove all mixed-bra-ket screening and the prm screening 
    subroutine coulomb_4_gpu(libGint_handle, iatom_set, jatom_set, katom_set, latom_set, &
                        ra, rb, rc, rd, npgfa, npgfb, npgfc, npgfd, &
-                       zeta, zetb, zetc, zetd, potential_parameter, &
+                       potential_parameter, &
                        screen1, screen2, log10_pmax, log10_eps_schwarz, &
-                       R1_pgf, R2_pgf, pgf1, pgf2, &
+                       pgf1, pgf2, &
                        bra, ket, &
                        neighbor_cells, cell, do_periodic, screened )
 
       type(c_ptr) :: libGint_handle
       REAL(dp), INTENT(IN)                               :: ra(3), rb(3), rc(3), rd(3)
       INTEGER, INTENT(IN) :: npgfa, npgfb, npgfc, npgfd 
-      REAL(dp), DIMENSION(1:npgfa), INTENT(IN)           :: zeta
-      REAL(dp), DIMENSION(1:npgfb), INTENT(IN)           :: zetb
-      REAL(dp), DIMENSION(1:npgfc), INTENT(IN)           :: zetc
-      REAL(dp), DIMENSION(1:npgfd), INTENT(IN)           :: zetd
       TYPE(hfx_potential_type)                           :: potential_parameter
       TYPE(hfx_cell_type), DIMENSION(:), POINTER         :: neighbor_cells
       REAL(dp), INTENT(IN)                               :: screen1(2), screen2(2)
       TYPE(cell_type), POINTER                           :: cell
       REAL(dp), INTENT(IN)                               :: log10_pmax, log10_eps_schwarz
       TYPE(hfx_screen_coeff_type), DIMENSION(:, :), &
-         POINTER                                         :: R1_pgf, R2_pgf, pgf1, pgf2
+         POINTER                                         :: pgf1, pgf2
       TYPE(bra_t)                                        :: bra, ket
       LOGICAL, INTENT(IN)                                :: do_periodic
       logical, intent(out) :: screened
@@ -2477,19 +2480,17 @@ CONTAINS
 
       integer :: nelements_ij, nelements_kl
 
-      integer :: n1b, n2b
-
       cell = cell
       potential_parameter = potential_parameter
 
       screened = .true.
 
-      CALL build_pair_list_pbc_pgf( npgfa, npgfb, bra, zeta, zetb, screen1, screen2, &
-                               pgf1, R1_pgf, log10_pmax, log10_eps_schwarz, ra, rb, &
+      CALL build_pair_list_pbc_pgf( npgfa, npgfb, bra, screen1, screen2, &
+                               pgf1, log10_pmax, log10_eps_schwarz, ra, rb, &
                                nelements_ij, neighbor_cells, do_periodic )
 
-      CALL build_pair_list_pbc_pgf( npgfc, npgfd, ket, zetc, zetd, screen2, screen1, &
-                               pgf2, R2_pgf, log10_pmax, log10_eps_schwarz, rc, rd, &
+      CALL build_pair_list_pbc_pgf( npgfc, npgfd, ket, screen2, screen1, &
+                               pgf2, log10_pmax, log10_eps_schwarz, rc, rd, &
                                nelements_kl, neighbor_cells, do_periodic)
 
       ! Note: we use 3 numbers n1 n2 and n3 as indices for the lattice traslantion vectors
@@ -2520,63 +2521,20 @@ CONTAINS
 
                ipgf = bra%pgf_idx(1, idx_ij)
                jpgf = bra%pgf_idx(2, idx_ij)
-               n1b  = bra%pgf_idx(3, idx_ij)
+!               n1b  = bra%pgf_idx(3, idx_ij)
                pgf_max_1 = bra%pgf_scr(1, idx_ij)
-!               R1   = bra%pgf_scr(2,idx_ij)
-!               P(1) = bra%pgf_scr(3,idx_ij)
-!               P(2) = bra%pgf_scr(4,idx_ij)
-!               P(3) = bra%pgf_scr(5,idx_ij)
 
                do idx_kl = o_kl+1, o_kl+n_kl
                   kpgf = ket%pgf_idx(1,idx_kl)
                   lpgf = ket%pgf_idx(2,idx_kl)
-                  n2b  = ket%pgf_idx(3,idx_kl)
+!                  n2b  = ket%pgf_idx(3,idx_kl)
                   pgf_max_2 = ket%pgf_scr(1,idx_kl)
 
                   IF (pgf_max_1 + pgf_max_2 + log10_pmax < log10_eps_schwarz) CYCLE
 
-!                  R2   = ket%pgf_scr(2,idx_kl)
-!                  Q(1) = ket%pgf_scr(3,idx_kl)
-!                  Q(2) = ket%pgf_scr(4,idx_kl)
-!                  Q(3) = ket%pgf_scr(5,idx_kl)
-                  ! Overall, the next 4 lines shift Q
-                  ! by a lattice vector called shift
-                  ! so that when n3.ijk = (000), 
-                  ! PQ is at the minimum image
-                  ! original value of PQ
-!                  PQo = P-Q
-                  ! minimum value of PQ
-!                  PQm = my_pbc(PQo,cell)
-                  ! note shift must be a lattice translation vectors
-!                  shift = - PQm + PQo
-                  ! shifted Q
-!                  Qs = Q + shift
-                  ! Note: we have already done the same for the AB and CD pair,
-                  ! it is done in the build_pair_list subroutine
-
                   call libGint_add_prm( libGint_handle, ipgf-1,jpgf-1,kpgf-1,lpgf-1 )
                   cell_was_screened = .false.
 
-                  ! BIG TODO move this loop to GPU
-!                  do n3 = 1, SIZE(neighbor_cells)
-!                     Qp = Qs + neighbor_cells(n3)%cell_r(:)
-!                     rpq2 = (P(1) - Qp(1))**2 + (P(2) - Qp(2))**2 + (P(3) - Qp(3))**2
-!                     IF ( potential_parameter%potential_type == do_potential_truncated .OR. &
-!                          potential_parameter%potential_type == do_potential_short .OR. &
-!                          potential_parameter%potential_type == do_potential_mix_cl_trunc) THEN
-!                        IF (rpq2 > (R1 + R2 + potential_parameter%cutoff_radius)**2) CYCLE
-!!                        write (*,*) " Adding " , ipgf-1,jpgf-1,kpgf-1,lpgf-1, n1-1, n2-1, n3-1, "->", P, Qp
-!!                        write (*,*)  "Adding", n1-1, n2-1,n3-1, "->", P(1), Qp(1), rpq2
-!                     END IF
-!
-!                     IF (potential_parameter%potential_type == do_potential_TShPSC) THEN
-!                        IF (rpq2 > (R1 + R2 + potential_parameter%cutoff_radius*2.0_dp)**2) CYCLE
-!                     END IF
-!
-!                     call libGint_add_prm( libGint_handle, ipgf-1,jpgf-1,kpgf-1,lpgf-1 )
-!                     cell_was_screened = .false.
-!
-!                  end do
                end do ! ket pgf
             end do ! bra pgf
 
@@ -2585,7 +2543,6 @@ CONTAINS
                call libgint_add_shell( libGint_handle, iatom_set, jatom_set, katom_set, latom_set, n1-1, n2-1 )
                screened = .false.
             end if
-            call libGint_add_cell( libGint_handle ) ! ??
 
          end do ! ket n2
       end do ! bra n1
@@ -2620,6 +2577,7 @@ CONTAINS
    ! (2) This matrix is contigous in memory, in fortran column major order
    ! (3) This matrix is symmetric. 
    ! (4) The matrix is block sparse triangular, only the lower part is valid
+
       type(c_ptr) :: libGint_handle
       real(dp) :: symm_fac
       integer :: iatom, jatom, katom, latom
@@ -2678,12 +2636,14 @@ CONTAINS
         ld_ac_set = nsgfc
         Tac = .true.
       end if
+
 !!$omp critical
 !      write (*,*) " Atoms ", iatom,jatom,katom,latom,iset,jset,kset,lset
 !      write (*,*) " General Offsets: " , atomic_offset_ac, atomic_offset_ad, atomic_offset_bc, atomic_offset_bd
 !      write (*,*) "                  " , offset_ac_set, offset_ad_set, offset_bc_set, offset_bd_set
 !      write (*,*) "     ->           " , offset_ac_L_set, offset_ad_L_set, offset_bc_L_set, offset_bd_L_set
 !!$omp end critical
+      if ( symm_fac < 0 ) s_offset_a_l = 0 
       s_offset_a_l = 0
       DO la = la_min, la_max
          nla = nsgfl_a(la,iset)
@@ -2753,7 +2713,7 @@ CONTAINS
          s_offset_a_l = s_offset_a_l + nla * ( 2 * la + 1 )
       end do
 
-      call libgint_add_set( libGint_handle )
+!      call libgint_add_set( libGint_handle )
    end subroutine update_fock_matrix_gpu
 
 

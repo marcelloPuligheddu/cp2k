@@ -68,17 +68,16 @@ CONTAINS
    end subroutine allocate_Bra
 
 
-   SUBROUTINE build_pair_list_pbc_pgf(npgfa, npgfb, bra, zeta, zetb, screen1, screen2, pgf, R_pgf, &
+   SUBROUTINE build_pair_list_pbc_pgf(npgfa, npgfb, bra, screen1, screen2, pgf, &
                                 log10_pmax, log10_eps_schwarz, ra, rb, nelements, &
                                 neighbor_cells, do_periodic)
 
       INTEGER, INTENT(IN)                                :: npgfa, npgfb
       TYPE(bra_t)                                        :: bra
-      REAL(dp), DIMENSION(1:npgfa), INTENT(IN)           :: zeta
-      REAL(dp), DIMENSION(1:npgfb), INTENT(IN)           :: zetb
+
+
       REAL(dp), INTENT(IN)                               :: screen1(2), screen2(2)
-      TYPE(hfx_screen_coeff_type), DIMENSION(:, :), &
-         POINTER                                         :: pgf, R_pgf
+      TYPE(hfx_screen_coeff_type), DIMENSION(:,:), POINTER :: pgf
       REAL(dp), INTENT(IN)                               :: log10_pmax, log10_eps_schwarz, ra(3), &
                                                             rb(3)
       INTEGER, INTENT(OUT)                               :: nelements
@@ -86,10 +85,9 @@ CONTAINS
       LOGICAL, INTENT(IN)                                :: do_periodic
 
       INTEGER                                            :: ipgf, jpgf
-      REAL(dp)                                           :: AB(3), im_B(3), pgf_max, rab2, Zeta1, &
-                                                            Zeta_A, Zeta_B, ZetaInv, P(3), R
+      REAL(dp)                                           :: AB(3), im_B(3), pgf_max, rab2! , &
+                                                            ! Zeta1, Zeta_A, Zeta_B, ZetaInvi , P(3), R
       integer :: element_idx, element_off, element_cnt, cell_idx, cell_cnt 
-
 
 
       element_idx = 0
@@ -113,7 +111,7 @@ CONTAINS
          DO ipgf = 1, npgfa
             DO jpgf = 1, npgfb
 
-               ! Second screening on this actual AB pair and the same CD from before
+               ! Second screening on this actual AB pair and the most diffuse CD from before
                pgf_max = pgf(jpgf, ipgf)%x(1)*rab2 + pgf(jpgf, ipgf)%x(2)
                IF (pgf_max + screen2(2) + log10_pmax < log10_eps_schwarz) CYCLE
                ! This pair passed screening. Add it to the bra. 
@@ -121,14 +119,15 @@ CONTAINS
                element_idx = element_idx + 1
                bra%pgf_idx(:,element_idx) = (/ ipgf, jpgf, cell_idx /)
 
-               R = MAX(0.0_dp, R_pgf(jpgf, ipgf)%x(1)*rab2 + R_pgf(jpgf, ipgf)%x(2))
-               Zeta_A = zeta(ipgf)
-               Zeta_B = zetb(jpgf)
-               Zeta1 = Zeta_A + Zeta_B
-               ZetaInv = 1.0_dp/Zeta1
-               P = (Zeta_A*ra + Zeta_B*im_B)*ZetaInv
+!               R = MAX(0.0_dp, R_pgf(jpgf, ipgf)%x(1)*rab2 + R_pgf(jpgf, ipgf)%x(2))
+!               Zeta_A = zeta(ipgf)
+!               Zeta_B = zetb(jpgf)
+!               Zeta1 = Zeta_A + Zeta_B
+!               ZetaInv = 1.0_dp/Zeta1
+!               P = (Zeta_A*ra + Zeta_B*im_B)*ZetaInv
+!               bra%pgf_scr(:,element_idx) = (/ pgf_max, R, P(1), P(2), P(3) /)
 
-               bra%pgf_scr(:,element_idx) = (/ pgf_max, R, P(1), P(2), P(3) /)
+               bra%pgf_scr(1,element_idx) = pgf_max
                element_cnt = element_cnt + 1
             end do
          end do
