@@ -2,7 +2,7 @@ set -x
 
 rm obj/* libcp2kGint.a *.mod
 
-NVCC_C_OPTS="-rdc=true -std=c++14 -gencode arch=compute_70,code=sm_70 -lcudart -Xcompiler -fPIC -lcublas -Xcompiler -fopenmp -Xcompiler -O3"
+NVCC_C_OPTS="-rdc=true -g -std=c++14 -gencode arch=compute_70,code=sm_70 -lcudart -Xcompiler -fPIC -lcublas -Xcompiler -fopenmp -Xcompiler -O3 -Xcompiler -g"
 NVCC_D_OPTS="-arch=sm_70 -lgomp"
 
 MPICPP_EX_OPTS="-std=c++14 -Wall -fPIC -O3" 
@@ -29,11 +29,11 @@ nvcc -c ${NVCC_C_OPTS} -x cu src/libGint.cpp -o obj/libGint_unlinked.o ${LIS}
 nvcc -dlink ${NVCC_D_OPTS} -o obj/libGint.o obj/libGint_unlinked.o obj/compute_*.o obj/fgamma.o obj/util.o ${LIS} #obj/t_c_g0_n.o
 
 ## Single step for pure cpp files
-mpic++ -c -O3 -std=c++14  -Wall -fPIC src/plan.cpp -o obj/plan.o -lcudart -lstdc -fopenmp
-mpic++ -c -O3 -std=c++14  -Wall -fPIC src/UniqueArray.cpp -o obj/UniqueArray.o -lcudart -lstdc -fopenmp
-mpic++ -c -O3 src/extern_functions.cpp -o obj/extern_functions.o ${MPICPP_EX_OPTS} ${LIS} -fopenmp
+mpic++ -c -g -O3 -std=c++14  -Wall -fPIC src/plan.cpp -o obj/plan.o -lcudart -lstdc -fopenmp
+mpic++ -c -g -O3 -std=c++14  -Wall -fPIC src/UniqueArray.cpp -o obj/UniqueArray.o -lcudart -lstdc -fopenmp
+mpic++ -c -g -O3 src/extern_functions.cpp -o obj/extern_functions.o ${MPICPP_EX_OPTS} ${LIS} -fopenmp
 
-gfortran -O3 -c src/interface_libgint.F90 -o obj/interface_libgint.o -lstdc -lcudadevrt -lcudart -fopenmp
+gfortran -O3 -g -c src/interface_libgint.F90 -o obj/interface_libgint.o -lstdc -lcudadevrt -lcudart -fopenmp
 
 
 OBJECTS_1="obj/interface_libgint.o obj/extern_functions.o obj/plan.o obj/UniqueArray.o obj/libGint.o"
