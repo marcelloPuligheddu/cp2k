@@ -19,6 +19,24 @@ module libgint
    end interface
 
    interface
+   subroutine libgint_internal_set_hf_fac( libgint_handle, fac ) bind(C,name="libgint_set_hf_fac")
+      import :: c_ptr
+      implicit none
+      real(kind=8), value :: fac
+      type(c_ptr), value :: libgint_handle
+   end subroutine libgint_internal_set_hf_fac
+   end interface
+
+   interface
+   subroutine libgint_internal_set_max_mem( libgint_handle, max_mem ) bind(C,name="libgint_set_max_mem")
+      import :: c_ptr, c_int
+      implicit none
+      integer(kind=c_int), value :: max_mem
+      type(c_ptr), value :: libgint_handle
+   end subroutine libgint_internal_set_max_mem
+   end interface
+
+   interface
    subroutine libgint_internal_set_P( libgint_handle, P, P_size ) bind(C,name="libgint_set_P")
       import :: c_ptr, c_int
       implicit none
@@ -215,7 +233,7 @@ module libgint
 
 
 
-   public :: libgint_init, libgint_set_Potential_Truncated
+   public :: libgint_init, libgint_set_Potential_Truncated, libgint_set_hf_fac, libgint_set_max_mem
    public :: libgint_set_P, libgint_set_P_polarized, libgint_set_K, libgint_set_K_polarized
    public :: libgint_get_K, libgint_get_K_polarized, libgint_set_Atom, libgint_set_Atom_L, libgint_set_cell
    public :: libgint_set_neighs
@@ -238,6 +256,18 @@ contains
       ld_C0 = size(C0, dim=1, kind=c_int)
       call libgint_internal_set_Potential_Truncated( handle, %val(R_cut), c_loc(C0), %val(ld_C0), %val(C0_size) )
    end subroutine libgint_set_Potential_Truncated
+
+   subroutine libgint_set_hf_fac( handle, fac )
+      type(c_ptr) :: handle
+      real(kind=8), value :: fac
+      call libgint_internal_set_hf_fac( handle, fac )
+   end subroutine libgint_set_hf_fac
+
+   subroutine libgint_set_max_mem( handle, max_mem )
+      type(c_ptr) :: handle
+      integer(kind=c_int), value :: max_mem
+      call libgint_internal_set_max_mem( handle, max_mem )
+   end subroutine libgint_set_max_mem
 
    subroutine libgint_set_P ( handle, P )
       type (c_ptr) :: handle

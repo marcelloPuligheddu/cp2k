@@ -45,7 +45,7 @@ using std::max;
 
 class libGint {
    public:
-   libGint(){ my_thr = omp_get_thread_num() ; }
+   libGint(){ my_thr = omp_get_thread_num() ; Nomp = omp_get_num_threads(); }
    void add_prm ( const int ipa, const int ipb, const int ipc, const int ipd ) ;
    void add_shell (int i, int j , int k, int l, int n1, int n2);
    void add_cell();
@@ -63,10 +63,12 @@ class libGint {
    void set_max_n_prm( int max_n3 );
    void init();
    void set_Potential_Truncated( double R_cut, double * C0, int ld_C0, int C0_size );
+   void set_hf_fac(double fac);
+   void set_max_mem(int max_mem);
    void compute_max_vector_size();
    size_t memory_needed();
 
-   void dispatch(bool skip_cpu);
+   void dispatch(bool dispatch_all);
    size_t out_size = 0;
 
    std::vector<double> OUT;
@@ -78,7 +80,7 @@ class libGint {
    Timer prm_timer, shl_timer, qrt_timer, qrtt_timer, set_timer, dis_timer;
    double prm_ms=0.0, shl_ms=0.0, qrt_ms=0.0, qrtt_ms=0.0, set_ms=0.0, dis_ms=0.0;
    int prm_cnt = 0, shl_cnt=0, qrt_cnt=0, qrtt_cnt=0, set_cnt=0, dis_cnt;
-   void reset_indices();
+   void reset_indices(unsigned int L);
    int my_thr = 0;
    std::vector<int> np;
    std::vector<unsigned int> idx_R;
@@ -88,6 +90,11 @@ class libGint {
    std::vector<std::vector< unsigned int>> all_idx_K;
    cublasHandle_t cublas_handle;
    cudaStream_t cuda_stream;
+
+   double hf_fac; // K += fac * I @@ P
+   int Nomp = 0;
+   size_t max_mem = 0;
+   size_t max_mem_per_thread = 0;
 
    int nspin = 0 ;
    double * K_a; // not owned 
@@ -100,11 +107,11 @@ class libGint {
    double * K_b_dev = 0; // owned and managed
    double * P_b_dev = 0; // owned and managed
 
-   double hf_fac; // K += fac * I @@ P
- 
    size_t FP_size;
    void set_P( double * P, int P_size );
    void set_P( double * Pa, double * Pb, int P_size );
+   void zero_K( int K_size );
+   void zero_K( int K_size, int K_size_ );
    void set_K( double * K, int K_size );
    void set_K( double * Ka, double * Kb, int K_size );
 

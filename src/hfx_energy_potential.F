@@ -99,7 +99,7 @@ MODULE hfx_energy_potential
 
    !!!!!!!!!!!!!!!!!!!!!!!
    use offload_api, only :  offload_get_chosen_device, offload_set_chosen_device, offload_activate_chosen_device
-   use libGint, only : libgint_init, libgint_set_Potential_Truncated, &
+   use libGint, only : libgint_init, libgint_set_Potential_Truncated, libgint_set_hf_fac, libgint_set_max_mem, &
                        libgint_set_P, libgint_set_P_polarized, libgint_set_K, libgint_set_K_polarized, &
                        libgint_get_K, libgint_get_K_polarized, libgint_set_Atom, libgint_set_Atom_L, libgint_set_cell, &
                        libgint_set_neighs, &
@@ -218,7 +218,8 @@ CONTAINS
       REAL(dp), DIMENSION(:), POINTER                    :: p_work
       REAL(dp), DIMENSION(:, :), POINTER :: full_density_alpha, full_density_beta, full_ks_alpha, &
                                             full_ks_beta, max_contraction, ptr_p_1, ptr_p_2, ptr_p_3, ptr_p_4, shm_pmax_atom, &
-                                            shm_pmax_block, sphi_b, zeta, zetb, zetc, zetd, full_ks_alpha_from_gpu
+                                            shm_pmax_block, sphi_b, zeta, zetb, zetc, zetd, &
+                                            full_ks_alpha_from_gpu, full_ks_beta_from_gpu
       REAL(dp), DIMENSION(:, :, :), POINTER              :: sphi_a_ext_set, sphi_b_ext_set, &
                                                             sphi_c_ext_set, sphi_d_ext_set
       REAL(dp), DIMENSION(:, :, :, :), POINTER           :: sphi_a_ext, sphi_b_ext, sphi_c_ext, &
@@ -274,7 +275,7 @@ CONTAINS
       real(dp), dimension(:,:), allocatable :: cell_r
       real(dp), dimension(:), allocatable :: flat_gcc
       type(c_ptr), save :: libGint_handle
-      logical :: use_libint, use_libgint
+      logical :: use_libint, use_libgint, use_only_alpha_spin
 !$OMP threadprivate( libGint_handle )
 
 
@@ -374,6 +375,7 @@ CONTAINS
 !$OMP                                  nco,&
 !$OMP                                  full_ks_alpha,&
 !$OMP                                  full_ks_alpha_from_gpu,&
+!$OMP                                  full_ks_beta_from_gpu,&
 !$OMP                                  full_ks_beta,&
 !$OMP                                  n_threads,&
 !$OMP                                  full_density_alpha,&
@@ -442,7 +444,7 @@ CONTAINS
 !$OMP         ene_x_bb_diag,act_atomic_block_offset,act_set_offset,j,handle_dist_ks,tmp_i8,tmp_i4,dft_control,&
 !$OMP         etmp,nkimages,img,bin,eps_scaling_str,eps_schwarz_min_str, &
 !$OMP         i,inla,nla,gcc,first_set_of_atom,max_abs_delta_KS, screened, &
-!$OMP         bra,ket,iatom_set,jatom_set,katom_set,latom_set,do_pbc,cell_r,flat_gcc)
+!$OMP         bra,ket,iatom_set,jatom_set,katom_set,latom_set,do_pbc,cell_r,flat_gcc,use_only_alpha_spin)
 
 ! ,handle_c4g,handle_ufg) 
 
@@ -942,12 +944,7 @@ CONTAINS
       !!!
       ! Set up the gpu enviroment
       if (use_libGint ) then
-         if( first_call) then
-
-!           !$omp critical
-!              write(*,*) " FIRST CALL ", para_env%mepos , omp_get_thread_num(), offload_get_chosen_device()
-!           !$omp end critical
-
+         if_first_call: if( first_call) then
             ! APPARENTELY only the master thread has received a call to offload_set_chosen_device
             ! BUT we need all omp threads with th same mpi process to be on the same physical device.
             ! so they can share GPU memory for the density matrix P (full_density_alpha and full_density_beta)
@@ -956,12 +953,10 @@ CONTAINS
             shared_dev = offload_get_chosen_device()
             !$omp end master
             !$omp barrier
-
             call offload_set_chosen_device( shared_dev )
             call offload_activate_chosen_device()
-
+            ! Init the offload library, creates an handle unique to this omp thread
             call libgint_init(libGint_handle)
-
             ! Comunicate the chosen potential and its parameters to libGint
             potential_parameter = actual_x_data%potential_parameter
             libGint_select_potential: select case(potential_parameter%potential_type)
@@ -973,40 +968,35 @@ CONTAINS
                case default
                   CPASSERT(.false.) ! not (yet) implemented
             end select libGint_select_potential
-
             first_call = .false.
-
-!            do iatom=1, size(full_density_alpha, 1)
-!               full_density_alpha(iatom,1) = 1.0_dp ! / size(full_density_alpha, 1)
-!            end do
-
-!        else
-!            !$omp master
-!            write(*,*) " NOT FIRST CALL "
-!            !$omp end master
-
-         end if
-
+         end if if_first_call
+         ! Set the multiplicative factor fac (the fraction of exact exchange times the spin factor) for libGint
+         call libGint_set_hf_fac( libGint_handle, fac )
+         write(*,*) " MAX MEM: " , memory_parameter%max_memory 
+         call libGint_set_max_mem( libGint_handle, memory_parameter%max_memory )
+         ! Info about periodic cells and neighbouring cells
          do_pbc = do_periodic
-         ! TODO is it possible for nneighbors to change when the cell is resized ?
-         call allocate_bra( bra, max_pgf, nneighbors )
-         call allocate_bra( ket, max_pgf, nneighbors )
-
          allocate(cell_r(3,nneighbors))
          do i=1, nneighbors
             cell_r(:,i) = actual_x_data%neighbor_cells(i)%cell_r(:)
          end do
-
          call libgint_set_cell( libGint_handle, do_pbc, cell%hmat, cell%h_inv)
          call libgint_set_neighs( libGint_handle, cell_r, nneighbors) 
-
-   !      write(*,*) 'libgint cell is ', cell%hmat, cell%h_inv
-   !      write(*,*) 'libgint neig are', nneighbors, '|', cell_r
-
-   !      write (*,*) " Call to set P K "
-         call libgint_set_P( libGint_handle, full_density_alpha(:, 1) )
-         call libgint_set_K( libGint_handle, full_ks_alpha(:, 1), fac )
-
+         ! CPU side temporary arrays for info about the <AB(g) and CD(n)> pairs
+         call allocate_bra( bra, max_pgf, nneighbors )
+         call allocate_bra( ket, max_pgf, nneighbors )
+         ! Comunicates the current density to the offload engine.
+         ! Implicitly sets the Fock matrix on the device to zero
+         ! use_alpha_beta_spin = (.not. treat_lsd_in_core) .and. nspins == 2
+         ! use_only_alpha_spin = .not. use_alpha_beta_spin = treat_lsd_in_core .or. .not. nspins == 2
+         use_only_alpha_spin = treat_lsd_in_core .or. .not. nspins == 2
+         IF ( use_only_alpha_spin ) then
+            call libgint_set_P( libGint_handle, full_density_alpha(:, 1) )
+         else ! TODO overload set_P
+            call libgint_set_P_polarized( libGint_handle, full_density_alpha(:, 1), full_density_beta(:, 1) )
+         end if
+         ! Comunicate atomset and atom info to the engine
+!         call libgint_set_Atoms( natom, kind_of, particle_set, basis_parameter, gcc )
          jset = 1
          allocate(first_set_of_atom(natom) )
          do iatom = 1, natom
@@ -1022,27 +1012,22 @@ CONTAINS
             gcc => basis_parameter(ikind)%gcc
             first_set_of_atom(iatom) = jset
             do iset = 1, nseta
-   !            ncoset(la_max(iset))
-   !            nsgfa(iset)
                call libgint_set_Atom( libGint_handle, jset-1 , ra, zeta(:,iset), npgfa(iset) )
                inla = 1
                do l = la_min( iset ) , la_max(iset)
                   nla = nsgfl_a(l,iset)
-
 !                  write (*,*) " CP2K setting atom set L ", jset ,l, nla,  gcc(1:npgfa(iset),inla:inla+nla-1,iset)
 !                  write (*,*) "    note sphi is : " ,  basis_parameter(ikind)%sphi_ext(:, :, :, :)
                   IF( ALLOCATED(flat_gcc) )  DEALLOCATE( flat_gcc ) 
                   allocate(flat_gcc(npgfa(iset)*nla))
                   flat_gcc = pack(gcc(1:npgfa(iset),inla:inla+nla-1,iset),.true.)
                   call libgint_set_Atom_L( libGint_handle, jset-1, l, nla, flat_gcc )
-
                   inla = inla + nla
                end do
                jset = jset + 1
-            
             end do 
          end do
-         
+         ! TODO OUTDATED and unnecessary
          call libgint_set_max_n_cell( libGint_handle, nneighbors )
    !      write(*,*) " PK set "
       end if ! end of libGint setup
@@ -1602,7 +1587,7 @@ CONTAINS
                      IF (max_val1 + screen_kind_kl + pmax_atom < log10_eps_schwarz) CYCLE
 
                      sphi_a_ext_set => sphi_a_ext(:, :, :, iset)
-                     sphi_b_ext_set => sphi_b_ext(:, :, :, jset)
+                     sphi_b_ext_set => sphi_b_ext(:, :, :, jset)                     
                      DO i_set_list_kl = i_set_list_kl_start, i_set_list_kl_stop
                         kset = set_list_kl(i_set_list_kl)%pair(1)
                         lset = set_list_kl(i_set_list_kl)%pair(2)
@@ -1628,72 +1613,122 @@ CONTAINS
                         IF (max_val2 < log10_eps_schwarz) CYCLE
                         pmax_entry = EXP(log10_pmax*ln_10)
 
-                        !! store current number of integrals, update total number and number of integrals in buffer
-                        current_counter = nsgfa(iset)*nsgfb(jset)*nsgfc(kset)*nsgfd(lset)
-                        IF (buffer_overflow) THEN
-                           neris_onthefly = neris_onthefly + current_counter
-                        END IF
-
-                        !! Get integrals from buffer and update Kohn-Sham matrix
-                        IF (.NOT. buffer_overflow .AND. .NOT. my_geo_change) THEN
-                           nints = current_counter
-                           IF (.NOT. use_disk_storage) THEN
-                              CALL hfx_get_single_cache_element( &
-                                 estimate_to_store_int, 6, &
-                                 maxval_cache, maxval_container, memory_parameter%actual_memory_usage, &
-                                 use_disk_storage)
-                           ELSE
-                              CALL hfx_get_single_cache_element( &
-                                 estimate_to_store_int, 6, &
-                                 maxval_cache_disk, maxval_container_disk, memory_parameter%actual_memory_usage_disk, &
-                                 use_disk_storage)
-                           END IF
-                           spherical_estimate = SET_EXPONENT(1.0_dp, estimate_to_store_int + 1)
-                           IF (spherical_estimate*pmax_entry < eps_schwarz) CYCLE
-                           nbits = EXPONENT(ANINT(spherical_estimate*pmax_entry/eps_storage)) + 1
-                           buffer_left = nints
-                           buffer_start = 1
-                           IF (.NOT. use_disk_storage) THEN
-                              neris_incore = neris_incore + INT(nints, int_8)
-                           ELSE
-                              neris_disk = neris_disk + INT(nints, int_8)
-                           END IF
-                           DO WHILE (buffer_left > 0)
-                              buffer_size = MIN(buffer_left, cache_size)
-                              IF (.NOT. use_disk_storage) THEN
-                                 CALL hfx_get_mult_cache_elements(primitive_integrals(buffer_start), &
-                                                                  buffer_size, nbits, &
-                                                                  integral_caches(nbits), &
-                                                                  integral_containers(nbits), &
-                                                                  eps_storage, pmax_entry, &
-                                                                  memory_parameter%actual_memory_usage, &
-                                                                  use_disk_storage)
-                              ELSE
-                                 CALL hfx_get_mult_cache_elements(primitive_integrals(buffer_start), &
-                                                                  buffer_size, nbits, &
-                                                                  integral_caches_disk(nbits), &
-                                                                  integral_containers_disk(nbits), &
-                                                                  eps_storage, pmax_entry, &
-                                                                  memory_parameter%actual_memory_usage_disk, &
-                                                                  use_disk_storage)
-                              END IF
-                              buffer_left = buffer_left - buffer_size
-                              buffer_start = buffer_start + buffer_size
-                           END DO
-                        END IF
-                        !! Calculate integrals if we run out of buffer or the geometry did change
-                        IF (my_geo_change .OR. buffer_overflow) THEN
-
-                           max_contraction_val = max_contraction(iset, iatom)* &
-                                                 max_contraction(jset, jatom)* &
-                                                 max_contraction(kset, katom)* &
-                                                 max_contraction(lset, latom)*pmax_entry
-                           tmp_R_1 => radii_pgf(:, :, jset, iset, jkind, ikind)
-                           tmp_R_2 => radii_pgf(:, :, lset, kset, lkind, kkind)
+                        ! libGint can only run in direct mode at the moment
+                        if ( use_libGint ) then
+                           iatom_set = first_set_of_atom(iatom)+iset-2
+                           jatom_set = first_set_of_atom(jatom)+jset-2
+                           katom_set = first_set_of_atom(katom)+kset-2
+                           latom_set = first_set_of_atom(latom)+lset-2
                            tmp_screen_pgf1 => screen_coeffs_pgf(:, :, jset, iset, jkind, ikind)
                            tmp_screen_pgf2 => screen_coeffs_pgf(:, :, lset, kset, lkind, kkind)
 
-                           if ( use_libint ) then
+
+                           ! TODO a more modern approach in which the call is more like
+                           ! call coulom_4_gpu( HFX_data, iset, jset, kset, lset, [bra, ket] )
+
+!                              CALL timeset(routineN//"_c4g", handle_c4g)
+                           call coulomb_4_gpu( &
+                              libGint_handle, iatom_set, jatom_set, katom_set, latom_set, &
+                              ra, rb, rc, rd, &
+                              npgfa(iset), npgfb(jset), npgfc(kset), npgfd(lset), &
+                              potential_parameter, &
+                              screen_coeffs_set(jset, iset, jkind, ikind)%x, &
+                              screen_coeffs_set(lset, kset, lkind, kkind)%x, &
+                              log10_pmax, log10_eps_schwarz, &
+                              tmp_screen_pgf1, tmp_screen_pgf2, &
+                              bra, ket, & 
+                              actual_x_data%neighbor_cells, cell, do_periodic, screened )
+!                              call timestop(handle_c4g)
+
+                           if ( .not. screened ) then
+
+                              ! TODO a more modern approach in which the call is more like
+                              ! call update_fock_matrix_gpu( HFX_data, iset, jset, kset, lset )
+
+!                                 CALL timeset(routineN//"_ufg", handle_ufg)
+                              call update_fock_matrix_gpu( &
+                                 libGint_handle, symm_fac, &
+                                 iatom, jatom, katom, latom, &
+                                 iset, jset, kset, lset, &
+                                 atomic_offset_ac, atomic_offset_ad, atomic_offset_bc, atomic_offset_bd, &
+                                 offset_ac_set, offset_ad_set, offset_bc_set, offset_bd_set, &
+                                 nsgfa(iset), nsgfb(jset), nsgfc(kset), nsgfd(lset), &
+                                 la_min(iset), la_max(iset), lb_min(jset), lb_max(jset), &
+                                 lc_min(kset), lc_max(kset), ld_min(lset), ld_max(lset), &
+                                 nsgfl_a, nsgfl_b, nsgfl_c, nsgfl_d)
+!                                 call timestop(handle_ufg)
+
+                           end if
+                        end if
+
+
+                        if_use_libint: if ( use_libint ) then
+                           !! store current number of integrals, update total number and number of integrals in buffer
+                           current_counter = nsgfa(iset)*nsgfb(jset)*nsgfc(kset)*nsgfd(lset)
+                           IF (buffer_overflow) THEN
+                              neris_onthefly = neris_onthefly + current_counter
+                           END IF
+
+                           !! Get integrals from buffer and update Kohn-Sham matrix
+                           IF (.NOT. buffer_overflow .AND. .NOT. my_geo_change) THEN
+                              nints = current_counter
+                              IF (.NOT. use_disk_storage) THEN
+                                 CALL hfx_get_single_cache_element( &
+                                    estimate_to_store_int, 6, &
+                                    maxval_cache, maxval_container, memory_parameter%actual_memory_usage, &
+                                    use_disk_storage)
+                              ELSE
+                                 CALL hfx_get_single_cache_element( &
+                                    estimate_to_store_int, 6, &
+                                    maxval_cache_disk, maxval_container_disk, memory_parameter%actual_memory_usage_disk, &
+                                    use_disk_storage)
+                              END IF
+                              spherical_estimate = SET_EXPONENT(1.0_dp, estimate_to_store_int + 1)
+                              IF (spherical_estimate*pmax_entry < eps_schwarz) CYCLE
+                              nbits = EXPONENT(ANINT(spherical_estimate*pmax_entry/eps_storage)) + 1
+                              buffer_left = nints
+                              buffer_start = 1
+                              IF (.NOT. use_disk_storage) THEN
+                                 neris_incore = neris_incore + INT(nints, int_8)
+                              ELSE
+                                 neris_disk = neris_disk + INT(nints, int_8)
+                              END IF
+                              DO WHILE (buffer_left > 0)
+                                 buffer_size = MIN(buffer_left, cache_size)
+                                 IF (.NOT. use_disk_storage) THEN
+                                    CALL hfx_get_mult_cache_elements(primitive_integrals(buffer_start), &
+                                                                     buffer_size, nbits, &
+                                                                     integral_caches(nbits), &
+                                                                     integral_containers(nbits), &
+                                                                     eps_storage, pmax_entry, &
+                                                                     memory_parameter%actual_memory_usage, &
+                                                                     use_disk_storage)
+                                 ELSE
+                                    CALL hfx_get_mult_cache_elements(primitive_integrals(buffer_start), &
+                                                                     buffer_size, nbits, &
+                                                                     integral_caches_disk(nbits), &
+                                                                     integral_containers_disk(nbits), &
+                                                                     eps_storage, pmax_entry, &
+                                                                     memory_parameter%actual_memory_usage_disk, &
+                                                                     use_disk_storage)
+                                 END IF
+                                 buffer_left = buffer_left - buffer_size
+                                 buffer_start = buffer_start + buffer_size
+                              END DO
+                           END IF
+                           !! Calculate integrals if we run out of buffer or the geometry did change
+                           IF (my_geo_change .OR. buffer_overflow) THEN
+
+                              max_contraction_val = max_contraction(iset, iatom)* &
+                                                    max_contraction(jset, jatom)* &
+                                                    max_contraction(kset, katom)* &
+                                                    max_contraction(lset, latom)*pmax_entry
+                              tmp_R_1 => radii_pgf(:, :, jset, iset, jkind, ikind)
+                              tmp_R_2 => radii_pgf(:, :, lset, kset, lkind, kkind)
+                              tmp_screen_pgf1 => screen_coeffs_pgf(:, :, jset, iset, jkind, ikind)
+                              tmp_screen_pgf2 => screen_coeffs_pgf(:, :, lset, kset, lkind, kkind)
+
+
                               CALL coulomb4(private_lib, ra, rb, rc, rd, npgfa(iset), npgfb(jset), npgfc(kset), npgfd(lset), &
                                          la_min(iset), la_max(iset), lb_min(jset), lb_max(jset), &
                                          lc_min(kset), lc_max(kset), ld_min(lset), ld_max(lset), &
@@ -1720,201 +1755,157 @@ CONTAINS
                                          sphi_d_ext_set, &
                                          ee_work, ee_work2, ee_buffer1, ee_buffer2, ee_primitives_tmp, &
                                          nimages, do_periodic, p_work)
-                           end if
 
-                           if ( use_libGint ) then
-                              iatom_set = first_set_of_atom(iatom)+iset-2
-                              jatom_set = first_set_of_atom(jatom)+jset-2
-                              katom_set = first_set_of_atom(katom)+kset-2
-                              latom_set = first_set_of_atom(latom)+lset-2
+                              nints = nsgfa(iset)*nsgfb(jset)*nsgfc(kset)*nsgfd(lset)
+                              neris_total = neris_total + nints
+                              nprim_ints = nprim_ints + neris_tmp
 
-                              ! TODO a more modern approach in which the call is more like
-                              ! call coulom_4_gpu( HFX_data, iset, jset, kset, lset, [bra, ket] )
-
-!                              CALL timeset(routineN//"_c4g", handle_c4g)
-                              call coulomb_4_gpu( &
-                                 libGint_handle, iatom_set, jatom_set, katom_set, latom_set, &
-                                 ra, rb, rc, rd, &
-                                 npgfa(iset), npgfb(jset), npgfc(kset), npgfd(lset), &
-                                 potential_parameter, &
-                                 screen_coeffs_set(jset, iset, jkind, ikind)%x, &
-                                 screen_coeffs_set(lset, kset, lkind, kkind)%x, &
-                                 log10_pmax, log10_eps_schwarz, &
-                                 tmp_screen_pgf1, tmp_screen_pgf2, &
-                                 bra, ket, & 
-                                 actual_x_data%neighbor_cells, cell, do_periodic, screened )
-!                              call timestop(handle_c4g)
-
-                              if ( .not. screened ) then
-
-                                 ! TODO a more modern approach in which the call is more like
-                                 ! call update_fock_matrix_gpu( HFX_data, iset, jset, kset, lset )
-
-!                                 CALL timeset(routineN//"_ufg", handle_ufg)
-                                 call update_fock_matrix_gpu( &
-                                    libGint_handle, symm_fac, &
-                                    iatom, jatom, katom, latom, &
-                                    iset, jset, kset, lset, &
-                                    atomic_offset_ac, atomic_offset_ad, atomic_offset_bc, atomic_offset_bd, &
-                                    offset_ac_set, offset_ad_set, offset_bc_set, offset_bd_set, &
-                                    nsgfa(iset), nsgfb(jset), nsgfc(kset), nsgfd(lset), &
-                                    la_min(iset), la_max(iset), lb_min(jset), lb_max(jset), &
-                                    lc_min(kset), lc_max(kset), ld_min(lset), ld_max(lset), &
-                                    nsgfl_a, nsgfl_b, nsgfl_c, nsgfl_d)
-!                                 call timestop(handle_ufg)
-
-                              end if
-                           end if
-
-                           nints = nsgfa(iset)*nsgfb(jset)*nsgfc(kset)*nsgfd(lset)
-                           neris_total = neris_total + nints
-                           nprim_ints = nprim_ints + neris_tmp
-
-                           !! Compress the array for storage
-                           spherical_estimate = 0.0_dp
-                           DO i = 1, nints
-                              spherical_estimate = MAX(spherical_estimate, ABS(primitive_integrals(i)))
-                           END DO
-
-                           IF (spherical_estimate == 0.0_dp) spherical_estimate = TINY(spherical_estimate)
-                           estimate_to_store_int = EXPONENT(spherical_estimate)
-                           estimate_to_store_int = MAX(estimate_to_store_int, -15_int_8)
-
-                           IF (.NOT. buffer_overflow .AND. my_geo_change) THEN
-                              IF (.NOT. use_disk_storage) THEN
-                                 CALL hfx_add_single_cache_element( &
-                                    estimate_to_store_int, 6, &
-                                    maxval_cache, maxval_container, memory_parameter%actual_memory_usage, &
-                                    use_disk_storage, max_val_memory)
-                              ELSE
-                                 CALL hfx_add_single_cache_element( &
-                                    estimate_to_store_int, 6, &
-                                    maxval_cache_disk, maxval_container_disk, memory_parameter%actual_memory_usage_disk, &
-                                    use_disk_storage)
-                              END IF
-                           END IF
-                           spherical_estimate = SET_EXPONENT(1.0_dp, estimate_to_store_int + 1)
-                           IF (spherical_estimate*pmax_entry < eps_schwarz) CYCLE
-                           IF (.NOT. buffer_overflow) THEN
-                              nbits = EXPONENT(ANINT(spherical_estimate*pmax_entry/eps_storage)) + 1
-
-                              ! In case of a tight eps_storage threshold the number of significant
-                              ! bits in the integer number NINT(value*pmax_entry/eps_storage) may
-                              ! exceed the width of the storage element. As the compression algorithm
-                              ! is designed for IEEE 754 double precision numbers, a 64-bit signed
-                              ! integer variable which is used to store the result of this float-to-
-                              ! integer conversion (we have no wish to use more memory for storing
-                              ! compressed ERIs than it is needed for uncompressed ERIs) may overflow.
-                              ! Abort with a meaningful message when it happens.
-                              !
-                              ! The magic number 63 stands for the number of magnitude bits
-                              ! (64 bits minus one sign bit).
-                              IF (nbits > 63) THEN
-                                 WRITE (eps_schwarz_min_str, '(ES10.3E2)') &
-                                    spherical_estimate*pmax_entry/ &
-                                    (SET_EXPONENT(1.0_dp, 63)*memory_parameter%eps_storage_scaling)
-
-                                 WRITE (eps_scaling_str, '(ES10.3E2)') &
-                                    spherical_estimate*pmax_entry/(SET_EXPONENT(1.0_dp, 63)*eps_schwarz)
-
-                                 CALL cp_abort(__LOCATION__, &
-                                               "Overflow during ERI's compression. Please use a larger "// &
-                                               "EPS_SCHWARZ threshold (above "//TRIM(ADJUSTL(eps_schwarz_min_str))// &
-                                               ") or increase the EPS_STORAGE_SCALING factor above "// &
-                                               TRIM(ADJUSTL(eps_scaling_str))//".")
-                              END IF
-
-                              buffer_left = nints
-                              buffer_start = 1
-                              IF (.NOT. use_disk_storage) THEN
-                                 neris_incore = neris_incore + INT(nints, int_8)
-!                                 neris_incore = neris_incore+nints
-                              ELSE
-                                 neris_disk = neris_disk + INT(nints, int_8)
-!                                 neris_disk = neris_disk+nints
-                              END IF
-                              DO WHILE (buffer_left > 0)
-                                 buffer_size = MIN(buffer_left, CACHE_SIZE)
-                                 IF (.NOT. use_disk_storage) THEN
-                                    CALL hfx_add_mult_cache_elements(primitive_integrals(buffer_start), &
-                                                                     buffer_size, nbits, &
-                                                                     integral_caches(nbits), &
-                                                                     integral_containers(nbits), &
-                                                                     eps_storage, pmax_entry, &
-                                                                     memory_parameter%actual_memory_usage, &
-                                                                     use_disk_storage)
-                                 ELSE
-                                    CALL hfx_add_mult_cache_elements(primitive_integrals(buffer_start), &
-                                                                     buffer_size, nbits, &
-                                                                     integral_caches_disk(nbits), &
-                                                                     integral_containers_disk(nbits), &
-                                                                     eps_storage, pmax_entry, &
-                                                                     memory_parameter%actual_memory_usage_disk, &
-                                                                     use_disk_storage)
-                                 END IF
-                                 buffer_left = buffer_left - buffer_size
-                                 buffer_start = buffer_start + buffer_size
-                              END DO
-                           ELSE
-                              !! In order to be consistent with in-core part, round all the eris wrt. eps_schwarz
+                              !! Compress the array for storage
+                              spherical_estimate = 0.0_dp
                               DO i = 1, nints
-                                 primitive_integrals(i) = primitive_integrals(i)*pmax_entry
-                                 IF (ABS(primitive_integrals(i)) > eps_storage) THEN
-                                    primitive_integrals(i) = ANINT(primitive_integrals(i)/eps_storage, dp)*eps_storage/pmax_entry
-                                 ELSE
-                                    primitive_integrals(i) = 0.0_dp
-                                 END IF
+                                 spherical_estimate = MAX(spherical_estimate, ABS(primitive_integrals(i)))
                               END DO
-                           END IF
-                        END IF
-                        !!!  DEBUG, print out primitive integrals and indices. Only works serial no OMP  !!!
-                        IF (.FALSE.) THEN
-                           CALL print_integrals( &
-                              iatom, jatom, katom, latom, shm_set_offset, shm_atomic_block_offset, &
-                              iset, jset, kset, lset, nsgfa(iset), nsgfb(jset), nsgfc(kset), nsgfd(lset), primitive_integrals)
-                        END IF
-                        IF (.NOT. is_anti_symmetric) THEN
-                           !! Update Kohn-Sham matrix
-!                           write (*,*) " Adding ", primitive_integrals, " to K "
-                           CALL update_fock_matrix( &
-                              nsgfa(iset), nsgfb(jset), nsgfc(kset), nsgfd(lset), &
-                              fac, symm_fac, full_density_alpha(:, 1), full_ks_alpha(:, 1), &
-                              primitive_integrals, pbd_buf, pbc_buf, pad_buf, pac_buf, kbd_buf, &
-                              kbc_buf, kad_buf, kac_buf, iatom, jatom, katom, latom, &
-                              iset, jset, kset, lset, offset_bd_set, offset_bc_set, offset_ad_set, offset_ac_set, &
-                              atomic_offset_bd, atomic_offset_bc, atomic_offset_ad, atomic_offset_ac)
-                           IF (.NOT. treat_lsd_in_core) THEN
-                              IF (nspins == 2) THEN
-                                 CALL update_fock_matrix( &
-                                    nsgfa(iset), nsgfb(jset), nsgfc(kset), nsgfd(lset), &
-                                    fac, symm_fac, full_density_beta(:, 1), full_ks_beta(:, 1), &
-                                    primitive_integrals, pbd_buf, pbc_buf, pad_buf, pac_buf, kbd_buf, &
-                                    kbc_buf, kad_buf, kac_buf, iatom, jatom, katom, latom, &
-                                    iset, jset, kset, lset, offset_bd_set, offset_bc_set, offset_ad_set, offset_ac_set, &
-                                    atomic_offset_bd, atomic_offset_bc, atomic_offset_ad, atomic_offset_ac)
+
+                              IF (spherical_estimate == 0.0_dp) spherical_estimate = TINY(spherical_estimate)
+                              estimate_to_store_int = EXPONENT(spherical_estimate)
+                              estimate_to_store_int = MAX(estimate_to_store_int, -15_int_8)
+
+                              IF (.NOT. buffer_overflow .AND. my_geo_change) THEN
+                                 IF (.NOT. use_disk_storage) THEN
+                                    CALL hfx_add_single_cache_element( &
+                                       estimate_to_store_int, 6, &
+                                       maxval_cache, maxval_container, memory_parameter%actual_memory_usage, &
+                                       use_disk_storage, max_val_memory)
+                                 ELSE
+                                    CALL hfx_add_single_cache_element( &
+                                       estimate_to_store_int, 6, &
+                                       maxval_cache_disk, maxval_container_disk, memory_parameter%actual_memory_usage_disk, &
+                                       use_disk_storage)
+                                 END IF
+                              END IF
+                              spherical_estimate = SET_EXPONENT(1.0_dp, estimate_to_store_int + 1)
+                              IF (spherical_estimate*pmax_entry < eps_schwarz) CYCLE
+                              IF (.NOT. buffer_overflow) THEN
+                                 nbits = EXPONENT(ANINT(spherical_estimate*pmax_entry/eps_storage)) + 1
+
+                                 ! In case of a tight eps_storage threshold the number of significant
+                                 ! bits in the integer number NINT(value*pmax_entry/eps_storage) may
+                                 ! exceed the width of the storage element. As the compression algorithm
+                                 ! is designed for IEEE 754 double precision numbers, a 64-bit signed
+                                 ! integer variable which is used to store the result of this float-to-
+                                 ! integer conversion (we have no wish to use more memory for storing
+                                 ! compressed ERIs than it is needed for uncompressed ERIs) may overflow.
+                                 ! Abort with a meaningful message when it happens.
+                                 !
+                                 ! The magic number 63 stands for the number of magnitude bits
+                                 ! (64 bits minus one sign bit).
+                                 IF (nbits > 63) THEN
+                                    WRITE (eps_schwarz_min_str, '(ES10.3E2)') &
+                                       spherical_estimate*pmax_entry/ &
+                                       (SET_EXPONENT(1.0_dp, 63)*memory_parameter%eps_storage_scaling)
+
+                                    WRITE (eps_scaling_str, '(ES10.3E2)') &
+                                       spherical_estimate*pmax_entry/(SET_EXPONENT(1.0_dp, 63)*eps_schwarz)
+
+                                    CALL cp_abort(__LOCATION__, &
+                                                  "Overflow during ERI's compression. Please use a larger "// &
+                                                  "EPS_SCHWARZ threshold (above "//TRIM(ADJUSTL(eps_schwarz_min_str))// &
+                                                  ") or increase the EPS_STORAGE_SCALING factor above "// &
+                                                  TRIM(ADJUSTL(eps_scaling_str))//".")
+                                 END IF
+
+                                 buffer_left = nints
+                                 buffer_start = 1
+                                 IF (.NOT. use_disk_storage) THEN
+                                    neris_incore = neris_incore + INT(nints, int_8)
+   !                                 neris_incore = neris_incore+nints
+                                 ELSE
+                                    neris_disk = neris_disk + INT(nints, int_8)
+   !                                 neris_disk = neris_disk+nints
+                                 END IF
+                                 DO WHILE (buffer_left > 0)
+                                    buffer_size = MIN(buffer_left, CACHE_SIZE)
+                                    IF (.NOT. use_disk_storage) THEN
+                                       CALL hfx_add_mult_cache_elements(primitive_integrals(buffer_start), &
+                                                                        buffer_size, nbits, &
+                                                                        integral_caches(nbits), &
+                                                                        integral_containers(nbits), &
+                                                                        eps_storage, pmax_entry, &
+                                                                        memory_parameter%actual_memory_usage, &
+                                                                        use_disk_storage)
+                                    ELSE
+                                       CALL hfx_add_mult_cache_elements(primitive_integrals(buffer_start), &
+                                                                        buffer_size, nbits, &
+                                                                        integral_caches_disk(nbits), &
+                                                                        integral_containers_disk(nbits), &
+                                                                        eps_storage, pmax_entry, &
+                                                                        memory_parameter%actual_memory_usage_disk, &
+                                                                        use_disk_storage)
+                                    END IF
+                                    buffer_left = buffer_left - buffer_size
+                                    buffer_start = buffer_start + buffer_size
+                                 END DO
+                              ELSE
+                                 !! In order to be consistent with in-core part, round all the eris wrt. eps_schwarz
+                                 DO i = 1, nints
+                                    primitive_integrals(i) = primitive_integrals(i)*pmax_entry
+                                    IF (ABS(primitive_integrals(i)) > eps_storage) THEN
+                                       primitive_integrals(i) = ANINT(primitive_integrals(i)/eps_storage, dp)*eps_storage/pmax_entry
+                                    ELSE
+                                       primitive_integrals(i) = 0.0_dp
+                                    END IF
+                                 END DO
                               END IF
                            END IF
-                        ELSE
-                           !! Update Kohn-Sham matrix
-                           CALL update_fock_matrix_as( &
-                              nsgfa(iset), nsgfb(jset), nsgfc(kset), nsgfd(lset), &
-                              fac, symm_fac, full_density_alpha(:, 1), full_ks_alpha(:, 1), &
-                              primitive_integrals, pbd_buf, pbc_buf, pad_buf, pac_buf, kbd_buf, &
-                              kbc_buf, kad_buf, kac_buf, iatom, jatom, katom, latom, &
-                              iset, jset, kset, lset, offset_bd_set, offset_bc_set, offset_ad_set, offset_ac_set, &
-                              atomic_offset_bd, atomic_offset_bc, atomic_offset_ad, atomic_offset_ac)
-                           IF (.NOT. treat_lsd_in_core) THEN
-                              IF (nspins == 2) THEN
-                                 CALL update_fock_matrix_as( &
-                                    nsgfa(iset), nsgfb(jset), nsgfc(kset), nsgfd(lset), &
-                                    fac, symm_fac, full_density_beta(:, 1), full_ks_beta(:, 1), &
-                                    primitive_integrals, pbd_buf, pbc_buf, pad_buf, pac_buf, kbd_buf, &
-                                    kbc_buf, kad_buf, kac_buf, iatom, jatom, katom, latom, &
-                                    iset, jset, kset, lset, offset_bd_set, offset_bc_set, offset_ad_set, offset_ac_set, &
-                                    atomic_offset_bd, atomic_offset_bc, atomic_offset_ad, atomic_offset_ac)
+                           !!!  DEBUG, print out primitive integrals and indices. Only works serial no OMP  !!!
+                           IF (.FALSE.) THEN
+                              CALL print_integrals( &
+                                 iatom, jatom, katom, latom, shm_set_offset, shm_atomic_block_offset, &
+                                 iset, jset, kset, lset, nsgfa(iset), nsgfb(jset), nsgfc(kset), nsgfd(lset), primitive_integrals)
+                           END IF
+                           IF (.NOT. is_anti_symmetric) THEN
+                              !! Update Kohn-Sham matrix
+   !                           write (*,*) " Adding ", primitive_integrals, " to K "
+                              CALL update_fock_matrix( &
+                                 nsgfa(iset), nsgfb(jset), nsgfc(kset), nsgfd(lset), &
+                                 fac, symm_fac, full_density_alpha(:, 1), full_ks_alpha(:, 1), &
+                                 primitive_integrals, pbd_buf, pbc_buf, pad_buf, pac_buf, kbd_buf, &
+                                 kbc_buf, kad_buf, kac_buf, iatom, jatom, katom, latom, &
+                                 iset, jset, kset, lset, offset_bd_set, offset_bc_set, offset_ad_set, offset_ac_set, &
+                                 atomic_offset_bd, atomic_offset_bc, atomic_offset_ad, atomic_offset_ac)
+                              IF (.NOT. treat_lsd_in_core) THEN
+                                 IF (nspins == 2) THEN
+                                    CALL update_fock_matrix( &
+                                       nsgfa(iset), nsgfb(jset), nsgfc(kset), nsgfd(lset), &
+                                       fac, symm_fac, full_density_beta(:, 1), full_ks_beta(:, 1), &
+                                       primitive_integrals, pbd_buf, pbc_buf, pad_buf, pac_buf, kbd_buf, &
+                                       kbc_buf, kad_buf, kac_buf, iatom, jatom, katom, latom, &
+                                       iset, jset, kset, lset, offset_bd_set, offset_bc_set, offset_ad_set, offset_ac_set, &
+                                       atomic_offset_bd, atomic_offset_bc, atomic_offset_ad, atomic_offset_ac)
+                                 END IF
+                              END IF
+                           ELSE
+                              !! Update Kohn-Sham matrix
+                              CALL update_fock_matrix_as( &
+                                 nsgfa(iset), nsgfb(jset), nsgfc(kset), nsgfd(lset), &
+                                 fac, symm_fac, full_density_alpha(:, 1), full_ks_alpha(:, 1), &
+                                 primitive_integrals, pbd_buf, pbc_buf, pad_buf, pac_buf, kbd_buf, &
+                                 kbc_buf, kad_buf, kac_buf, iatom, jatom, katom, latom, &
+                                 iset, jset, kset, lset, offset_bd_set, offset_bc_set, offset_ad_set, offset_ac_set, &
+                                 atomic_offset_bd, atomic_offset_bc, atomic_offset_ad, atomic_offset_ac)
+                              IF (.NOT. treat_lsd_in_core) THEN
+                                 IF (nspins == 2) THEN
+                                    CALL update_fock_matrix_as( &
+                                       nsgfa(iset), nsgfb(jset), nsgfc(kset), nsgfd(lset), &
+                                       fac, symm_fac, full_density_beta(:, 1), full_ks_beta(:, 1), &
+                                       primitive_integrals, pbd_buf, pbc_buf, pad_buf, pac_buf, kbd_buf, &
+                                       kbc_buf, kad_buf, kac_buf, iatom, jatom, katom, latom, &
+                                       iset, jset, kset, lset, offset_bd_set, offset_bc_set, offset_ad_set, offset_ac_set, &
+                                       atomic_offset_bd, atomic_offset_bc, atomic_offset_ad, atomic_offset_ac)
+                                 END IF
                               END IF
                            END IF
-                        END IF
+                        END IF if_use_libint
                      END DO ! i_set_list_kl
                   END DO ! i_set_list_ij
                   IF (do_disk_storage) THEN
@@ -1944,14 +1935,19 @@ CONTAINS
 
       CALL para_env%sync()
 
+      ! IF running both libint and libGint, uses the values from libint to check libGint values
       if ( use_libGint .and. use_libint ) then
-
+         ! barrier needed after allocate  full_ks_alpha(beta)_from_gpu before libGint get K 
+         ! ? to feed libgint a valid position for full_ks_alpha(beta)_from_gpu ?
          allocate( full_ks_alpha_from_gpu, Mold = full_ks_alpha )
-         ! barrier needed after allocate  full_ks_alpha_from_gpu before libGint get K 
-         ! ? to feed libgint a valid position for full_ks_alpha_from_gpu ?
          !$OMP BARRIER
-         call libgint_get_K(libGint_handle, full_ks_alpha_from_gpu(:,1) )
-
+         if ( use_only_alpha_spin ) then
+            call libgint_get_K( libGint_handle, full_ks_alpha_from_gpu(:,1) )
+         else
+            allocate( full_ks_beta_from_gpu, Mold = full_ks_beta )
+            !$OMP BARRIER
+            call libgint_get_K_polarized( libGint_handle, full_ks_alpha_from_gpu(:, 1), full_ks_beta_from_gpu(:, 1) )
+         end if
 
          !$omp single
          max_abs_delta_KS = 0.0_dp
@@ -1972,11 +1968,37 @@ CONTAINS
                               full_ks_alpha(i,1) / full_ks_alpha_from_gpu(i,1)
             end do
          end if
+
+         if ( .not. use_only_alpha_spin ) then
+            max_abs_delta_KS = 0.0_dp
+            do  i=1, size(full_ks_beta)
+               max_abs_delta_KS = max( max_abs_delta_ks, abs(  full_ks_beta(i,1) - full_ks_beta_from_gpu(i,1) ) )
+            end do
+            write(*,*) " ------------------------------------ "
+            write(*,*) " | rank " , para_env%mepos
+            write(*,*) " |  max abs dif B: ", max_abs_delta_KS
+            write(*,*) " ------------------------------------ "
+
+            ! Print all F if delta is too large or (suspiciously) too small
+            if ( max_abs_delta_KS > 1.E-8_dp .or. max_abs_delta_KS < 1.E-18 ) then
+               write (*,*) " BETA K from CPU  |  K from GPU  |  Delta | Ratio " 
+               do  i=1, size(full_ks_beta)
+                  write (*,*) i, full_ks_beta(i,1) , full_ks_beta_from_gpu(i,1), &
+                                 full_ks_beta(i,1) - full_ks_beta_from_gpu(i,1), &
+                                 full_ks_beta(i,1) / full_ks_beta_from_gpu(i,1)
+               end do
+            end if
+         end if
          !$omp end single
       end if
 
+      ! Copy the KS matrix from device to host.
       if ( use_libGint .and. .not. use_libint ) then
-         call libgint_get_K(libGint_handle, full_ks_alpha(:,1) )
+         if ( use_only_alpha_spin ) then
+            call libgint_get_K(libGint_handle, full_ks_alpha(:,1) )
+         else
+            call libgint_get_K_polarized(libGint_handle, full_ks_alpha(:,1), full_ks_beta(:,1) )
+         end if
       end if
 
 !$OMP MASTER
@@ -2715,7 +2737,7 @@ CONTAINS
          s_offset_a_l = s_offset_a_l + nla * ( 2 * la + 1 )
       end do
 
-!      call libgint_add_set( libGint_handle )
+      call libgint_add_set( libGint_handle )
    end subroutine update_fock_matrix_gpu
 
 

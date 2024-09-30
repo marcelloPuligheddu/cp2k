@@ -21,22 +21,32 @@ void libgint_set_Potential_Truncated( void * handle, double R_cut_, double * C0_
    g_handle -> set_Potential_Truncated( R_cut_, C0_, ld_C0_, C0_size_ );
 }
 
+void libgint_set_hf_fac( void * handle, double fac ){
+   libGint * g_handle = ( libGint * ) handle ;
+   g_handle -> set_hf_fac( fac );
+}
+
+void libgint_set_max_mem( void * handle, int max_mem ){
+   libGint * g_handle = ( libGint * ) handle ;
+   g_handle -> set_max_mem( max_mem );
+}
+
+
 void libgint_set_P( void * handle, double * P, int P_size ){
    libGint * g_handle = (libGint *) handle ;
-//   cout << " Setting P with handle " << handle << " @ " << P << " x " << P_size << endl;
    g_handle -> set_P( P, P_size );
+   g_handle -> zero_K( P_size );
 }
 
 void libgint_set_P_polarized( void * handle, double * Pa, double * Pb, int P_size ){
    libGint * g_handle = (libGint *) handle ;
-   g_handle -> set_P( Pa, Pb, P_size ); 
+   g_handle -> set_P( Pa, Pb, P_size );
+   g_handle -> zero_K( P_size, P_size );
 }
 
-void libgint_set_K( void * handle, double * K, int K_size, double fac ){
+void libgint_set_K( void * handle, double * K, int K_size ){
    libGint * g_handle = (libGint *) handle ;
-//   cout << " Setting K with handle " << handle << " @ " << K << " x " << K_size << " fac: " << fac << endl;
    g_handle -> set_K( K, K_size ); 
-   g_handle -> hf_fac = fac ;
 }
 
 void libgint_set_K_polarized( void * handle, double * Ka, double * Kb, int K_size ){
