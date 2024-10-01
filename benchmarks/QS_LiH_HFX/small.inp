@@ -14,6 +14,7 @@
       REL_CUTOFF 20
     &END MGRID
     &QS
+      MIN_PAIR_LIST_RADIUS -1
       EPS_DEFAULT 1.0E-9
       METHOD GAPW
     &END QS
@@ -22,7 +23,7 @@
     &END
     &SCF
       EPS_SCF 1.0E-9
-      MAX_SCF 2
+      MAX_SCF 20
       SCF_GUESS ATOMIC
       &OT
         PRECONDITIONER FULL_SINGLE_INVERSE
@@ -35,8 +36,8 @@
     &XC
       &HF
         &INTERACTION_POTENTIAL
-          CUTOFF_RADIUS 4.0
-          POTENTIAL_TYPE COULOMB
+          CUTOFF_RADIUS 6.0
+          POTENTIAL_TYPE TRUNCATED
           T_C_G_DATA ./t_c_g.dat
         &END INTERACTION_POTENTIAL
         &MEMORY
@@ -53,22 +54,20 @@
   &END DFT
   &SUBSYS
     &CELL
-      ABC 16.252 16.252 16.252
+      ABC 12.252 12.252 12.252
     &END CELL
     &COORD
-      H 16 0 0
-      H 0 1 0
-      Li 2.0 1.0 0
-      H 16 0 1
-      H 0 1 1
-      Li 1.0 1.0 0.5
-   &END COORD
+      H 2.042 8.168 0
+      H 2.042 10.21 2.042
+
+
+    &END COORD
     &KIND H
       BASIS_SET MP1
       POTENTIAL ALL 
     &END KIND
     &KIND Li
-      BASIS_SET MP1
+      BASIS_SET MP0
       POTENTIAL ALL 
     &END KIND
 

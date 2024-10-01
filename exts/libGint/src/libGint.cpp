@@ -103,10 +103,12 @@ void libGint::set_hf_fac(double fac){ hf_fac = fac; }
 void libGint::set_max_mem(int max_mem_){
    max_mem = size_t(max_mem_) * 1024 * 1024 ;
    max_mem_per_thread = max_mem / Nomp;
+#pragma omp single
    cout << " Max mem is " << max_mem << " " << max_mem_per_thread << endl ;
 }
 
 void libGint::set_Atom( int i, double* R_, double* Z_, int np_ ){
+   // why ?
    if ( i >= idx_R.size() ){ idx_R.resize(i+1); }
    if ( i >= idx_Z.size() ){ idx_Z.resize(i+1); }
    if ( i >= np.size() ){ np.resize(i+1); }
@@ -332,10 +334,15 @@ void libGint::add_set(){
    prm_in_set = 0;
    n_set += 1;
 
-   if ( n_set > 1 and n_set % 1000 == 0){
+   if ( n_set > 1 and n_set % 1 == 0){
       size_t mem_needed = memory_needed();
       if ( mem_needed > max_mem_per_thread ){
+         cout << " Dispatching after " << n_set << endl;
          dispatch(false);
+         n_set = 0;
+      } else {
+//         #pragma omp critical
+//         cout << n_set << " " << mem_needed << endl;
       }
    }
 
@@ -381,7 +388,6 @@ void libGint::compute_max_vector_size(){
       max_plan_size = 1e6;
       size_t integral_scratch_size = Fm_size[L] + AC_size[L] + ABCD_size[L] + ABCD0_size[L] + SPHER_size[L] ;
       max_integral_scratch_size = max( max_integral_scratch_size, integral_scratch_size );
-
       max_OF_size    = max(max_OF_size,    OF[L].size());
       max_PMX_size   = max(max_PMX_size,  PMX[L].size());
       max_FVH_size   = max(max_FVH_size,  FVH[L].size());
@@ -392,11 +398,17 @@ void libGint::compute_max_vector_size(){
 
 size_t libGint::memory_needed( ){
    compute_max_vector_size();
-   size_t tmp = (max_plan_size + max_OF_size + max_PMX_size + max_FVH_size + max_KS_size);
-   size_t add1 = tmp * sizeof(unsigned int);
-   size_t add2 = (max_integral_scratch_size) * sizeof(double);
-   size_t add3 = 2 * nspin * FP_size * sizeof(double) / Nomp;
-   return add1+add2+add3;
+   size_t data_size = ua.internal_buffer.size()*sizeof(double) ;
+   size_t scratch_size = sizeof(double)*max_integral_scratch_size;
+   size_t  OF_idx_size = sizeof(unsigned int)*max_OF_size;
+   size_t PMX_idx_size = sizeof(unsigned int)*max_PMX_size  ; 
+   size_t FVH_idx_size = sizeof(unsigned int)*max_FVH_size  ;
+   size_t  KS_idx_size = sizeof(unsigned int)*max_KS_size  ;
+   size_t AUX_size     = sizeof(int)*(max_plan_size);
+          AUX_size    += sizeof(double)*(2*9+3*max_ncells+3388+245+C0_size);
+   size_t  KS_size_omp = 2 * nspin * sizeof(double)*(FP_size) / Nomp ;
+   size_t tot_mem = data_size + scratch_size + OF_idx_size + PMX_idx_size + FVH_idx_size + KS_idx_size + AUX_size + KS_size_omp; 
+   return tot_mem;
 }
 
 void libGint::set_cell( bool periodic_, double * cell_h_,  double * cell_i_ ){
@@ -411,7 +423,6 @@ void libGint::set_cell( bool periodic_, double * cell_h_,  double * cell_i_ ){
 void libGint::set_neighs( double * neighs_, int nneighs_ ){
 //#pragma omp critical
 //   {cout << " Setting neigh " << nneighs_ << " " << neighs_[0] << " -  " << neighs_[3*nneighs_-1] << endl; cout.flush();}
- 
    max_ncells = nneighs_;
    neighs.resize(3*nneighs_);
    for (int i=0;i<3*nneighs_;i++){ neighs[i] = neighs_[i]; }
@@ -421,7 +432,6 @@ void libGint::set_P( double * P_, int P_size ){
    nspin = 1;
    P_a = P_ ;
    FP_size = P_size;
-
 
 #pragma omp single copyprivate(P_a_dev)
    {
@@ -578,7 +588,6 @@ void libGint::reset_indices(unsigned int L){
     OF[L].clear();
    PMX[L].clear();
    FVH[L].clear();
-   SPH[L].clear();
     KS[L].clear();
    offset_F[L] = 0;
    offset_V[L] = 0;
@@ -619,7 +628,7 @@ void libGint::dispatch( bool dispatch_all ){
 //   OUT.resize(out_size);
 
    // TODO move at init
-   int ftable_ld = 0; // ld of table for fgamma
+   int ftable_ld = 0; // ld of table for fgamma === n+1 === nmax + 6 + 1 === 21 + 6 + 1 === 28
    int nmax = 21;
    double tdelta = 0.1;  // hardcoded in source code
    double tmin = 0.; // hardcoded in source code
@@ -627,53 +636,37 @@ void libGint::dispatch( bool dispatch_all ){
    int n = nmax + 6; // 6 is the max taylor expansion. Also hardcoded
    int itabmin = floor(tmin/tdelta); // === 0
    int itabmax = int((tmax - tmin)/tdelta); // === 120
-   int nelem = (itabmax - itabmin + 1 ) * (n+1); // === 121*(n+1) == 121*ftable_ld
+   int nelem = (itabmax - itabmin + 1 ) * (n+1); // === 121*(n+1) == 121*ftable_ld === 121*28 === 3388
    double* ftable = create_md_ftable( nmax, tmin, tmax, tdelta, &ftable_ld);
 
-   /*
-   size_t tot_mem = 0;
-   tot_mem += out_size*sizeof(double);
-   tot_mem += ua.internal_buffer.size()*sizeof(double) ;
-   tot_mem += sizeof(double)*max_integral_scratch_size;
-   tot_mem += sizeof(int)*max_plan_size          ;
-   tot_mem += sizeof(unsigned int)*max_OF_size  ; 
-   tot_mem += sizeof(unsigned int)*max_PMX_size  ; 
-   tot_mem += sizeof(unsigned int)*max_FVH_size  ;
-   tot_mem += sizeof(unsigned int)*max_SPH_size  ;
-   tot_mem += sizeof(unsigned int)*max_KS_size  ;
-   tot_mem += sizeof(unsigned int)*max_TRA_size  ;
-   tot_mem += sizeof(unsigned int)*(3*max_ncells+2*9+nelem+245) ;
-   tot_mem += 2 * sizeof(double)*(FP_size) ;
-
-   
-   #pragma omp single
-   if ( first ){
-     cout << "Memory use: (B)" << endl;
-     cout << " OUT DAT SCRT PLAN OF PMX FVH SPH KS TRA AUX FK TOT" << endl;
-     cout.flush();
-   }
-   first = false;
+   size_t data_size = ua.internal_buffer.size()*sizeof(double) ;
+   size_t scratch_size = sizeof(double)*max_integral_scratch_size;
+   size_t  OF_idx_size = sizeof(unsigned int)*max_OF_size;
+   size_t PMX_idx_size = sizeof(unsigned int)*max_PMX_size  ; 
+   size_t FVH_idx_size = sizeof(unsigned int)*max_FVH_size  ;
+   size_t  KS_idx_size = sizeof(unsigned int)*max_KS_size  ;
+   size_t AUX_size     = sizeof(int)*(max_plan_size);
+          AUX_size    += sizeof(double)*(2*9+3*max_ncells+nelem+245+C0_size);
+   size_t  KS_size_omp = 2 * nspin * sizeof(double)*(FP_size) / Nomp ;
+   size_t tot_mem = data_size + scratch_size + OF_idx_size + PMX_idx_size + FVH_idx_size + KS_idx_size + AUX_size + KS_size_omp; 
 
    #pragma omp critical
    {
-   double scale = 1.0;
-   cout << int( OUT.size()*sizeof(double) *scale ) << " ";
-   cout << int( ua.internal_buffer.size()*sizeof(double) *scale ) << " ";
-   cout << int( sizeof(double)*max_integral_scratch_size *scale ) << " ";
-   cout << int( sizeof(int)*max_plan_size          *scale ) << "  ";
-   cout << int( sizeof(unsigned int)*max_OF_size   *scale ) << "  "; 
-   cout << int( sizeof(unsigned int)*max_PMX_size  *scale ) << "  "; 
-   cout << int( sizeof(unsigned int)*max_FVH_size  *scale ) << "  ";
-   cout << int( sizeof(unsigned int)*max_SPH_size  *scale ) << "  ";
-   cout << int( sizeof(unsigned int)*max_KS_size   *scale ) << "  ";
-   cout << int( sizeof(unsigned int)*max_TRA_size  *scale ) << "  ";
-   cout << int( sizeof(unsigned int)*(9+nelem+245) *scale ) << "  "; 
-   cout << int( 2 * sizeof(double)*(FP_size)       *scale ) << "  "; 
-   cout << int( tot_mem *scale ) << endl; cout.flush();
+   double scale = 1.0/1024/1024;
+   cout << " Allocating: ";
+   cout << data_size    * scale << " " ;  
+   cout << scratch_size * scale << " " ; 
+   cout <<  OF_idx_size * scale << " " ; 
+   cout << PMX_idx_size * scale << " " ; 
+   cout << FVH_idx_size * scale << " " ;  
+   cout <<  KS_idx_size * scale << " " ; 
+   cout << AUX_size     * scale << " " ; 
+   cout <<  KS_size_omp * scale << " | " ; 
+   cout << tot_mem      * scale << " | " ;
+   cout << max_mem_per_thread * scale ; 
+   cout << endl;
    }
-   #pragma omp barrier
-   */
-   
+
    double *data_dev, *cell_h_dev, *neighs_dev, *ftable_dev, *C2S_dev;
    double *integral_scratch_dev;
    unsigned int *OF_dev, *PMX_dev, *FVH_dev,*KS_dev; //, *SPH_dev, *TRA_dev;
@@ -681,16 +674,16 @@ void libGint::dispatch( bool dispatch_all ){
 
    PUSH_RANGE("dispatch malloc",1);
    CUDA_GPU_ERR_CHECK( cudaMalloc( (void**)&data_dev, sizeof(double)*(ua.internal_buffer.size()) ));
+   CUDA_GPU_ERR_CHECK( cudaMalloc( (void**)&integral_scratch_dev, sizeof(double)*max_integral_scratch_size ));
+   CUDA_GPU_ERR_CHECK( cudaMalloc( (void**)&OF_dev , sizeof(unsigned int)*max_OF_size )); 
+   CUDA_GPU_ERR_CHECK( cudaMalloc( (void**)&PMX_dev, sizeof(unsigned int)*max_PMX_size )); 
+   CUDA_GPU_ERR_CHECK( cudaMalloc( (void**)&FVH_dev, sizeof(unsigned int)*max_FVH_size ));
+   CUDA_GPU_ERR_CHECK( cudaMalloc( (void**)&KS_dev , sizeof(unsigned int)*max_KS_size  ));
    CUDA_GPU_ERR_CHECK( cudaMalloc( (void**)&cell_h_dev, sizeof(double)*(2*9) ));
    CUDA_GPU_ERR_CHECK( cudaMalloc( (void**)&neighs_dev, sizeof(double)*(3*max_ncells) ));
    CUDA_GPU_ERR_CHECK( cudaMalloc( (void**)&ftable_dev, sizeof(double)*(nelem) ));
    CUDA_GPU_ERR_CHECK( cudaMalloc( (void**)&C2S_dev, sizeof(double)*245 ));
-   CUDA_GPU_ERR_CHECK( cudaMalloc( (void**)&integral_scratch_dev, sizeof(double)*max_integral_scratch_size ));
    CUDA_GPU_ERR_CHECK( cudaMalloc( (void**)&plan_dev,sizeof(int)*max_plan_size ));
-   CUDA_GPU_ERR_CHECK( cudaMalloc( (void**)&OF_dev , sizeof(unsigned int)*max_OF_size )); 
-   CUDA_GPU_ERR_CHECK( cudaMalloc( (void**)&PMX_dev, sizeof(unsigned int)*max_PMX_size )); 
-   CUDA_GPU_ERR_CHECK( cudaMalloc( (void**)&FVH_dev, sizeof(unsigned int)*max_FVH_size ));
-   CUDA_GPU_ERR_CHECK( cudaMalloc( (void**)&KS_dev , sizeof(unsigned int)*max_KS_size  )); 
 //   CUDA_GPU_ERR_CHECK( cudaDeviceSynchronize() );
 //   CUDA_GPU_ERR_CHECK( cudaPeekAtLastError() );
    POP_RANGE; // dispatch malloc
@@ -721,13 +714,11 @@ void libGint::dispatch( bool dispatch_all ){
 
       // Early exit moments with a small number of integrals
       // No worry, they are guaranteed to be computed before get_K returns
+      if ( SPHER_size[L] < 1000 and not dispatch_all ) { continue; }
       if ( SPHER_size[L] == 0 ){ continue; }
-      if ( SPHER_size[L] < 1000000 and not dispatch_all ) { continue; }
 
-
-
-      double t0 = dis_timer.elapsedMilliseconds();
-      double t1;
+//      double t0 = dis_timer.elapsedMilliseconds();
+//      double t1;
 
       int la,lb,lc,ld,labcd;
       decodeL(L,&la,&lb,&lc,&ld);
@@ -749,19 +740,19 @@ void libGint::dispatch( bool dispatch_all ){
 
       std::string Lname = std::to_string(la) + "_" + std::to_string(lb) + "_" + std::to_string(lc) + "_" + std::to_string(ld);
 
-#pragma omp critical
-      {
-      cout << " L " << la << "" << lb << "" << lc << "" << ld << " | ";
-      cout << Nprm << " prms " << Ncells << " cells " << Nqrtt << " qrtts " << max_ncells << " Ng | " ;
-      cout << Fm_size[L] << " " << AC_size[L] << " " << ABCD_size[L] << " " << ABCD0_size[L] << " " << SPHER_size[L] << " | " ;
-      cout << dis_timer.elapsedMilliseconds() << " | " ;
-      }
+//#pragma omp critical
+//      {
+//      cout << " L " << la << "" << lb << "" << lc << "" << ld << " | ";
+//      cout << Nprm << " prms " << Ncells << " cells " << Nqrtt << " qrtts " << max_ncells << " Ng | " ;
+//      cout << Fm_size[L] << " " << AC_size[L] << " " << ABCD_size[L] << " " << ABCD0_size[L] << " " << SPHER_size[L] << " | " ;
+//      cout << dis_timer.elapsedMilliseconds() << " | " ;
+//      }
 
       PUSH_RANGE(Lname.c_str(),3);
 
       plans.get( la, lb, lc, ld, &plan, &vrr_blocksize, &hrr_blocksize, &numV, &numVC, &numVCH );
 
-      t1 = t0; t0 = dis_timer.elapsedMilliseconds() ; cout << t0 - t1 << " " ;
+//      t1 = t0; t0 = dis_timer.elapsedMilliseconds() ; cout << t0 - t1 << " " ;
 
       // it is possible that we reach this point before the previous loop completed, so we sync
       CUDA_GPU_ERR_CHECK( cudaStreamSynchronize(cuda_stream) );
@@ -777,16 +768,18 @@ void libGint::dispatch( bool dispatch_all ){
          FVH_dev, FVH[L].data(), sizeof(unsigned int)*(FVH[L].size()), cudaMemcpyHostToDevice, cuda_stream ));
       CUDA_GPU_ERR_CHECK( cudaMemcpyAsync(
           KS_dev,  KS[L].data(), sizeof(unsigned int)*( KS[L].size()), cudaMemcpyHostToDevice, cuda_stream )); 
+
       // (nvidia?) GPUs adhere to IEEE-754, so a pattern of all 0s represents a floating-point zero.
       CUDA_GPU_ERR_CHECK( cudaMemsetAsync( ABCD_dev, 0, ABCD_size[L]*sizeof(double) , cuda_stream ) );
       CUDA_GPU_ERR_CHECK( cudaMemsetAsync( ABCD0_dev, 0, ABCD0_size[L]*sizeof(double) , cuda_stream ) );
+
       // ! needed after async     
       CUDA_GPU_ERR_CHECK( cudaStreamSynchronize(cuda_stream) );     
-//      CUDA_GPU_ERR_CHECK( cudaPeekAtLastError() );
-//      CUDA_GPU_ERR_CHECK( cudaDeviceSynchronize() );
       POP_RANGE; // transfer indeces
 
       PUSH_RANGE("compute",5);
+//      CUDA_GPU_ERR_CHECK( cudaPeekAtLastError() );
+//      CUDA_GPU_ERR_CHECK( cudaDeviceSynchronize() );
 
       int Fm_blocksize = 32;
       int Fm_numblocks = (Nprm+Fm_blocksize-1)/Fm_blocksize;
@@ -795,9 +788,9 @@ void libGint::dispatch( bool dispatch_all ){
          FVH_dev, OF_dev, PMX_dev, data_dev, Fm_dev, Nprm, labcd,
          periodic, cell_h_dev, neighs_dev, ftable_dev, ftable_ld,R_cut,C0_dev,ld_C0,potential_type,max_ncells );
 
-      CUDA_GPU_ERR_CHECK( cudaPeekAtLastError() );
-      CUDA_GPU_ERR_CHECK( cudaDeviceSynchronize() );
-      t1 = t0; t0 = dis_timer.elapsedMilliseconds() ; cout << t0 - t1 << " " ;
+//      CUDA_GPU_ERR_CHECK( cudaPeekAtLastError() );
+//      CUDA_GPU_ERR_CHECK( cudaDeviceSynchronize() );
+//      t1 = t0; t0 = dis_timer.elapsedMilliseconds() ; cout << t0 - t1 << " " ;
 
 //      std::vector<double> FM_on_cpu(Fm_size[L]);
 //      CUDA_GPU_ERR_CHECK( cudaMemcpy( FM_on_cpu.data(),  Fm_dev, sizeof(double)*(Fm_size[L]), cudaMemcpyDeviceToHost) );
@@ -820,9 +813,9 @@ void libGint::dispatch( bool dispatch_all ){
          Ncells, plan_dev, PMX_dev, FVH_dev, Fm_dev, data_dev,
          AC_dev, ABCD_dev, vrr_blocksize, hrr_blocksize, labcd, numV, numVC, max_ncells ); 
 
-      CUDA_GPU_ERR_CHECK( cudaPeekAtLastError() );
-      CUDA_GPU_ERR_CHECK( cudaDeviceSynchronize() );
-      t1 = t0; t0 = dis_timer.elapsedMilliseconds() ; cout << t0 - t1 << " " ;
+//      CUDA_GPU_ERR_CHECK( cudaPeekAtLastError() );
+//      CUDA_GPU_ERR_CHECK( cudaDeviceSynchronize() );
+//      t1 = t0; t0 = dis_timer.elapsedMilliseconds() ; cout << t0 - t1 << " " ;
 
 //      std::vector<double> AC_on_cpu(AC_size[L]);
 //      CUDA_GPU_ERR_CHECK( cudaMemcpy( AC_on_cpu.data(),  AC_dev, sizeof(double)*(AC_size[L]), cudaMemcpyDeviceToHost) );
@@ -857,9 +850,9 @@ void libGint::dispatch( bool dispatch_all ){
          periodic, cell_h_dev, neighs_dev,
          hrr_blocksize, Nc, numVC, numVCH );
 
-      CUDA_GPU_ERR_CHECK( cudaPeekAtLastError() );
-      CUDA_GPU_ERR_CHECK( cudaDeviceSynchronize() );
-      t1 = t0; t0 = dis_timer.elapsedMilliseconds() ; cout << t0 - t1 << " " ;
+//      CUDA_GPU_ERR_CHECK( cudaPeekAtLastError() );
+//      CUDA_GPU_ERR_CHECK( cudaDeviceSynchronize() );
+//      t1 = t0; t0 = dis_timer.elapsedMilliseconds() ; cout << t0 - t1 << " " ;
 
 //      std::vector<double> ABCD0_on_cpu(ABCD0_size[L]);
 //      CUDA_GPU_ERR_CHECK( cudaMemcpy( ABCD0_on_cpu.data(),  ABCD0_dev, sizeof(double)*(ABCD0_size[L]), cudaMemcpyDeviceToHost) );
@@ -876,9 +869,9 @@ void libGint::dispatch( bool dispatch_all ){
       // note: uses ABCD as a scratch space
       compute_SPH_batched_gpu_alt ( Nqrtt, la, lb, lc, ld, ABCD0_dev, SPHER_dev, ABCD_dev, C2S_dev, cublas_handle );
 
-      CUDA_GPU_ERR_CHECK( cudaPeekAtLastError() );
-      CUDA_GPU_ERR_CHECK( cudaDeviceSynchronize() );
-      t1 = t0; t0 = dis_timer.elapsedMilliseconds() ; cout << t0 - t1 << " " ;
+//      CUDA_GPU_ERR_CHECK( cudaPeekAtLastError() );
+//      CUDA_GPU_ERR_CHECK( cudaDeviceSynchronize() );
+//      t1 = t0; t0 = dis_timer.elapsedMilliseconds() ; cout << t0 - t1 << " " ;
 
 //      CUDA_GPU_ERR_CHECK( cudaPeekAtLastError() );
 //      CUDA_GPU_ERR_CHECK( cudaDeviceSynchronize() );
@@ -905,10 +898,10 @@ void libGint::dispatch( bool dispatch_all ){
          compute_KS_gpu<<<Nqrtt,128,0,cuda_stream>>>( Nqrtt, KS_dev, la,lb,lc,ld, P_b_dev, SPHER_dev, K_b_dev, data_dev, hf_fac );
       }
 
-      CUDA_GPU_ERR_CHECK( cudaPeekAtLastError() );
-      CUDA_GPU_ERR_CHECK( cudaDeviceSynchronize() );
-      t1 = t0; t0 = dis_timer.elapsedMilliseconds() ; cout << t0 - t1 << " " ;
-      cout << endl;
+//      CUDA_GPU_ERR_CHECK( cudaPeekAtLastError() );
+//      CUDA_GPU_ERR_CHECK( cudaDeviceSynchronize() );
+//      t1 = t0; t0 = dis_timer.elapsedMilliseconds() ; cout << t0 - t1 << " " ;
+//      cout << endl;
 
 //      compute_TRA_batched_gpu_low<<<Nshell,128>>>( Nshell, la, lb, lc, ld, TRA_dev, SPHER_dev, OUT_dev );
 
@@ -943,21 +936,17 @@ void libGint::dispatch( bool dispatch_all ){
    CUDA_GPU_ERR_CHECK( cudaStreamSynchronize(cuda_stream) );
 
    // TODO move to some resize / delete function
-//   CUDA_GPU_ERR_CHECK( cudaFree(OUT_dev) );
    CUDA_GPU_ERR_CHECK( cudaFree(data_dev) );
+   CUDA_GPU_ERR_CHECK( cudaFree(integral_scratch_dev) );
+   CUDA_GPU_ERR_CHECK( cudaFree( OF_dev) );
+   CUDA_GPU_ERR_CHECK( cudaFree(PMX_dev) );
+   CUDA_GPU_ERR_CHECK( cudaFree(FVH_dev) );
+   CUDA_GPU_ERR_CHECK( cudaFree( KS_dev) ); 
    CUDA_GPU_ERR_CHECK( cudaFree(cell_h_dev) );
    CUDA_GPU_ERR_CHECK( cudaFree(neighs_dev) );
    CUDA_GPU_ERR_CHECK( cudaFree(ftable_dev) );
    CUDA_GPU_ERR_CHECK( cudaFree(C2S_dev) );
-   CUDA_GPU_ERR_CHECK( cudaFree(integral_scratch_dev) );
    CUDA_GPU_ERR_CHECK( cudaFree(plan_dev) );
-   CUDA_GPU_ERR_CHECK( cudaFree( OF_dev) );
-   CUDA_GPU_ERR_CHECK( cudaFree(PMX_dev) );
-   CUDA_GPU_ERR_CHECK( cudaFree(FVH_dev) );
-//   CUDA_GPU_ERR_CHECK( cudaFree(SPH_dev) );
-   CUDA_GPU_ERR_CHECK( cudaFree( KS_dev) );
-//   CUDA_GPU_ERR_CHECK( cudaFree(TRA_dev) );
-  
 
    dis_timer.stop();
    dis_ms += dis_timer.elapsedMilliseconds(); 

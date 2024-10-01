@@ -1437,6 +1437,8 @@ CONTAINS
                   sphi_d_u2 = UBOUND(sphi_d_ext, 2)
                   sphi_d_u3 = UBOUND(sphi_d_ext, 3)
 
+                  ! Note: shm_atomic_block_offset is already symmetric
+                  ! see get_atomic_block_maps in hfx_communication.F
                   atomic_offset_bd = shm_atomic_block_offset(jatom, latom)
                   atomic_offset_bc = shm_atomic_block_offset(jatom, katom)
                   atomic_offset_ad = shm_atomic_block_offset(iatom, latom)
@@ -1512,7 +1514,6 @@ CONTAINS
                   END IF
 
                   !! At this stage, check for memory used in compression
-
                   IF (my_geo_change) THEN
                      IF (.NOT. memory_parameter%do_all_on_the_fly) THEN
                         ! ** We know the maximum amount of integrals that we can store per MPI-process
@@ -1614,6 +1615,7 @@ CONTAINS
                         pmax_entry = EXP(log10_pmax*ln_10)
 
                         ! libGint can only run in direct mode at the moment
+                        ! so there is no need to check the buffers
                         if ( use_libGint ) then
                            iatom_set = first_set_of_atom(iatom)+iset-2
                            jatom_set = first_set_of_atom(jatom)+jset-2
@@ -1626,7 +1628,7 @@ CONTAINS
                            ! TODO a more modern approach in which the call is more like
                            ! call coulom_4_gpu( HFX_data, iset, jset, kset, lset, [bra, ket] )
 
-!                              CALL timeset(routineN//"_c4g", handle_c4g)
+                           !call timeset(routineN//"_c4g", handle_c4g)
                            call coulomb_4_gpu( &
                               libGint_handle, iatom_set, jatom_set, katom_set, latom_set, &
                               ra, rb, rc, rd, &
@@ -1638,14 +1640,14 @@ CONTAINS
                               tmp_screen_pgf1, tmp_screen_pgf2, &
                               bra, ket, & 
                               actual_x_data%neighbor_cells, cell, do_periodic, screened )
-!                              call timestop(handle_c4g)
+                           !call timestop(handle_c4g)
 
                            if ( .not. screened ) then
 
                               ! TODO a more modern approach in which the call is more like
                               ! call update_fock_matrix_gpu( HFX_data, iset, jset, kset, lset )
 
-!                                 CALL timeset(routineN//"_ufg", handle_ufg)
+                              !call timeset(routineN//"_ufg", handle_ufg)
                               call update_fock_matrix_gpu( &
                                  libGint_handle, symm_fac, &
                                  iatom, jatom, katom, latom, &
@@ -1656,7 +1658,7 @@ CONTAINS
                                  la_min(iset), la_max(iset), lb_min(jset), lb_max(jset), &
                                  lc_min(kset), lc_max(kset), ld_min(lset), ld_max(lset), &
                                  nsgfl_a, nsgfl_b, nsgfl_c, nsgfl_d)
-!                                 call timestop(handle_ufg)
+                                 !call timestop(handle_ufg)
 
                            end if
                         end if
@@ -1865,7 +1867,6 @@ CONTAINS
                            END IF
                            IF (.NOT. is_anti_symmetric) THEN
                               !! Update Kohn-Sham matrix
-   !                           write (*,*) " Adding ", primitive_integrals, " to K "
                               CALL update_fock_matrix( &
                                  nsgfa(iset), nsgfb(jset), nsgfc(kset), nsgfd(lset), &
                                  fac, symm_fac, full_density_alpha(:, 1), full_ks_alpha(:, 1), &
@@ -1927,12 +1928,6 @@ CONTAINS
       END DO !bin
 
       !!!
-
-!      write (*,*) " Dispatch returned "
-
-!      write (*,*) " P from CPU calculations before symmetrization " 
-!      write (*,*) full_density_alpha(:,1)
-
       CALL para_env%sync()
 
       ! IF running both libint and libGint, uses the values from libint to check libGint values
@@ -2469,8 +2464,7 @@ CONTAINS
    END FUNCTION my_pbc
 
 
-!> \brief Assign two-electron integrals of a quartet/shell to the library
-!>      libGint in the periodic case for later dispatch
+!> \brief Assign two-electron integrals of a quartet/shell to libGint
 !
 ! TODO maybe move all this to libGint
 ! possible if we remove all mixed-bra-ket screening and the prm screening 
@@ -2598,9 +2592,10 @@ CONTAINS
    !    |   a_p1_2@c_s1_0  || a_p1_2@c_p1_0 | a_p1_2@c_p1_1 | a_p1_2@c_p1_2 || a_p1_2@c_p2_0 | a_p1_2@c_p2_1 | a_p1_2@c_p2_2 |
    !    \ -------------------------------------------------------------------------------------------------------------------/
    !
-   ! (2) This matrix is contigous in memory, in fortran column major order
-   ! (3) This matrix is symmetric. 
-   ! (4) The matrix is block sparse triangular, only the lower part is valid
+   ! where A_LX_Y means the (Y+1) component of the Xth linear combination of the L angular moment for atom A
+   !
+   ! (2) This matrix is dense, rectangular and contigous in memory, in fortran column major order.
+   ! (3) The big matrix with all pairs is block sparse triangular, only the lower part is valid.
 
       type(c_ptr) :: libGint_handle
       real(dp) :: symm_fac
@@ -2621,7 +2616,17 @@ CONTAINS
       integer :: s_offset_ac, s_offset_ad, s_offset_bc, s_offset_bd
       integer :: ld_ac_set, ld_ad_set, ld_bc_set, ld_bd_set
       integer :: la,lb,lc,ld,nla,nlb,nlc,nld,inla,inlb,inlc,inld
- 
+
+      ! TODO rewrite as update_fock_matrix_gpu(libGint_handle, iatomset,jatomset,katomset,latomset )
+      ! AFTER TODO communicate (the pointer to) atomic_offset to libGint AND
+      ! AFTER TODO communicate (the pointer to)    set_offset to libGint AND
+      ! AFTER TODO check if this idea makes sense in general for other codes
+      !
+      ! Note: this would not change the need to compute sub offsets and
+      ! the 8 loops, it would just transfer them to libGint
+      ! Except, if libGint can be sure every set has 1  l, it can collapse the l loops
+      ! and/or, if libGint can be sure every l   has 1 nl, it can collapse the n loops
+
       if ( jatom >= latom ) then 
         offset_bd_L_set = offset_bd_set(jset, lset) + atomic_offset_bd - 2
         ld_bd_set = nsgfb
@@ -2667,7 +2672,7 @@ CONTAINS
 !      write (*,*) "                  " , offset_ac_set, offset_ad_set, offset_bc_set, offset_bd_set
 !      write (*,*) "     ->           " , offset_ac_L_set, offset_ad_L_set, offset_bc_L_set, offset_bd_L_set
 !!$omp end critical
-      if ( symm_fac < 0 ) s_offset_a_l = 0 
+      
       s_offset_a_l = 0
       DO la = la_min, la_max
          nla = nsgfl_a(la,iset)
@@ -2681,7 +2686,6 @@ CONTAINS
                ld_loop: DO ld = ld_min, ld_max
                   nld = nsgfl_d(ld,lset)
                   call libgint_add_qrt(libGint_handle, la,lb,lc,ld,  nla,nlb,nlc,nld )
-
                   do inla=1, nla
                      s_offset_a = s_offset_a_l + (inla-1) * ( 2 * la + 1 )
                      do inlb=1, nlb
