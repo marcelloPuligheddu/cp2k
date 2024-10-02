@@ -564,18 +564,18 @@ __global__ void compute_VRR_batched_gpu_low(
       for ( unsigned i = my_vrr_team; i < n_prm ;  i += num_vrr_teams ){
 
          unsigned int Of   = ((Ov+i) * Ng + n3 ) * F_size;
+         if (Fm[Of] < 1.e-20 ){ continue; } // Early primitive screening
+
          unsigned int ipzn = PMX[Ov+i];
          unsigned int ipa,ipb,ipc,ipd;
-
          // We need to know the index of the pgfs to find the K coefficents
          decode4( ipzn, &ipa,&ipb,&ipc,&ipd );
-
          double* pr_mem = &AC[ ((Ov+i) * Ng + n3) * vrr_blocksize ];
          for( int il=0; il < L+1; il++ ){
             pr_mem[il] = Fm[Of+il];
          }
 
-         if (pr_mem[0] < 1.e-20 ){ continue; }
+
 
          const double* PA = nullptr;
          const double* WP = nullptr;
