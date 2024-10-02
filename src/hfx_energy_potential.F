@@ -922,12 +922,6 @@ CONTAINS
 !$OMP END MASTER
 !$OMP BARRIER
 
-!$OMP MASTER
-      if (para_env%is_source()) then 
-         write(*,*) "OFFLOAD TYPE " , general_parameter%offload
-      end if
-!$OMP END MASTER
-
       if (general_parameter%offload == 0) then
          use_libint = .true.
          use_libGint = .false.
@@ -972,7 +966,6 @@ CONTAINS
          end if if_first_call
          ! Set the multiplicative factor fac (the fraction of exact exchange times the spin factor) for libGint
          call libGint_set_hf_fac( libGint_handle, fac )
-         write(*,*) " MAX MEM: " , memory_parameter%max_memory 
          call libGint_set_max_mem( libGint_handle, memory_parameter%max_memory )
          ! Info about periodic cells and neighbouring cells
          do_pbc = do_periodic
