@@ -24,33 +24,45 @@ SOFTWARE.
 #ifndef DEFINE_COMPILE_GUARD
 #define DEFINE_COMPILE_GUARD
 
+// TODO remove magic numbers
 // Due to accumulation of arith errors, it is possible for the QP wrapping
 // to become unstable and incompatible with the rounding used on the CPU side
 // for the bra and ket primitive screening.
 #define EPS_ROUNDING 1.e-9
+// Batches that compute less than this number of
+// \"integrals between spherical harmonic basis functions\"
+// \"after contraction and after sum over lattice vectors\"
+// will be deferred for calculations at a later time
+#define MIN_INT_BATCH_SIZE 10000
+// Check every this number of sets if we are using
+// more memory than the user given limit.
+#define CHECK_EVERY_N_SETS 128
 
 // max number of periodic cell, 2**8
-//#define MAX_N_CELL 256 
-#define MAX_N_CELL 100
+#define MAX_N_CELL 256 
+//#define MAX_N_CELL 100 // Useful for debug, so the encoding is human readable
+
 // max number of prm per STO, 2**6. Way larger than sanity should allow
-//#define MAX_N_PRM   64
-#define MAX_N_PRM   10
+#define MAX_N_PRM   64
+//#define MAX_N_PRM   10 // Useful for debug, so the encoding is human readable
 // max number of linear combinations of 
 // gassian in the same set and with the same ang. moment, 2**4.
 // E.g. this cp2k set with 23 linear combinations of 32 gaussians is not valid
 // 1
 // 1 0 0 32 23 
 // [exp and gcc omitted]
-//
-//#define MAX_N_L     16
-#define MAX_N_L     10
+
+#define MAX_N_L     16
+//#define MAX_N_L     10 // Useful for debug, so the encoding is human readable
+
 // Should be 8 + 4*6 = 32 bits
 static_assert( (unsigned long int) MAX_N_CELL * MAX_N_PRM * MAX_N_PRM * MAX_N_PRM * MAX_N_PRM <= 4294967296,
       "Error, MAX_N_PRM or MAX_N_CELL are too large" );
 // Should be 8 + 8 + 4*4 = 32 bits
 static_assert( (unsigned long int) MAX_N_CELL * MAX_N_CELL * MAX_N_L * MAX_N_L * MAX_N_L * MAX_N_L <= 4294967296,
       "Error, MAX_N_L or MAX_N_CELL are too large");
-// 
+
+// TODO remove outdated 
 #define PAL_SLOTS 3
 
 #define BAS_SLOTS 8

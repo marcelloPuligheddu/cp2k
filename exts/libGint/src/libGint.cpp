@@ -10,7 +10,6 @@
 #include "compute_VRR.h"
 #include "compute_HRR.h"
 #include "compute_SPH.h"
-//#include "compute_TRA.h"
 #include "fgamma.h"
 #include "libGint.h"
 #include "c2s.h"
@@ -332,7 +331,7 @@ void libGint::add_set(){
    prm_in_set = 0;
    n_set += 1;
 
-   if ( n_set > 1 and n_set % 100 == 0){
+   if ( n_set % CHECK_EVERY_N_SETS == 0){
       size_t mem_needed = memory_needed();
       if ( mem_needed > max_mem_per_thread ){
 //         cout << " Dispatching after " << n_set << endl;
@@ -668,6 +667,7 @@ void libGint::dispatch( bool dispatch_all ){
    int *plan_dev;
 
 //   PUSH_RANGE("dispatch malloc",1);
+//   TODO move allocs at set_P time
    CUDA_GPU_ERR_CHECK( cudaMalloc( (void**)&data_dev, sizeof(double)*(ua.internal_buffer.size()) ));
    CUDA_GPU_ERR_CHECK( cudaMalloc( (void**)&integral_scratch_dev, sizeof(double)*max_integral_scratch_size ));
    CUDA_GPU_ERR_CHECK( cudaMalloc( (void**)&OF_dev , sizeof(unsigned int)*max_OF_size )); 
@@ -709,7 +709,7 @@ void libGint::dispatch( bool dispatch_all ){
 
       // Early exit moments with a small number of integrals
       // No worry, they are guaranteed to be computed before get_K returns
-      if ( SPHER_size[L] < 1000 and not dispatch_all ) { continue; }
+      if ( SPHER_size[L] < MIN_INT_BATCH_SIZE and not dispatch_all ) { continue; }
       if ( SPHER_size[L] == 0 ){ continue; }
 
 //      double t0 = dis_timer.elapsedMilliseconds();
@@ -931,7 +931,7 @@ void libGint::dispatch( bool dispatch_all ){
    // as long as we sync (all streams in this MPI rank) before copying K back 
    CUDA_GPU_ERR_CHECK( cudaStreamSynchronize(cuda_stream) );
 
-   // TODO move to some resize / delete function
+   // TODO move to some resize / delete function at get_K time
    CUDA_GPU_ERR_CHECK( cudaFree(data_dev) );
    CUDA_GPU_ERR_CHECK( cudaFree(integral_scratch_dev) );
    CUDA_GPU_ERR_CHECK( cudaFree( OF_dev) );
