@@ -181,8 +181,6 @@ __device__ void compute_Fm_batched_single( int p,
    //   fgamma0( 0, T, &F0, ftable, ftable_ld );
    //   printf("F @ %d %d %d (%d %d | %d %d)[ %d %d %d %d ] + | %d %d %d | = %lg * %lg * %lg * %lg \n", blockIdx.x, threadIdx.x, Of, idx_A, idx_B, idx_C, idx_D, ipa,ipb,ipc,ipd, n1, n2, n3, Zn, Kab, Kcd, F0 );
 
-
-
    //   printf(" shifting A %lf %lf %lf and B %lf %lf %lf by %lf %lf %lf \n", 
    //       Ao[0], Ao[1], Ao[2], Bo[0], Bo[1], Bo[2], ABs[0], ABs[1], ABs[2] );
    //   printf(" shifting A %lf %lf %lf and B %lf %lf %lf by %lf %lf %lf \n", 

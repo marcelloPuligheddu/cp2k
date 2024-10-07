@@ -60,16 +60,14 @@ class libGint {
    void add_set();
    void set_Atom( int i, double* R_, double*Z_, int np_ );
    void set_Atom_L( int i, int l_, int nl_, double* K_  );
-   void set_max_n_prm( int max_n3 );
    void init();
    void set_Potential_Truncated( double R_cut, double * C0, int ld_C0, int C0_size );
    void set_hf_fac(double fac);
    void set_max_mem(int max_mem);
    void compute_max_vector_size();
-   size_t memory_needed();
 
    void dispatch(bool dispatch_all);
-   size_t out_size = 0;
+   size_t data_size = 0, AUX_size = 0, FP_size_omp = 0, byte_scratch_size = 0, byte_idx_arr_size = 0; 
 
    std::vector<double> OUT;
    bool periodic = false;
@@ -91,6 +89,7 @@ class libGint {
    cublasHandle_t cublas_handle;
    cudaStream_t cuda_stream;
 
+   int max_n_prm = 0;
    double hf_fac; // K += fac * I @@ P
    int Nomp = 0;
    size_t max_mem = 0;
@@ -129,13 +128,8 @@ class libGint {
    void set_neighs( double * neighs_, int nneighs );
 
    size_t max_integral_scratch_size = 0;
+   size_t max_idx_arr_size = 0;
    size_t max_plan_size = 0;
-   size_t max_OF_size = 0;
-   size_t max_PMX_size = 0;
-   size_t max_FVH_size = 0;
-   size_t max_SPH_size = 0;
-   size_t max_KS_size = 0;
-   size_t max_TRA_size = 0;
 
    unsigned int offset_F[NL4] = {0};
    unsigned int offset_V[NL4] = {0};
@@ -148,19 +142,15 @@ class libGint {
    std::vector<unsigned int> FVH[NL4];
    std::vector<unsigned int> OF[NL4];
    std::vector<unsigned int> PMX[NL4];
-   std::vector<unsigned int> SPH[NL4];
-   std::vector<unsigned int> TRA[NL4];
    std::vector<unsigned int> KS[NL4];
 
-   unsigned int dest=0;
    std::vector<unsigned int> prm_tmp_list;
    UniqueArray ua;
-//   bool is_gamma = true;
+
    unsigned int n_set = 0;
    unsigned int prm_in_set = 0;
    unsigned int n_prm = 0;
-   int max_n_prm;
-   int max_ncells;
+   int max_ncells = 0;
    unsigned int p0 = 0;
    unsigned int cell_in_set = 0;
    PlanCollection plans;
@@ -175,7 +165,6 @@ class libGint {
    unsigned int ABCD_size[NL4] = {0};
    unsigned int ABCD0_size[NL4] = {0};
    unsigned int SPHER_size[NL4] = {0};
-   unsigned int OUT_size[NL4] = {0};
 
    double cell_h[9] = {0};
    double cell_inv_h[9] = {0};

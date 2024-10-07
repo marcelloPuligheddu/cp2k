@@ -35,5 +35,15 @@ __global__ void compute_VRR_batched_gpu_low(
       double* const __restrict__ ABCD,
       int vrr_blocksize, int hrr_blocksize, int L, int numV, int numVC, const int Ng );
 
+__global__ void compute_ECO_batched_gpu_low(
+      const int Ncells, const int* __restrict__ plan,
+      const unsigned int* const __restrict__ PMX,
+      const unsigned int* const __restrict__ FVH,
+      const double* const __restrict__ Fm,
+      const double* const __restrict__ data,
+      double* const __restrict__ AC,
+      double* const __restrict__ ABCD,
+      int vrr_blocksize, int hrr_blocksize, int L, int numV, int numVC, const int Ng );
+
 
 #endif // COMPUTE_VRR_H_COMPILE_GUARD

@@ -33,10 +33,10 @@ SOFTWARE.
 // \"integrals between spherical harmonic basis functions\"
 // \"after contraction and after sum over lattice vectors\"
 // will be deferred for calculations at a later time
-#define MIN_INT_BATCH_SIZE 10000
-// Check every this number of sets if we are using
-// more memory than the user given limit.
-#define CHECK_EVERY_N_SETS 128
+#define MIN_INT_BATCH_SIZE 100
+
+
+
 
 // max number of periodic cell, 2**8
 #define MAX_N_CELL 256 
