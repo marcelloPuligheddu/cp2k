@@ -215,9 +215,7 @@ void libGint::add_shell ( int i, int j, int k, int l, int n1, int n2 ){
 
                const int labcd = la+lb+lc+ld;
                Fm_size[L] += (1+labcd) * n_prm * max_ncells;
-               if ( labcd > 0 ){
-                  Fm_size[L] += (4*3+5) * n_prm * max_ncells;
-               }
+               if ( labcd > 0 ){ Fm_size[L] += (4*3+5) * n_prm * max_ncells; }
 
                if ( all_moments[L] == false ){
 
@@ -740,7 +738,7 @@ void libGint::dispatch( bool dispatch_all ){
          Ncells, plan_dev, PMX_dev, FVH_dev, Fm_dev, data_dev,
          AC_dev, ABCD_dev, vrr_blocksize, hrr_blocksize, labcd, numV, numVC, max_ncells ); 
 
-      compute_ECO_batched_gpu_low<<<Ncells*max_ncells,128,0,cuda_stream>>>(
+      compute_ECO_batched_gpu_low<<<Ncells,128,0,cuda_stream>>>(
          Ncells, plan_dev, PMX_dev, FVH_dev, Fm_dev, data_dev,
          AC_dev, ABCD_dev, vrr_blocksize, hrr_blocksize, labcd, numV, numVC, max_ncells ); 
 

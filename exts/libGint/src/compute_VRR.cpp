@@ -518,26 +518,18 @@ __global__ void compute_ECO_batched_gpu_low(
       double* const __restrict__ AC,
       double* const __restrict__ ABCD,
       int vrr_blocksize, int hrr_blocksize, int L, int numV, int numVC, const int Ng ){
-   
+
    int F_size = L+1;
    if (L > 0){ F_size += 4*3+5; }
 
-   // arguable
-   const int best_vrr_team_size = (L+1) * (L+2) ;
-   int vrr_team_size = blockDim.x;
-   while ( vrr_team_size > best_vrr_team_size ){ vrr_team_size /= 2; }
+   // TODO to constant array
+   unsigned int L1 = L / 2;
+   unsigned int L2 = (L+1) / 2;
+   unsigned int max_NcoAC = (L1+1)*(L1+2)*(L2+1)*(L2+2) / 4;
 
-//      if ( blockIdx.x + threadIdx.x == 0  ){ printf( " VTS calc: L = %d N = %d  -> %d \n" , L, n_prm, vrr_team_size); }
+   for( int block=blockIdx.x; block < Ncells ; block += gridDim.x ){
 
-   int num_vrr_teams = blockDim.x / vrr_team_size;
-   int my_vrr_team = threadIdx.x / vrr_team_size;
-   int my_vrr_rank = threadIdx.x % vrr_team_size;
-
-   for( int block=blockIdx.x; block < Ncells*Ng ; block += gridDim.x ){
-
-      unsigned int p = block / Ng; 
-      int n3 = block % Ng;
-
+      unsigned int p = block;
       unsigned int Ov     = FVH[p*FVH_SIZE+FVH_OFFSET_OV];
       unsigned int Og     = FVH[p*FVH_SIZE+FVH_OFFSET_OG];
       unsigned int n_prm  = FVH[p*FVH_SIZE+FVH_OFFSET_NPRM];
@@ -553,49 +545,68 @@ __global__ void compute_ECO_batched_gpu_low(
       const double* Kc = &data[idx_Kc];
       const double* Kd = &data[idx_Kd];
 
-      // Note: VRR does not need to know the n1 n2 cell, since it is already in the PA vectors
-      // so we use npa and npb as dummy
       unsigned int nla,nlb,nlc,nld,npa,npb,npc,npd;
       decode_shell( nlabcd, &nla,&nlb,&nlc,&nld, &npa,&npb);
       decode4( npabcd, &npa,&npb,&npc,&npd );
+      const unsigned int nl___d = nld;
+      const unsigned int nl__cd = nlc*nl___d;
+      const unsigned int nl_bcd = nlb*nl__cd;
+      const unsigned int nlabcd_ = nla*nl_bcd;
+
       double* sh_mem = &ABCD[ Og * hrr_blocksize ];
-//      double* pr_mem ;
-      for ( unsigned i = my_vrr_team; i < n_prm ;  i += num_vrr_teams ){
+
+
+
+      for ( unsigned int idx_prm_g = 0; idx_prm_g < n_prm*Ng ;  idx_prm_g ++ ){
 
          bool found = false;
          unsigned int Of = 0;
-         while ( not found and i < n_prm ){
-            Of = ((Ov+i) * Ng + n3 ) * F_size;
+         while ( not found and idx_prm_h < n_prm*Ng ){
+            Of = (Ov*Ng+idx_prm_g) * F_size;
             if (Fm[Of] > 1.e-20 ){ found = true ; }
-            else { i += num_vrr_teams; }
+            else { idx_prm_g ++ ; }
          }
-         if ( not found or i >= n_prm ){ break; }
-         
-//         unsigned int Of   = ((Ov+i) * Ng + n3 ) * F_size;
-//         if (Fm[Of] < 1.e-20 ){ continue; } // Early primitive screening
-
-         unsigned int ipzn = PMX[Ov+i];
+         if ( not found or idx_prm_g >= n_prm*Ng ){ break; }
+    
+         unsigned int ipzn = PMX[Ov+idx_prm_g/Ng];
          unsigned int ipa,ipb,ipc,ipd;
-         // We need to know the index of the pgfs to find the K coefficents
          decode4( ipzn, &ipa,&ipb,&ipc,&ipd );
-         double* pr_mem = &AC[ ((Ov+i) * Ng + n3) * vrr_blocksize ];
+         double* pr_mem = &AC[ (Ov*Ng+idx_prm_g) * vrr_blocksize ];
 
-         for ( int op=0; op < numVC; op++ ){
+         for ( int op=numV; op < numVC; op++ ){
+
             const int t  = plan[ op*OP_SIZE + T__OFFSET ];
+
+            if ( t != CP2S){ continue; }
+
             const int la = plan[ op*OP_SIZE + LA_OFFSET ];
             const int lc = plan[ op*OP_SIZE + LC_OFFSET ];
             const int off_m1 = plan[ op*OP_SIZE + M1_OFFSET ];
             const int off_m2 = plan[ op*OP_SIZE + M2_OFFSET ];
-
-            double* m1 = &pr_mem[off_m1];
             double* m2 = &sh_mem[off_m2];
+            double* m1 = &pr_mem[off_m1];
 
-            if ( t == CP2S){
-               execute_CP2S_gpu( 
-                  la, lc, m1, m2, my_vrr_rank, vrr_team_size, hrr_blocksize,
-                  ipa, ipb, ipc, ipd, nla, nlb, nlc, nld, npa, npb, npc, npd, Ka, Kb, Kc, Kd );
+            const int NcoA = NLco_dev(la);
+            const int NcoC = NLco_dev(lc);
+            const int NcoAC = NcoA*NcoC;
+
+            for( unsigned int ijlabcd = threadIdx.x; ijlabcd < nlabcd_ * NcoAC ; ijlabcd += blockDim.x ){
+
+               unsigned int j = (ijlabcd / nlabcd_ );
+               unsigned int a = (ijlabcd / nl_bcd ) % nla;
+               unsigned int b = (ijlabcd / nl__cd ) % nlb ;
+               unsigned int c = (ijlabcd / nl___d ) % nlc ;
+               unsigned int d =  ijlabcd            % nld ;
+               unsigned int ilabcd = ijlabcd % (nlabcd_);
+
+               double K = Ka[ a*npa + ipa ] * Kb[ b*npb + ipb ] * Kc[ c*npc + ipc ] * Kd[ d*npd + ipd ];
+
+               // must be atomic if different warps/blocks share the ABCD [i + j] array
+               // printf("CP2S %d %d adding %lg %lg @ %p : %lg \n", blockIdx.x, threadIdx.x, K , m1[j], &m2[ilabcd*hrr_blocksize+j], m2[ilabcd*hrr_blocksize+j] );
+               // atomicAdd( &m2[ ilabcd*hrr_blocksize + j ] , K * m1[j]);
+               m2[ ilabcd*hrr_blocksize + j ] += K * m1[j];
             }
-         } // end of loop over op  
+         }
       }
    }
 }
