@@ -513,7 +513,7 @@ __global__ void compute_ECO_batched_gpu_low(
       const int Ncells, const int* __restrict__ plan,
       const unsigned int* const __restrict__ PMX,
       const unsigned int* const __restrict__ FVH,
-      const double* const __restrict__ Fm,
+      const double* const __restrict__ Fm, // unused
       const double* const __restrict__ data,
       double* const __restrict__ AC,
       double* const __restrict__ ABCD,
@@ -581,19 +581,20 @@ __global__ void compute_ECO_batched_gpu_low(
       for ( unsigned idx_prm = my_eco_team; idx_prm < n_prm ;  idx_prm += num_eco_teams ){
 
          bool found = false;
-         unsigned int Of = 0;
+         double * pr_mem = nullptr;
          while ( not found and idx_prm < n_prm ){
-            Of = ((Ov+idx_prm) * Ng + n3 ) * F_size;
-            if (Fm[Of] > 1.e-20 ){ found = true ; }
+            // Find the AC value we need to contract
+            pr_mem = &AC[ ((Ov+idx_prm) * Ng + n3) * vrr_blocksize ];
+            if (pr_mem[0] > 1.e-20 ){ found = true ; }
             else { idx_prm += num_eco_teams ; }
          }
          if ( not found or idx_prm >= n_prm ){ break; }
 
-         // Find the AC value we need to contract
+
          unsigned int ipzn = PMX[Ov+idx_prm];
          unsigned int ipa,ipb,ipc,ipd;
          decode4( ipzn, &ipa,&ipb,&ipc,&ipd );
-         double* pr_mem = &AC[ ((Ov+idx_prm) * Ng + n3) * vrr_blocksize ];
+
 
          // Loop over (a|c) integrals to contract, linear contractions, and components of these integrals
          unsigned int n_op_nl_AC = Nop * nlabcd * max_NcoAC;
@@ -668,47 +669,27 @@ __global__ void compute_VRR_batched_gpu_low(
       int n3 = block % Ng;
 
       unsigned int Ov     = FVH[p*FVH_SIZE+FVH_OFFSET_OV];
-//      unsigned int Og     = FVH[p*FVH_SIZE+FVH_OFFSET_OG];
       unsigned int n_prm  = FVH[p*FVH_SIZE+FVH_OFFSET_NPRM];
-//      unsigned int nlabcd = FVH[p*FVH_SIZE+FVH_OFFSET_NLABCD];
-//      unsigned int npabcd = FVH[p*FVH_SIZE+FVH_OFFSET_NPABCD];
-//      unsigned int idx_Ka = FVH[p*FVH_SIZE+FVH_OFFSET_IDX_KA];
-//      unsigned int idx_Kb = FVH[p*FVH_SIZE+FVH_OFFSET_IDX_KB];
-//      unsigned int idx_Kc = FVH[p*FVH_SIZE+FVH_OFFSET_IDX_KC];
-//      unsigned int idx_Kd = FVH[p*FVH_SIZE+FVH_OFFSET_IDX_KD];
-
-//      const double* Ka = &data[idx_Ka];
-//      const double* Kb = &data[idx_Kb];
-//      const double* Kc = &data[idx_Kc];
-//      const double* Kd = &data[idx_Kd];
-
-      // Note: VRR does not need to know the n1 n2 cell, since it is already in the PA vectors
-      // so we use npa and npb as dummy
-//      unsigned int nla,nlb,nlc,nld,npa,npb,npc,npd;
-//      decode_shell( nlabcd, &nla,&nlb,&nlc,&nld, &npa,&npb);
-//      decode4( npabcd, &npa,&npb,&npc,&npd );
-//      double* sh_mem = &ABCD[ Og * hrr_blocksize ];
 
       for ( unsigned i = my_vrr_team; i < n_prm ;  i += num_vrr_teams ){
 
+         // Screening on the (ab.n1|cd.n2@n3) fondamental integrals
          bool found = false;
          unsigned int Of = 0;
          while ( not found and i < n_prm ){
             Of = ((Ov+i) * Ng + n3 ) * F_size;
+            // copy Fm[0] ( the ssss(0) integral ) to AC for later screening in ECO
+            double* pr_mem = &AC[ ((Ov+i) * Ng + n3) * vrr_blocksize ];
+            pr_mem[0] = Fm[Of];
+            // Immediate screening
             if (Fm[Of] > 1.e-20 ){ found = true ; }
             else { i += num_vrr_teams; }
          }
          if ( not found or i >= n_prm ){ break; }
-         
-//         unsigned int Of   = ((Ov+i) * Ng + n3 ) * F_size;
-//         if (Fm[Of] < 1.e-20 ){ continue; } // Early primitive screening
 
-//         unsigned int ipzn = PMX[Ov+i];
-//         unsigned int ipa,ipb,ipc,ipd;
-         // We need to know the index of the pgfs to find the K coefficents
-//         decode4( ipzn, &ipa,&ipb,&ipc,&ipd );
+         // Copy the rest of the sss(m) integrals         
          double* pr_mem = &AC[ ((Ov+i) * Ng + n3) * vrr_blocksize ];
-         for( int il=0; il < L+1; il++ ){
+         for( int il=1; il < L+1; il++ ){
             pr_mem[il] = Fm[Of+il];
          }
 

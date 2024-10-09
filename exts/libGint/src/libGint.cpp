@@ -268,13 +268,11 @@ void libGint::add_qrt( int la, int lb, int lc, int ld, int nla, int nlb, int nlc
    SPHER_size[L] += compute_Ns(la,lb,lc,ld) * nlabcd ;
    offset_Q[L] += nlabcd ;
    offset_T[L] += 1 ;
- 
-   size_t integral_scratch_size_blue = Fm_size[L];
-   integral_scratch_size_blue = max( integral_scratch_size_blue, ABCD_size[L]);
-   integral_scratch_size_blue = max( integral_scratch_size_blue, SPHER_size[L] ;
 
-   size_t integral_scratch_size_red  = max(AC_size[L] , ABCD0_size[L]) ;
-   size_t integral_scratch_size = integral_scratch_size_blue + integral_scratch_size_red ;
+   //  
+   size_t limit1 = max(Fm_size[L],ABCD_size[L]) + AC_size[L];
+   size_t limit2  = max(ABCD_size[L],SPHER_size[L]) + ABCD0_size[L];
+   size_t integral_scratch_size  = max(limit1, limit2) ;
 
    max_integral_scratch_size = max( max_integral_scratch_size, integral_scratch_size );
    byte_scratch_size = sizeof(double)*max_integral_scratch_size;
@@ -610,8 +608,8 @@ void libGint::dispatch( bool dispatch_all ){
    CUDA_GPU_ERR_CHECK( cudaMalloc( (void**)&ftable_dev, sizeof(double)*(nelem) ));
    CUDA_GPU_ERR_CHECK( cudaMalloc( (void**)&C2S_dev, sizeof(double)*245 ));
    CUDA_GPU_ERR_CHECK( cudaMalloc( (void**)&plan_dev,sizeof(int)*max_plan_size ));
-//   CUDA_GPU_ERR_CHECK( cudaDeviceSynchronize() );
-//   CUDA_GPU_ERR_CHECK( cudaPeekAtLastError() );
+   CUDA_GPU_ERR_CHECK( cudaDeviceSynchronize() );
+   CUDA_GPU_ERR_CHECK( cudaPeekAtLastError() );
 //   POP_RANGE; // dispatch malloc
 
 //   PUSH_RANGE("dispatch memcpy",1);
@@ -659,9 +657,9 @@ void libGint::dispatch( bool dispatch_all ){
       unsigned int Nqrtt  = offset_Q[L];
 
       double* Fm_dev    = &integral_scratch_dev[0];
-      double* AC_dev    = Fm_dev    + Fm_size[L];
+      double* AC_dev    = &integral_scratch_dev[0] + max(Fm_size[L],ABCD_size[L]);
       double* ABCD_dev  = &integral_scratch_dev[0]; // AC_dev    + AC_size[L];
-      double* ABCD0_dev = ABCD_dev  + ABCD_size[L];
+      double* ABCD0_dev = &integral_scratch_dev[0] + max(ABCD_size[L],SPHER_size[L]);
       double* SPHER_dev = &integral_scratch_dev[0]; // ABCD0_dev + ABCD0_size[L];
 
       unsigned int* OF_dev  = &idx_arr_dev[0];
@@ -675,7 +673,7 @@ void libGint::dispatch( bool dispatch_all ){
 //      {
 //      cout << " L " << la << "" << lb << "" << lc << "" << ld << " | ";
 //      cout << Nprm << " prms " << Ncells << " cells " << Nqrtt << " qrtts " << max_ncells << " Ng | " ;
-//      cout << Fm_size[L] << " " << AC_size[L] << " " << ABCD_size[L] << " " << ABCD0_size[L] << " " << SPHER_size[L] << " | " ;
+//      cout << max_integral_scratch_size << " : " << Fm_size[L] << " " << AC_size[L] << " " << ABCD_size[L] << " " << ABCD0_size[L] << " " << SPHER_size[L] << " | " ;
 //      cout << dis_timer.elapsedMilliseconds() << " | " ;
 //      }
 
@@ -685,7 +683,7 @@ void libGint::dispatch( bool dispatch_all ){
 
 //      t1 = t0; t0 = dis_timer.elapsedMilliseconds() ; cout << t0 - t1 << " " ;
 
-      // it is possible that we reach this point before the previous loop completed, so we sync
+      // it is (very) possible that we reach this point before the previous loop completed, so we sync
       // before overwriting index arrays
       CUDA_GPU_ERR_CHECK( cudaStreamSynchronize(cuda_stream) );
       
@@ -701,12 +699,7 @@ void libGint::dispatch( bool dispatch_all ){
       CUDA_GPU_ERR_CHECK( cudaMemcpyAsync(
           KS_dev,  KS[L].data(), sizeof(unsigned int)*( KS[L].size()), cudaMemcpyHostToDevice, cuda_stream )); 
 
-      // (nvidia?) GPUs adhere to IEEE-754, so a pattern of all 0s represents a floating-point zero.
-      CUDA_GPU_ERR_CHECK( cudaMemsetAsync( ABCD_dev, 0, ABCD_size[L]*sizeof(double) , cuda_stream ) );
-      CUDA_GPU_ERR_CHECK( cudaMemsetAsync( ABCD0_dev, 0, ABCD0_size[L]*sizeof(double) , cuda_stream ) );
-
-      // ! needed after async     
-      CUDA_GPU_ERR_CHECK( cudaStreamSynchronize(cuda_stream) );     
+//      CUDA_GPU_ERR_CHECK( cudaStreamSynchronize(cuda_stream) );     
 //      POP_RANGE; // transfer indeces
 
 //      PUSH_RANGE("compute",5);
@@ -743,12 +736,16 @@ void libGint::dispatch( bool dispatch_all ){
 
       compute_VRR_batched_gpu_low<<<Ncells*max_ncells,64,0,cuda_stream>>>(
          Ncells, plan_dev, PMX_dev, FVH_dev, Fm_dev, data_dev,
-         AC_dev, ABCD_dev, vrr_blocksize, hrr_blocksize, labcd, numV, numVC, max_ncells ); 
+         AC_dev, nullptr, vrr_blocksize, hrr_blocksize, labcd, numV, numVC, max_ncells ); 
 
+      // (nvidia?) GPUs adhere to IEEE-754, so a pattern of all 0s represents a floating-point zero.
+      CUDA_GPU_ERR_CHECK( cudaMemsetAsync( ABCD_dev, 0, ABCD_size[L]*sizeof(double) , cuda_stream ) );
+//      CUDA_GPU_ERR_CHECK( cudaPeekAtLastError() );
+//      CUDA_GPU_ERR_CHECK( cudaDeviceSynchronize() );
+     
       compute_ECO_batched_gpu_low<<<Ncells*max_ncells,64,0,cuda_stream>>>(
-         Ncells, plan_dev, PMX_dev, FVH_dev, Fm_dev, data_dev,
+         Ncells, plan_dev, PMX_dev, FVH_dev, nullptr, data_dev,
          AC_dev, ABCD_dev, vrr_blocksize, hrr_blocksize, labcd, numV, numVC, max_ncells ); 
-
 
 //      CUDA_GPU_ERR_CHECK( cudaPeekAtLastError() );
 //      CUDA_GPU_ERR_CHECK( cudaDeviceSynchronize() );
@@ -781,7 +778,11 @@ void libGint::dispatch( bool dispatch_all ){
 //         cout << FVH[L][ii] << " " ;
 //         if ( ii % FVH_SIZE == FVH_SIZE-1 ){ cout << endl ; }
 //      } cout << endl;
-    
+
+      CUDA_GPU_ERR_CHECK( cudaMemsetAsync( ABCD0_dev, 0, ABCD0_size[L]*sizeof(double) , cuda_stream ) );
+//      CUDA_GPU_ERR_CHECK( cudaPeekAtLastError() );
+//      CUDA_GPU_ERR_CHECK( cudaDeviceSynchronize() );
+
       compute_HRR_batched_gpu_low<<<Ncells,128,0,cuda_stream>>>(
          Ncells, plan_dev, FVH_dev, data_dev, ABCD_dev, ABCD0_dev,
          periodic, cell_h_dev, neighs_dev,
@@ -867,9 +868,7 @@ void libGint::dispatch( bool dispatch_all ){
 //   }
 //   for ( int ipf=0; ipf < FP_size; ipf++ ){ cout <<  ipf << " " << F_a_from_gpu[ipf] << endl ; } cout << endl;
 
-   // 90% sure it is not needed. In theory we want to wait for the last kernel in
-   // the last L to finish before cleaning and returning, but it should not be necessary
-   // as long as we sync (all streams in this MPI rank) before copying K back 
+   // Wait for all kernels to finish before returning control to caller
    CUDA_GPU_ERR_CHECK( cudaStreamSynchronize(cuda_stream) );
 
    // TODO move to some resize / delete function at get_K time
