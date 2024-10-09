@@ -8,6 +8,7 @@
 #include "UniqueArray.h"
 #include "compute_Fm.h"
 #include "compute_VRR.h"
+#include "compute_ECO.h"
 #include "compute_HRR.h"
 #include "compute_SPH.h"
 #include "fgamma.h"
@@ -569,7 +570,7 @@ void libGint::dispatch( bool dispatch_all ){
 
 //   dis_timer.start();
 //   #pragma omp critical
-   { cout << "Dispatch on stream " << cuda_stream << " @ " << &cuda_stream << endl; cout.flush(); }
+//   { cout << "Dispatch on stream " << cuda_stream << " @ " << &cuda_stream << endl; cout.flush(); }
 
 //   CUDA_GPU_ERR_CHECK( cudaStreamSynchronize(cuda_stream) );
 //   CUDA_GPU_ERR_CHECK( cudaPeekAtLastError() );
@@ -670,10 +671,12 @@ void libGint::dispatch( bool dispatch_all ){
 //      std::string Lname = std::to_string(la) + "_" + std::to_string(lb) + "_" + std::to_string(lc) + "_" + std::to_string(ld);
 
 //#pragma omp critical
-//      {
-//      cout << " L " << la << "" << lb << "" << lc << "" << ld << " | ";
-//      cout << Nprm << " prms " << Ncells << " cells " << Nqrtt << " qrtts " << max_ncells << " Ng | " ;
-//      cout << max_integral_scratch_size << " : " << Fm_size[L] << " " << AC_size[L] << " " << ABCD_size[L] << " " << ABCD0_size[L] << " " << SPHER_size[L] << " | " ;
+      {
+      cout << " L " << la << "" << lb << "" << lc << "" << ld << " | ";
+      cout << Nprm << " prms " << Ncells << " cells " << Nqrtt << " qrtts " << max_ncells << " Ng | " ;
+      cout << max_integral_scratch_size << " : " << Fm_size[L] << " " << AC_size[L] << " " << ABCD_size[L] << " " << ABCD0_size[L] << " " << SPHER_size[L] << " | " ;
+      cout << endl;
+      }
 //      cout << dis_timer.elapsedMilliseconds() << " | " ;
 //      }
 
@@ -683,7 +686,7 @@ void libGint::dispatch( bool dispatch_all ){
 
 //      t1 = t0; t0 = dis_timer.elapsedMilliseconds() ; cout << t0 - t1 << " " ;
 
-      // it is possible that we reach this point before the previous loop completed, so we sync
+      // it is (very) possible that we reach this point before the previous loop completed, so we sync
       // before overwriting index arrays
       CUDA_GPU_ERR_CHECK( cudaStreamSynchronize(cuda_stream) );
       
@@ -868,9 +871,7 @@ void libGint::dispatch( bool dispatch_all ){
 //   }
 //   for ( int ipf=0; ipf < FP_size; ipf++ ){ cout <<  ipf << " " << F_a_from_gpu[ipf] << endl ; } cout << endl;
 
-   // 90% sure it is not needed. In theory we want to wait for the last kernel in
-   // the last L to finish before cleaning and returning, but it should not be necessary
-   // as long as we sync (all streams in this MPI rank) before copying K back 
+   // Wait for all kernels to finish before returning control to caller
    CUDA_GPU_ERR_CHECK( cudaStreamSynchronize(cuda_stream) );
 
    // TODO move to some resize / delete function at get_K time

@@ -9,7 +9,7 @@ MPICPP_EX_OPTS="-std=c++14 -Wall -fPIC -O3"
 
 LIS="-I/usr/lib/x86_64-linux-gnu/openmpi/include/openmpi -I/usr/lib/x86_64-linux-gnu/openmpi/include -L/usr/lib/x86_64-linux-gnu/o -lmpi -lcudart -lstdc -lcudadevrt -lnvToolsExt"
 
-#for NAME in util fgamma t_c_g0_n compute_Fm compute_VRR compute_HRR compute_SPH compute_TRA compute_KS 
+#for NAME in util fgamma t_c_g0_n compute_Fm compute_VRR compute_ECO compute_HRR compute_SPH compute_TRA compute_KS 
 
 # almost reasonable -c compile
 nvcc -c ${NVCC_C_OPTS} -x cu src/util.cpp -o obj/util.o ${LIS}
@@ -17,6 +17,7 @@ nvcc -c ${NVCC_C_OPTS} -x cu src/fgamma.cpp -o obj/fgamma.o ${LIS}
 #nvcc -c ${NVCC_C_OPTS} -x cu src/t_c_g0_n.cpp -o obj/t_c_g0_n.o ${LIS}
 nvcc -c ${NVCC_C_OPTS} -x cu src/compute_Fm.cpp -o obj/compute_Fm.o ${LIS}
 nvcc -c ${NVCC_C_OPTS} -x cu src/compute_VRR.cpp -o obj/compute_VRR.o ${LIS}
+nvcc -c ${NVCC_C_OPTS} -x cu src/compute_ECO.cpp -o obj/compute_ECO.o ${LIS}
 nvcc -c ${NVCC_C_OPTS} -x cu src/compute_HRR.cpp -o obj/compute_HRR.o ${LIS}
 nvcc -c ${NVCC_C_OPTS} -x cu src/compute_SPH.cpp -o obj/compute_SPH.o ${LIS}
 nvcc -c ${NVCC_C_OPTS} -x cu src/compute_TRA.cpp -o obj/compute_TRA.o ${LIS}

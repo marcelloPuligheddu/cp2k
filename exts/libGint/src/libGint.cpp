@@ -8,6 +8,7 @@
 #include "UniqueArray.h"
 #include "compute_Fm.h"
 #include "compute_VRR.h"
+#include "compute_ECO.h"
 #include "compute_HRR.h"
 #include "compute_SPH.h"
 #include "fgamma.h"
@@ -670,10 +671,12 @@ void libGint::dispatch( bool dispatch_all ){
 //      std::string Lname = std::to_string(la) + "_" + std::to_string(lb) + "_" + std::to_string(lc) + "_" + std::to_string(ld);
 
 //#pragma omp critical
-//      {
-//      cout << " L " << la << "" << lb << "" << lc << "" << ld << " | ";
-//      cout << Nprm << " prms " << Ncells << " cells " << Nqrtt << " qrtts " << max_ncells << " Ng | " ;
-//      cout << max_integral_scratch_size << " : " << Fm_size[L] << " " << AC_size[L] << " " << ABCD_size[L] << " " << ABCD0_size[L] << " " << SPHER_size[L] << " | " ;
+      {
+      cout << " L " << la << "" << lb << "" << lc << "" << ld << " | ";
+      cout << Nprm << " prms " << Ncells << " cells " << Nqrtt << " qrtts " << max_ncells << " Ng | " ;
+      cout << max_integral_scratch_size << " : " << Fm_size[L] << " " << AC_size[L] << " " << ABCD_size[L] << " " << ABCD0_size[L] << " " << SPHER_size[L] << " | " ;
+      cout << endl;
+      }
 //      cout << dis_timer.elapsedMilliseconds() << " | " ;
 //      }
 
