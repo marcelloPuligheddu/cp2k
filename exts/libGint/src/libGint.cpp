@@ -268,10 +268,17 @@ void libGint::add_qrt( int la, int lb, int lc, int ld, int nla, int nlb, int nlc
    SPHER_size[L] += compute_Ns(la,lb,lc,ld) * nlabcd ;
    offset_Q[L] += nlabcd ;
    offset_T[L] += 1 ;
+ 
+   size_t integral_scratch_size_blue = Fm_size[L];
+   integral_scratch_size_blue = max( integral_scratch_size_blue, ABCD_size[L]);
+   integral_scratch_size_blue = max( integral_scratch_size_blue, SPHER_size[L] ;
 
-   size_t integral_scratch_size = Fm_size[L] + AC_size[L] + ABCD_size[L] + ABCD0_size[L] + SPHER_size[L] ;
+   size_t integral_scratch_size_red  = max(AC_size[L] , ABCD0_size[L]) ;
+   size_t integral_scratch_size = integral_scratch_size_blue + integral_scratch_size_red ;
+
    max_integral_scratch_size = max( max_integral_scratch_size, integral_scratch_size );
    byte_scratch_size = sizeof(double)*max_integral_scratch_size;
+
 //   qrt_timer.stop();
 //   qrt_ms += qrt_timer.elapsedMilliseconds(); 
 //   qrt_cnt++;
@@ -653,9 +660,9 @@ void libGint::dispatch( bool dispatch_all ){
 
       double* Fm_dev    = &integral_scratch_dev[0];
       double* AC_dev    = Fm_dev    + Fm_size[L];
-      double* ABCD_dev  = AC_dev    + AC_size[L];
+      double* ABCD_dev  = &integral_scratch_dev[0]; // AC_dev    + AC_size[L];
       double* ABCD0_dev = ABCD_dev  + ABCD_size[L];
-      double* SPHER_dev = ABCD0_dev + ABCD0_size[L];
+      double* SPHER_dev = &integral_scratch_dev[0]; // ABCD0_dev + ABCD0_size[L];
 
       unsigned int* OF_dev  = &idx_arr_dev[0];
       unsigned int* PMX_dev = OF_dev  + OF[L].size();
@@ -734,11 +741,11 @@ void libGint::dispatch( bool dispatch_all ){
 //      CUDA_GPU_ERR_CHECK( cudaPeekAtLastError() );
 //      CUDA_GPU_ERR_CHECK( cudaDeviceSynchronize() );
 
-      compute_VRR_batched_gpu_low<<<Ncells*max_ncells,128,0,cuda_stream>>>(
+      compute_VRR_batched_gpu_low<<<Ncells*max_ncells,64,0,cuda_stream>>>(
          Ncells, plan_dev, PMX_dev, FVH_dev, Fm_dev, data_dev,
          AC_dev, ABCD_dev, vrr_blocksize, hrr_blocksize, labcd, numV, numVC, max_ncells ); 
 
-      compute_ECO_batched_gpu_low<<<Ncells,128,0,cuda_stream>>>(
+      compute_ECO_batched_gpu_low<<<Ncells*max_ncells,64,0,cuda_stream>>>(
          Ncells, plan_dev, PMX_dev, FVH_dev, Fm_dev, data_dev,
          AC_dev, ABCD_dev, vrr_blocksize, hrr_blocksize, labcd, numV, numVC, max_ncells ); 
 

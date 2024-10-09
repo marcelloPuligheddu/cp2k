@@ -734,11 +734,11 @@ void libGint::dispatch( bool dispatch_all ){
 //      CUDA_GPU_ERR_CHECK( cudaPeekAtLastError() );
 //      CUDA_GPU_ERR_CHECK( cudaDeviceSynchronize() );
 
-      compute_VRR_batched_gpu_low<<<Ncells*max_ncells,128,0,cuda_stream>>>(
+      compute_VRR_batched_gpu_low<<<Ncells*max_ncells,64,0,cuda_stream>>>(
          Ncells, plan_dev, PMX_dev, FVH_dev, Fm_dev, data_dev,
          AC_dev, ABCD_dev, vrr_blocksize, hrr_blocksize, labcd, numV, numVC, max_ncells ); 
 
-      compute_ECO_batched_gpu_low<<<Ncells,128,0,cuda_stream>>>(
+      compute_ECO_batched_gpu_low<<<Ncells*max_ncells,64,0,cuda_stream>>>(
          Ncells, plan_dev, PMX_dev, FVH_dev, Fm_dev, data_dev,
          AC_dev, ABCD_dev, vrr_blocksize, hrr_blocksize, labcd, numV, numVC, max_ncells ); 
 

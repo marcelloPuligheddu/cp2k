@@ -522,9 +522,16 @@ __global__ void compute_ECO_batched_gpu_low(
    int F_size = L+1;
    if (L > 0){ F_size += 4*3+5; }
 
-   for( int block=blockIdx.x; block < Ncells ; block += gridDim.x ){
+   // TODO to constant array
+   unsigned int L1 = L / 2;
+   unsigned int L2 = (L+1) / 2;
+   unsigned int max_NcoAC = (L1+1)*(L1+2)*(L2+1)*(L2+2) / 4;
 
-      unsigned int p = block;
+   for( int block=blockIdx.x; block < Ncells*Ng ; block += gridDim.x ){
+
+      unsigned int p      = block / Ng; 
+      int n3 = block % Ng;
+
       unsigned int Ov     = FVH[p*FVH_SIZE+FVH_OFFSET_OV];
       unsigned int Og     = FVH[p*FVH_SIZE+FVH_OFFSET_OG];
       unsigned int n_prm  = FVH[p*FVH_SIZE+FVH_OFFSET_NPRM];
@@ -543,64 +550,89 @@ __global__ void compute_ECO_batched_gpu_low(
       unsigned int nla,nlb,nlc,nld,npa,npb,npc,npd;
       decode_shell( nlabcd, &nla,&nlb,&nlc,&nld, &npa,&npb);
       decode4( npabcd, &npa,&npb,&npc,&npd );
+      const unsigned int nl___d = nld;
+      const unsigned int nl__cd = nlc*nl___d;
+      const unsigned int nl_bcd = nlb*nl__cd;
+      nlabcd = nla*nl_bcd;
 
       double* sh_mem = &ABCD[ Og * hrr_blocksize ];
 
-      for ( unsigned int i = 0; i < n_prm*Ng ;  i ++ ){
+      unsigned int Nop = numVC - numV;
+
+      // arguable
+      const int best_eco_team_size = (L+1) * (L+2) ; // max_NcoAC ;
+      int eco_team_size = blockDim.x;
+      while ( eco_team_size > best_eco_team_size ){ eco_team_size /= 2; }
+
+      int num_eco_teams = blockDim.x / eco_team_size;
+      int my_eco_team = threadIdx.x / eco_team_size;
+      int my_eco_rank = threadIdx.x % eco_team_size;
+
+      __shared__ double sKa[MAX_N_L * MAX_N_PRM];
+      __shared__ double sKb[MAX_N_L * MAX_N_PRM];
+      __shared__ double sKc[MAX_N_L * MAX_N_PRM];
+      __shared__ double sKd[MAX_N_L * MAX_N_PRM];
+
+      for( unsigned int idx=threadIdx.x; idx < nla * npa ; idx += blockDim.x ){ sKa[idx] = Ka[idx]; }
+      for( unsigned int idx=threadIdx.x; idx < nlb * npb ; idx += blockDim.x ){ sKb[idx] = Kb[idx]; }
+      for( unsigned int idx=threadIdx.x; idx < nlc * npc ; idx += blockDim.x ){ sKc[idx] = Kc[idx]; }
+      for( unsigned int idx=threadIdx.x; idx < nld * npd ; idx += blockDim.x ){ sKd[idx] = Kd[idx]; }
+
+      for ( unsigned idx_prm = my_eco_team; idx_prm < n_prm ;  idx_prm += num_eco_teams ){
 
          bool found = false;
          unsigned int Of = 0;
-         while ( not found and i < n_prm*Ng ){
-            Of = (Ov*Ng+i) * F_size;
+         while ( not found and idx_prm < n_prm ){
+            Of = ((Ov+idx_prm) * Ng + n3 ) * F_size;
             if (Fm[Of] > 1.e-20 ){ found = true ; }
-            else { i ++ ; }
+            else { idx_prm += num_eco_teams ; }
          }
-         if ( not found or i >= n_prm*Ng ){ break; }
-    
-         unsigned int ipzn = PMX[Ov+i/Ng];
+         if ( not found or idx_prm >= n_prm ){ break; }
+
+         // Find the AC value we need to contract
+         unsigned int ipzn = PMX[Ov+idx_prm];
          unsigned int ipa,ipb,ipc,ipd;
          decode4( ipzn, &ipa,&ipb,&ipc,&ipd );
-         double* pr_mem = &AC[ (Ov*Ng+i) * vrr_blocksize ];
+         double* pr_mem = &AC[ ((Ov+idx_prm) * Ng + n3) * vrr_blocksize ];
 
+         // Loop over (a|c) integrals to contract, linear contractions, and components of these integrals
+         unsigned int n_op_nl_AC = Nop * nlabcd * max_NcoAC;
+         for ( unsigned int i = my_eco_rank; i < n_op_nl_AC ; i+= eco_team_size ){
 
-         for ( int op=0; op < numVC; op++ ){
-
+            unsigned int op        = (i / (nlabcd * max_NcoAC) % Nop) + numV;
+            unsigned int ilabcd    = (i / max_NcoAC) % nlabcd;
+            unsigned int j         = i % max_NcoAC;
+           
+            // Find the contraction we are doing
             const int t  = plan[ op*OP_SIZE + T__OFFSET ];
+            if ( t != CP2S){ continue; }
 
-            if ( t == CP2S){
+            // We need to check the max possible value of NcoAC. Since it can vary depending on op
+            // we need to loop over if this thread is assigned a larger j value
+            const int la = plan[ op*OP_SIZE + LA_OFFSET ];
+            const int lc = plan[ op*OP_SIZE + LC_OFFSET ];
+            const int NcoA = NLco_dev(la);
+            const int NcoC = NLco_dev(lc);
+            const int NcoAC = NcoA*NcoC;
+            if ( j >= NcoAC ){ continue; }
 
-               const int la = plan[ op*OP_SIZE + LA_OFFSET ];
-               const int lc = plan[ op*OP_SIZE + LC_OFFSET ];
-               const int off_m1 = plan[ op*OP_SIZE + M1_OFFSET ];
-               const int off_m2 = plan[ op*OP_SIZE + M2_OFFSET ];
-               double* m2 = &sh_mem[off_m2];
-               double* m1 = &pr_mem[off_m1];
+            const int off_m1 = plan[ op*OP_SIZE + M1_OFFSET ];
+            const int off_m2 = plan[ op*OP_SIZE + M2_OFFSET ];
 
-               const int NcoA = NLco_dev(la);
-               const int NcoC = NLco_dev(lc);
-               const int NcoAC = NcoA*NcoC;
-               const unsigned int nl___d = nld;
-               const unsigned int nl__cd = nlc*nl___d;
-               const unsigned int nl_bcd = nlb*nl__cd;
-               const unsigned int nlabcd_ = nla*nl_bcd;
+            double* m2 = &sh_mem[off_m2];
+            double* m1 = &pr_mem[off_m1];
 
-               for( unsigned int ijlabcd = threadIdx.x; ijlabcd < nlabcd_ * NcoAC ; ijlabcd += blockDim.x ){
+            unsigned int a = (ilabcd / nl_bcd ) % nla;
+            unsigned int b = (ilabcd / nl__cd ) % nlb ;
+            unsigned int c = (ilabcd / nl___d ) % nlc ;
+            unsigned int d =  ilabcd            % nld ;
 
-                  unsigned int j = (ijlabcd / nlabcd_ );
-                  unsigned int a = (ijlabcd / nl_bcd ) % nla;
-                  unsigned int b = (ijlabcd / nl__cd ) % nlb ;
-                  unsigned int c = (ijlabcd / nl___d ) % nlc ;
-                  unsigned int d =  ijlabcd            % nld ;
-                  unsigned int ilabcd = ijlabcd % (nlabcd_);
+            double K = sKa[ a*npa + ipa ] * sKb[ b*npb + ipb ] * sKc[ c*npc + ipc ] * sKd[ d*npd + ipd ];
 
-                  double K = Ka[ a*npa + ipa ] * Kb[ b*npb + ipb ] * Kc[ c*npc + ipc ] * Kd[ d*npd + ipd ];
-
-                  // must be atomic if different warps/blocks share the ABCD array
-                  // printf("CP2S %d %d adding %lg %lg @ %p : %lg \n", blockIdx.x, threadIdx.x, K , m1[j], &m2[ilabcd*hrr_blocksize+j], m2[ilabcd*hrr_blocksize+j] );
-                  // atomicAdd( &m2[ ilabcd*hrr_blocksize + j ] , K * m1[j]);
-                  m2[ ilabcd*hrr_blocksize + j ] += K * m1[j];
-               }
-            }
+            // must be atomic if different warps/blocks share the ABCD [i + j] array
+            // printf("CP2S %d %d adding %lg %lg @ %p : %lg \n", blockIdx.x, threadIdx.x, K , m1[j], &m2[ilabcd*hrr_blocksize+j], m2[ilabcd*hrr_blocksize+j] );
+            atomicAdd( &m2[ ilabcd*hrr_blocksize + j ] , K * m1[j]);
+            // m2[ ilabcd*hrr_blocksize + j ] += K * m1[j];
          }
       }
    }

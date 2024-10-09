@@ -43,7 +43,7 @@ SOFTWARE.
 //#define MAX_N_CELL 100 // Useful for debug, so the encoding is human readable
 
 // max number of prm per STO, 2**6. Way larger than sanity should allow
-#define MAX_N_PRM   64
+#define MAX_N_PRM   16
 //#define MAX_N_PRM   10 // Useful for debug, so the encoding is human readable
 // max number of linear combinations of 
 // gassian in the same set and with the same ang. moment, 2**4.
@@ -52,7 +52,7 @@ SOFTWARE.
 // 1 0 0 32 23 
 // [exp and gcc omitted]
 
-#define MAX_N_L     16
+#define MAX_N_L     4
 //#define MAX_N_L     10 // Useful for debug, so the encoding is human readable
 
 // Should be 8 + 4*6 = 32 bits
