@@ -360,8 +360,14 @@ void libGint::compute_max_vector_size(){
 
    for ( unsigned int L : encoded_moments ){
 
-      size_t integral_scratch_size = Fm_size[L] + AC_size[L] + ABCD_size[L] + ABCD0_size[L] + SPHER_size[L] ;
+      size_t limit1 = max(Fm_size[L],ABCD_size[L]) + AC_size[L];
+      size_t limit2  = max(ABCD_size[L],SPHER_size[L]) + ABCD0_size[L];
+      size_t integral_scratch_size  = max(limit1, limit2) ;
+
       max_integral_scratch_size = max( max_integral_scratch_size, integral_scratch_size );
+ 
+//      size_t integral_scratch_size = Fm_size[L] + AC_size[L] + ABCD_size[L] + ABCD0_size[L] + SPHER_size[L] ;
+//      max_integral_scratch_size = max( max_integral_scratch_size, integral_scratch_size );
 
       size_t idx_arr_size = OF[L].size() + PMX[L].size() + FVH[L].size() + KS[L].size();
       max_idx_arr_size    = max(max_idx_arr_size, idx_arr_size);
@@ -578,7 +584,7 @@ void libGint::dispatch( bool dispatch_all ){
    compute_max_vector_size();
 
 //   #pragma omp critical
-//   { cout << "Dispatch: Will compute " << out_size << " values " << endl; cout.flush(); }
+//   { cout << "Dispatch: at max " << max_integral_scratch_size << " values " << endl; cout.flush(); }
    
 //   OUT.resize(out_size);
 
@@ -637,9 +643,13 @@ void libGint::dispatch( bool dispatch_all ){
 //   PUSH_RANGE("dispatch all L",3);
    for ( unsigned int L : encoded_moments ){
 
+      size_t limit1 = max(Fm_size[L],ABCD_size[L]) + AC_size[L];
+      size_t limit2  = max(ABCD_size[L],SPHER_size[L]) + ABCD0_size[L];
+      size_t integral_scratch_size  = max(limit1, limit2) ;
+     
       // Early exit moments with a small number of integrals
       // No worry, they are guaranteed to be computed before get_K returns
-      if ( SPHER_size[L] < MIN_INT_BATCH_SIZE and not dispatch_all ) { continue; }
+      if ( integral_scratch_size < MIN_INT_BATCH_SIZE and not dispatch_all ) { continue; }
       if ( SPHER_size[L] == 0 ){ continue; }
 
 //      double t0 = dis_timer.elapsedMilliseconds();
@@ -671,13 +681,11 @@ void libGint::dispatch( bool dispatch_all ){
 //      std::string Lname = std::to_string(la) + "_" + std::to_string(lb) + "_" + std::to_string(lc) + "_" + std::to_string(ld);
 
 //#pragma omp critical
-      {
-      cout << " L " << la << "" << lb << "" << lc << "" << ld << " | ";
-      cout << Nprm << " prms " << Ncells << " cells " << Nqrtt << " qrtts " << max_ncells << " Ng | " ;
-      cout << max_integral_scratch_size << " : " << Fm_size[L] << " " << AC_size[L] << " " << ABCD_size[L] << " " << ABCD0_size[L] << " " << SPHER_size[L] << " | " ;
-      cout << endl;
-      }
-//      cout << dis_timer.elapsedMilliseconds() << " | " ;
+//      {
+//      cout << " L " << la << "" << lb << "" << lc << "" << ld << " | ";
+//      cout << Nprm << " prms " << Ncells << " cells " << Nqrtt << " qrtts " << max_ncells << " Ng | " ;
+//      cout << integral_scratch_size << " : " << Fm_size[L] << " " << AC_size[L] << " " << ABCD_size[L] << " " << ABCD0_size[L] << " " << SPHER_size[L] << " | " ;
+//      cout << endl ; // dis_timer.elapsedMilliseconds() << " | " ;
 //      }
 
 //      PUSH_RANGE(Lname.c_str(),3);
