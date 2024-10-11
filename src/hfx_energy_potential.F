@@ -1948,7 +1948,7 @@ CONTAINS
          write(*,*) " ------------------------------------ "
 
          ! Print all F if delta is too large or (suspiciously) too small
-         if ( max_abs_delta_KS > 1.E-8_dp .or. max_abs_delta_KS < 1.E-18 ) then
+         if ( max_abs_delta_KS > 100*eps_schwarz .or. max_abs_delta_KS < 1.E-20 ) then
             write (*,*) " K from CPU  |  K from GPU  |  Delta | Ratio " 
             do  i=1, size(full_ks_alpha)
                write (*,*) i, full_ks_alpha(i,1) , full_ks_alpha_from_gpu(i,1), &
@@ -1968,7 +1968,7 @@ CONTAINS
             write(*,*) " ------------------------------------ "
 
             ! Print all F if delta is too large or (suspiciously) too small
-            if ( max_abs_delta_KS > 1.E-8_dp .or. max_abs_delta_KS < 1.E-18 ) then
+            if ( max_abs_delta_KS > 100*eps_schwarz .or. max_abs_delta_KS < 1.E-18 ) then
                write (*,*) " BETA K from CPU  |  K from GPU  |  Delta | Ratio " 
                do  i=1, size(full_ks_beta)
                   write (*,*) i, full_ks_beta(i,1) , full_ks_beta_from_gpu(i,1), &
