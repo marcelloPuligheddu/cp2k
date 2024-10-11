@@ -17,18 +17,31 @@ __global__ void compute_ECO_batched_gpu_low(
       double* const __restrict__ ABCD,
       int vrr_blocksize, int hrr_blocksize, int L, int numV, int numVC, const int Ng ){
 
-   int F_size = L+1;
-   if (L > 0){ F_size += 4*3+5; }
+//   int F_size = L+1;
+//   if (L > 0){ F_size += 4*3+5; }
 
-   // TODO to constant array
-   unsigned int L1 = L / 2;
-   unsigned int L2 = (L+1) / 2;
-   unsigned int max_NcoAC = (L1+1)*(L1+2)*(L2+1)*(L2+2) / 4;
+//   // TODO to constant array
+//   unsigned int L1 = L / 2;
+//   unsigned int L2 = (L+1) / 2;
+//   unsigned int max_NcoAC = (L1+1)*(L1+2)*(L2+1)*(L2+2) / 4;
 
-   for( int block=blockIdx.x; block < Ncells*Ng ; block += gridDim.x ){
+   unsigned int Nop = numVC - numV + 1;
+   
+   // arguable
+   const int best_eco_team_size = (L+1) * (L+2) ; // max_NcoAC ;
+   int eco_team_size = blockDim.x;
+   while ( eco_team_size > best_eco_team_size ){ eco_team_size /= 2; }
 
-      unsigned int p      = block / Ng; 
-      int n3 = block % Ng;
+   int num_eco_teams = blockDim.x / eco_team_size;
+   int my_eco_team = threadIdx.x / eco_team_size;
+   int my_eco_rank = threadIdx.x % eco_team_size;
+
+
+   for( int block=blockIdx.x; block < Ncells*Ng*Nop ; block += gridDim.x ){
+
+      unsigned int p      =  block / (Ng*Nop); 
+      int n3              = (block / Nop ) % Ng;
+      int op              =  block % Nop + numV ;
 
       unsigned int Ov     = FVH[p*FVH_SIZE+FVH_OFFSET_OV];
       unsigned int Og     = FVH[p*FVH_SIZE+FVH_OFFSET_OG];
@@ -55,16 +68,19 @@ __global__ void compute_ECO_batched_gpu_low(
 
       double* sh_mem = &ABCD[ Og * hrr_blocksize ];
 
-      unsigned int Nop = numVC - numV + 1;
+      // Find the contraction we are doing
+      const int t  = plan[ op*OP_SIZE + T__OFFSET ];
+      if ( t != CP2S){ continue; }
+      const int la = plan[ op*OP_SIZE + LA_OFFSET ];
+      const int lc = plan[ op*OP_SIZE + LC_OFFSET ];
+      const int off_m1 = plan[ op*OP_SIZE + M1_OFFSET ];
+      const int off_m2 = plan[ op*OP_SIZE + M2_OFFSET ];
 
-      // arguable
-      const int best_eco_team_size = (L+1) * (L+2) ; // max_NcoAC ;
-      int eco_team_size = blockDim.x;
-      while ( eco_team_size > best_eco_team_size ){ eco_team_size /= 2; }
+      const int NcoA = NLco_dev(la);
+      const int NcoC = NLco_dev(lc);
+      const int NcoAC = NcoA*NcoC;
 
-      int num_eco_teams = blockDim.x / eco_team_size;
-      int my_eco_team = threadIdx.x / eco_team_size;
-      int my_eco_rank = threadIdx.x % eco_team_size;
+      double* m2 = &sh_mem[off_m2];
 
       __shared__ double sKa[MAX_N_L * MAX_N_PRM];
       __shared__ double sKb[MAX_N_L * MAX_N_PRM];
@@ -75,6 +91,8 @@ __global__ void compute_ECO_batched_gpu_low(
       for( unsigned int idx=threadIdx.x; idx < nlb * npb ; idx += blockDim.x ){ sKb[idx] = Kb[idx]; }
       for( unsigned int idx=threadIdx.x; idx < nlc * npc ; idx += blockDim.x ){ sKc[idx] = Kc[idx]; }
       for( unsigned int idx=threadIdx.x; idx < nld * npd ; idx += blockDim.x ){ sKd[idx] = Kd[idx]; }
+
+      __syncthreads();
 
       for ( unsigned idx_prm = my_eco_team; idx_prm < n_prm ;  idx_prm += num_eco_teams ){
 
@@ -88,39 +106,18 @@ __global__ void compute_ECO_batched_gpu_low(
          }
          if ( not found or idx_prm >= n_prm ){ break; }
 
-
+         double* m1 = &pr_mem[off_m1];
          unsigned int ipzn = PMX[Ov+idx_prm];
          unsigned int ipa,ipb,ipc,ipd;
          decode4( ipzn, &ipa,&ipb,&ipc,&ipd );
 
-
          // Loop over (a|c) integrals to contract, linear contractions, and components of these integrals
-         unsigned int n_op_nl_AC = Nop * nlabcd * max_NcoAC;
-         for ( unsigned int i = my_eco_rank; i < n_op_nl_AC ; i+= eco_team_size ){
+         unsigned int n_nl_AC = nlabcd * NcoAC;
+         for ( unsigned int i = my_eco_rank; i < n_nl_AC ; i+= eco_team_size ){
 
-            unsigned int op        = (i / (nlabcd * max_NcoAC) % Nop) + numV;
-            unsigned int ilabcd    = (i / max_NcoAC) % nlabcd;
-            unsigned int j         = i % max_NcoAC;
+            unsigned int ilabcd    = i / NcoAC;
+            unsigned int j         = i % NcoAC;
            
-            // Find the contraction we are doing
-            const int t  = plan[ op*OP_SIZE + T__OFFSET ];
-            if ( t != CP2S){ continue; }
-
-            // We need to check the max possible value of NcoAC. Since it can vary depending on op
-            // we need to loop over if this thread is assigned a larger j value
-            const int la = plan[ op*OP_SIZE + LA_OFFSET ];
-            const int lc = plan[ op*OP_SIZE + LC_OFFSET ];
-            const int NcoA = NLco_dev(la);
-            const int NcoC = NLco_dev(lc);
-            const int NcoAC = NcoA*NcoC;
-            if ( j >= NcoAC ){ continue; }
-
-            const int off_m1 = plan[ op*OP_SIZE + M1_OFFSET ];
-            const int off_m2 = plan[ op*OP_SIZE + M2_OFFSET ];
-
-            double* m2 = &sh_mem[off_m2];
-            double* m1 = &pr_mem[off_m1];
-
             unsigned int a = (ilabcd / nl_bcd ) % nla;
             unsigned int b = (ilabcd / nl__cd ) % nlb ;
             unsigned int c = (ilabcd / nl___d ) % nlc ;
@@ -131,7 +128,7 @@ __global__ void compute_ECO_batched_gpu_low(
             // must be atomic if different warps/blocks share the ABCD [i + j] array
             // printf("CP2S %d %d adding %lg %lg @ %p : %lg \n", blockIdx.x, threadIdx.x, K , m1[j], &m2[ilabcd*hrr_blocksize+j], m2[ilabcd*hrr_blocksize+j] );
             atomicAdd( &m2[ ilabcd*hrr_blocksize + j ] , K * m1[j]);
-            // m2[ ilabcd*hrr_blocksize + j ] += K * m1[j];
+//            m2[ ilabcd*hrr_blocksize + j ] += K * m1[j];
          }
       }
    }
