@@ -546,20 +546,21 @@ __global__ void compute_VRR_batched_gpu_low(
          // Screening on the (ab.n1|cd.n2@n3) fondamental integrals
          bool found = false;
          unsigned int Of = 0;
+
          while ( not found and i < n_prm ){
             Of = ((Ov+i) * Ng + n3 ) * F_size;
             // copy Fm[0] ( the ssss(0) integral ) to AC for later screening in ECO
             double* pr_mem = &AC[ ((Ov+i) * Ng + n3) * vrr_blocksize ];
             pr_mem[0] = Fm[Of];
             // Immediate screening
-            if (Fm[Of] > 1.e-20 ){ found = true ; }
+            if (Fm[Of] > 1.e-30 ){ found = true ; }
             else { i += num_vrr_teams; }
          }
          if ( not found or i >= n_prm ){ break; }
 
-         // Copy the rest of the sss(m) integrals         
+         // Copy the sss(m) integrals         
          double* pr_mem = &AC[ ((Ov+i) * Ng + n3) * vrr_blocksize ];
-         for( int il=1; il < L+1; il++ ){
+         for( int il=0; il < L+1; il++ ){
             pr_mem[il] = Fm[Of+il];
          }
 

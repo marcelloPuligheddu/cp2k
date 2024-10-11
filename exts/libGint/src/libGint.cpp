@@ -271,10 +271,11 @@ void libGint::add_qrt( int la, int lb, int lc, int ld, int nla, int nlb, int nlc
    offset_T[L] += 1 ;
 
    //  
-   size_t limit1 = max(Fm_size[L],ABCD_size[L]) + AC_size[L];
-   size_t limit2  = max(ABCD_size[L],SPHER_size[L]) + ABCD0_size[L];
-   size_t integral_scratch_size  = max(limit1, limit2) ;
+//   size_t limit1 = max(Fm_size[L],ABCD_size[L]) + AC_size[L];
+//   size_t limit2  = max(ABCD_size[L],SPHER_size[L]) + ABCD0_size[L];
+//   size_t integral_scratch_size  = max(limit1, limit2) ;
 
+   size_t integral_scratch_size = Fm_size[L] + ABCD_size[L] + AC_size[L] + SPHER_size[L] + ABCD0_size[L];
    max_integral_scratch_size = max( max_integral_scratch_size, integral_scratch_size );
    byte_scratch_size = sizeof(double)*max_integral_scratch_size;
 
@@ -360,15 +361,12 @@ void libGint::compute_max_vector_size(){
 
    for ( unsigned int L : encoded_moments ){
 
-      size_t limit1 = max(Fm_size[L],ABCD_size[L]) + AC_size[L];
-      size_t limit2  = max(ABCD_size[L],SPHER_size[L]) + ABCD0_size[L];
-      size_t integral_scratch_size  = max(limit1, limit2) ;
-
+//      size_t limit1 = max(Fm_size[L],ABCD_size[L]) + AC_size[L];
+//      size_t limit2  = max(ABCD_size[L],SPHER_size[L]) + ABCD0_size[L];
+//      size_t integral_scratch_size  = max(limit1, limit2) ;
+      size_t integral_scratch_size  = Fm_size[L] + ABCD_size[L] + AC_size[L] + SPHER_size[L] + ABCD0_size[L];     
       max_integral_scratch_size = max( max_integral_scratch_size, integral_scratch_size );
  
-//      size_t integral_scratch_size = Fm_size[L] + AC_size[L] + ABCD_size[L] + ABCD0_size[L] + SPHER_size[L] ;
-//      max_integral_scratch_size = max( max_integral_scratch_size, integral_scratch_size );
-
       size_t idx_arr_size = OF[L].size() + PMX[L].size() + FVH[L].size() + KS[L].size();
       max_idx_arr_size    = max(max_idx_arr_size, idx_arr_size);
    }
@@ -668,10 +666,14 @@ void libGint::dispatch( bool dispatch_all ){
       unsigned int Nqrtt  = offset_Q[L];
 
       double* Fm_dev    = &integral_scratch_dev[0];
-      double* AC_dev    = &integral_scratch_dev[0] + max(Fm_size[L],ABCD_size[L]);
-      double* ABCD_dev  = &integral_scratch_dev[0]; // AC_dev    + AC_size[L];
-      double* ABCD0_dev = &integral_scratch_dev[0] + max(ABCD_size[L],SPHER_size[L]);
-      double* SPHER_dev = &integral_scratch_dev[0]; // ABCD0_dev + ABCD0_size[L];
+      double* AC_dev    = &integral_scratch_dev[0] + Fm_size[L]; 
+//      double* AC_dev    = &integral_scratch_dev[0] + max(Fm_size[L],ABCD_size[L]);
+      double* ABCD_dev  = &integral_scratch_dev[0] + Fm_size[L] + AC_size[L];
+//      double* ABCD_dev  = &integral_scratch_dev[0];
+      double* ABCD0_dev = &integral_scratch_dev[0] + Fm_size[L] + AC_size[L] + ABCD_size[L]; 
+//      double* ABCD0_dev = &integral_scratch_dev[0] + max(ABCD_size[L],SPHER_size[L]);
+      double* SPHER_dev = &integral_scratch_dev[0] + Fm_size[L] + AC_size[L] + ABCD_size[L] + ABCD0_size[L];
+//      double* SPHER_dev = &integral_scratch_dev[0]; 
 
       unsigned int* OF_dev  = &idx_arr_dev[0];
       unsigned int* PMX_dev = OF_dev  + OF[L].size();
@@ -710,6 +712,10 @@ void libGint::dispatch( bool dispatch_all ){
       CUDA_GPU_ERR_CHECK( cudaMemcpyAsync(
           KS_dev,  KS[L].data(), sizeof(unsigned int)*( KS[L].size()), cudaMemcpyHostToDevice, cuda_stream )); 
 
+      // (nvidia?) GPUs adhere to IEEE-754, so a pattern of all 0s represents a floating-point zero.
+      CUDA_GPU_ERR_CHECK( cudaMemsetAsync( integral_scratch_dev, 0, byte_scratch_size , cuda_stream ) );
+
+
 //      CUDA_GPU_ERR_CHECK( cudaStreamSynchronize(cuda_stream) );     
 //      POP_RANGE; // transfer indeces
 
@@ -744,10 +750,13 @@ void libGint::dispatch( bool dispatch_all ){
 //      } cout << endl;
 //      CUDA_GPU_ERR_CHECK( cudaPeekAtLastError() );
 //      CUDA_GPU_ERR_CHECK( cudaDeviceSynchronize() );
+//
+//      // (nvidia?) GPUs adhere to IEEE-754, so a pattern of all 0s represents a floating-point zero.
+      CUDA_GPU_ERR_CHECK( cudaMemsetAsync( AC_dev, 0, AC_size[L]*sizeof(double) , cuda_stream ) );
 
       compute_VRR_batched_gpu_low<<<Ncells*max_ncells,64,0,cuda_stream>>>(
          Ncells, plan_dev, PMX_dev, FVH_dev, Fm_dev, data_dev,
-         AC_dev, nullptr, vrr_blocksize, hrr_blocksize, labcd, numV, numVC, max_ncells ); 
+         AC_dev, Fm_dev, vrr_blocksize, hrr_blocksize, labcd, numV, numVC, max_ncells ); 
 
       // (nvidia?) GPUs adhere to IEEE-754, so a pattern of all 0s represents a floating-point zero.
       CUDA_GPU_ERR_CHECK( cudaMemsetAsync( ABCD_dev, 0, ABCD_size[L]*sizeof(double) , cuda_stream ) );
@@ -816,6 +825,9 @@ void libGint::dispatch( bool dispatch_all ){
 //      CUDA_GPU_ERR_CHECK( cudaPeekAtLastError() );
 //      CUDA_GPU_ERR_CHECK( cudaDeviceSynchronize() );
       // note: uses ABCD as a scratch space
+      // (nvidia?) GPUs adhere to IEEE-754, so a pattern of all 0s represents a floating-point zero.
+      CUDA_GPU_ERR_CHECK( cudaMemsetAsync( SPHER_dev, 0, SPHER_size[L]*sizeof(double) , cuda_stream ) );
+
       compute_SPH_batched_gpu_alt ( Nqrtt, la, lb, lc, ld, ABCD0_dev, SPHER_dev, ABCD_dev, C2S_dev, cublas_handle );
 
 //      CUDA_GPU_ERR_CHECK( cudaPeekAtLastError() );
