@@ -146,15 +146,15 @@ cblas_dgemm (
 //      cout <<  " B " << " " << B << " " << ldb << " " << strB << " X " ;
 //      cout << Nqrtt << endl;
 
-      CUDA_GPU_ERR_CHECK( cudaPeekAtLastError() );
-      CUDA_GPU_ERR_CHECK( cudaDeviceSynchronize() );
+//      CUDA_GPU_ERR_CHECK( cudaPeekAtLastError() );
+//      CUDA_GPU_ERR_CHECK( cudaDeviceSynchronize() );
 
       CUBLAS_GPU_ERR_CHECK(
          cublasDgemmStridedBatched( cublas_handle, CUBLAS_OP_T, CUBLAS_OP_T, m,n,k, 
          &one, A, lda, strA, B, ldb, strB, &zero, C, ldc, strC, Nqrtt ));
 
-      CUDA_GPU_ERR_CHECK( cudaPeekAtLastError() );
-      CUDA_GPU_ERR_CHECK( cudaDeviceSynchronize() );
+//      CUDA_GPU_ERR_CHECK( cudaPeekAtLastError() );
+//      CUDA_GPU_ERR_CHECK( cudaDeviceSynchronize() );
 
 //      (cart as tmp2) = ( tmp.reshape( (ncob,ncoc*ncod*nsoa) ).T @ c2sB.T )
       m = nsob;
@@ -179,8 +179,8 @@ cblas_dgemm (
       CUBLAS_GPU_ERR_CHECK(
          cublasDgemmStridedBatched( cublas_handle, CUBLAS_OP_T, CUBLAS_OP_T, m,n,k, 
          &one, A, lda, strA, B, ldb, strB, &zero, C, ldc, strC,  Nqrtt ));
-      CUDA_GPU_ERR_CHECK( cudaPeekAtLastError() );
-      CUDA_GPU_ERR_CHECK( cudaDeviceSynchronize() );
+//      CUDA_GPU_ERR_CHECK( cudaPeekAtLastError() );
+//      CUDA_GPU_ERR_CHECK( cudaDeviceSynchronize() );
 
 
 //      tmp = ( (cart as tmp2).reshape( (ncoc,ncod*nsoa*nsob) ).T @ c2sC.T )
@@ -206,8 +206,8 @@ cblas_dgemm (
       CUBLAS_GPU_ERR_CHECK(
          cublasDgemmStridedBatched( cublas_handle, CUBLAS_OP_T, CUBLAS_OP_T, m,n,k, 
          &one, A, lda, strA, B, ldb, strB, &zero, C, ldc, strC,  Nqrtt ));
-      CUDA_GPU_ERR_CHECK( cudaPeekAtLastError() );
-      CUDA_GPU_ERR_CHECK( cudaDeviceSynchronize() );
+//      CUDA_GPU_ERR_CHECK( cudaPeekAtLastError() );
+//      CUDA_GPU_ERR_CHECK( cudaDeviceSynchronize() );
 
 //      spher = ( tmp.reshape( (ncod,nsoa*nsob*nsoc) ).T @ c2sD.T )
       m = nsod;
@@ -232,8 +232,8 @@ cblas_dgemm (
       CUBLAS_GPU_ERR_CHECK(
          cublasDgemmStridedBatched( cublas_handle, CUBLAS_OP_T, CUBLAS_OP_T, m,n,k,
          &one, A, lda, strA, B, ldb, strB, &zero, C, ldc, strC,  Nqrtt ));
-      CUDA_GPU_ERR_CHECK( cudaPeekAtLastError() );
-      CUDA_GPU_ERR_CHECK( cudaDeviceSynchronize() );   
+//      CUDA_GPU_ERR_CHECK( cudaPeekAtLastError() );
+//      CUDA_GPU_ERR_CHECK( cudaDeviceSynchronize() );   
 }
 
 

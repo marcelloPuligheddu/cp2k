@@ -136,15 +136,6 @@ module libgint
    end interface
 
    interface
-   subroutine libgint_internal_set_max_n_cell( libgint_handle, max_n ) bind(C,name="libgint_set_max_n_cell")
-      import :: c_ptr, c_int
-      implicit none
-      integer(kind=c_int), value :: max_n
-      type (c_ptr), value :: libgint_handle
-   end subroutine libgint_internal_set_max_n_cell
-   end interface
-
-   interface
    subroutine libgint_internal_add_prm( libgint_handle, ipa,ipb,ipc,ipd ) bind (C,name="libgint_add_prm")
       import :: c_ptr, c_int
       implicit none
@@ -204,15 +195,6 @@ module libgint
    end interface
 
    interface
-   subroutine libgint_internal_memory_needed( libgint_handle, mem ) bind (C,name="libgint_memory_needed")
-      import :: c_ptr, c_int
-      implicit none
-      integer(kind=c_int) :: mem
-      type (c_ptr), value :: libgint_handle
-   end subroutine libgint_internal_memory_needed
-   end interface
-
-   interface
    subroutine libgint_internal_dispatch ( libgint_handle ) bind (C,name="libgint_dispatch")
       import :: c_ptr
       implicit none
@@ -237,8 +219,8 @@ module libgint
    public :: libgint_set_P, libgint_set_P_polarized, libgint_set_K, libgint_set_K_polarized
    public :: libgint_get_K, libgint_get_K_polarized, libgint_set_Atom, libgint_set_Atom_L, libgint_set_cell
    public :: libgint_set_neighs
-   public :: libgint_set_max_n_cell, libgint_add_prm, libgint_add_shell, libgint_add_cell, libgint_add_qrt
-   public :: libgint_add_qrtt, libgint_add_set, libgint_memory_needed, libgint_dispatch
+   public :: libgint_add_prm, libgint_add_shell, libgint_add_cell, libgint_add_qrt
+   public :: libgint_add_qrtt, libgint_add_set, libgint_dispatch
 
 contains
    subroutine libgint_init ( handle )
@@ -353,12 +335,6 @@ contains
       call libgint_internal_set_AtomInfo( handle, i, c_loc(R), c_loc(Z), np, lmin, Lmax, c_loc(nl) , c_loc(K) )
    end subroutine ligbint_set_AtomInfo
 
-   subroutine libgint_set_max_n_cell( handle, max_periodic_cells )
-      type (c_ptr) :: handle
-      integer(kind=c_int), value :: max_periodic_cells
-      call libgint_internal_set_max_n_cell( handle, max_periodic_cells )
-   end subroutine libgint_set_max_n_cell
-
    subroutine libgint_add_prm( handle, ipa, ipb, ipc, ipd )
       type (c_ptr) :: handle
       integer(kind=c_int), value :: ipa,ipb,ipc,ipd
@@ -401,13 +377,6 @@ contains
       type (c_ptr) :: handle
       call libgint_internal_add_set( handle )
    end subroutine libgint_add_set
-
-   function libgint_memory_needed( handle ) result( mem )
-      type (c_ptr) :: handle
-      integer(kind=c_int) :: mem
-      call libgint_internal_memory_needed( handle, mem )
-      return
-   end function libgint_memory_needed
 
    subroutine libgint_dispatch( handle )
       type (c_ptr) :: handle

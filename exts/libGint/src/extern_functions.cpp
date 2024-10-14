@@ -139,11 +139,6 @@ void libgint_set_AtomInfo( void * handle, int i, double * R, double * Z, int np,
    }
 }
 
-void libgint_set_max_n_cell( void * handle , int max_n_cell_ ){
-   libGint * g_handle = (libGint *) handle ;
-   g_handle -> set_max_n_prm( max_n_cell_ );
-}
-
 void libgint_add_prm( void * handle, int ipa, int ipb, int ipc, int ipd ){
    libGint * g_handle = (libGint *) handle ;
    g_handle -> add_prm( ipa, ipb, ipc, ipd );
@@ -180,11 +175,6 @@ void libgint_add_qrtt(
 void libgint_add_set( void * handle ){
    libGint * g_handle = (libGint *) handle ;
    g_handle -> add_set();
-}
-
-void libgint_memory_needed( void * handle, int * mem ){
-   libGint * g_handle = (libGint *) handle ;
-   (*mem) = ( g_handle -> memory_needed() );
 }
 
 void libgint_dispatch( void * handle ){

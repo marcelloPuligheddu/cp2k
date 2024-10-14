@@ -101,9 +101,9 @@ MODULE hfx_energy_potential
    use offload_api, only :  offload_get_chosen_device, offload_set_chosen_device, offload_activate_chosen_device
    use libGint, only : libgint_init, libgint_set_Potential_Truncated, libgint_set_hf_fac, libgint_set_max_mem, &
                        libgint_set_P, libgint_set_P_polarized, libgint_set_K, libgint_set_K_polarized, &
-                       libgint_get_K, libgint_get_K_polarized, libgint_set_Atom, libgint_set_Atom_L, libgint_set_cell, &
-                       libgint_set_neighs, &
-                       libgint_set_max_n_cell, libgint_add_prm, libgint_add_shell, libgint_add_cell, libgint_add_qrt, &
+                       libgint_get_K, libgint_get_K_polarized, libgint_set_Atom, libgint_set_Atom_L, &
+                       libgint_set_cell, libgint_set_neighs, &
+                       libgint_add_prm, libgint_add_shell, libgint_add_cell, libgint_add_qrt, &
                        libgint_add_qrtt, libgint_add_set
 
    !!!!!!!!!!!!!!!!!!!!!!!
@@ -938,6 +938,7 @@ CONTAINS
       !!!
       ! Set up the gpu enviroment
       if (use_libGint ) then
+
          if_first_call: if( first_call) then
             ! APPARENTELY only the master thread has received a call to offload_set_chosen_device
             ! BUT we need all omp threads with th same mpi process to be on the same physical device.
@@ -964,6 +965,7 @@ CONTAINS
             end select libGint_select_potential
             first_call = .false.
          end if if_first_call
+
          ! Set the multiplicative factor fac (the fraction of exact exchange times the spin factor) for libGint
          call libGint_set_hf_fac( libGint_handle, fac )
          call libGint_set_max_mem( libGint_handle, memory_parameter%max_memory )
@@ -1020,8 +1022,6 @@ CONTAINS
                jset = jset + 1
             end do 
          end do
-         ! TODO OUTDATED and unnecessary
-         call libgint_set_max_n_cell( libGint_handle, nneighbors )
    !      write(*,*) " PK set "
       end if ! end of libGint setup
       !!!
@@ -1948,7 +1948,7 @@ CONTAINS
          write(*,*) " ------------------------------------ "
 
          ! Print all F if delta is too large or (suspiciously) too small
-         if ( max_abs_delta_KS > 1.E-8_dp .or. max_abs_delta_KS < 1.E-18 ) then
+         if ( max_abs_delta_KS > 100*eps_schwarz .or. max_abs_delta_KS < 1.E-20 ) then
             write (*,*) " K from CPU  |  K from GPU  |  Delta | Ratio " 
             do  i=1, size(full_ks_alpha)
                write (*,*) i, full_ks_alpha(i,1) , full_ks_alpha_from_gpu(i,1), &
@@ -1968,7 +1968,7 @@ CONTAINS
             write(*,*) " ------------------------------------ "
 
             ! Print all F if delta is too large or (suspiciously) too small
-            if ( max_abs_delta_KS > 1.E-8_dp .or. max_abs_delta_KS < 1.E-18 ) then
+            if ( max_abs_delta_KS > 100*eps_schwarz .or. max_abs_delta_KS < 1.E-18 ) then
                write (*,*) " BETA K from CPU  |  K from GPU  |  Delta | Ratio " 
                do  i=1, size(full_ks_beta)
                   write (*,*) i, full_ks_beta(i,1) , full_ks_beta_from_gpu(i,1), &
@@ -2419,43 +2419,6 @@ CONTAINS
 
       CALL timestop(handle)
    END SUBROUTINE integrate_four_center
-
-   function my_wrap( s ) result( w_s )
-      REAL(KIND=DP) :: s, w_s
-      if ( s >  0.499 .and. s <  0.501 ) then 
-         w_s = s
-      else
-         if ( s < -0.499 .and. s > -0.501 ) then 
-            w_s = - s
-         else
-            w_s = s - anint(s)
-         end if
-      end if
-      
-   end function my_wrap
-
-   FUNCTION my_pbc(r, cell) RESULT(r_pbc)
-
-      REAL(KIND=dp), DIMENSION(3), INTENT(IN)            :: r
-      TYPE(cell_type), POINTER                           :: cell
-      REAL(KIND=dp), DIMENSION(3)                        :: r_pbc
-
-      REAL(KIND=dp), DIMENSION(3)                        :: s
-
-      CPASSERT(ASSOCIATED(cell))
-
-      s(1) = cell%h_inv(1, 1)*r(1) + cell%h_inv(1, 2)*r(2) + cell%h_inv(1, 3)*r(3)
-      s(2) = cell%h_inv(2, 1)*r(1) + cell%h_inv(2, 2)*r(2) + cell%h_inv(2, 3)*r(3)
-      s(3) = cell%h_inv(3, 1)*r(1) + cell%h_inv(3, 2)*r(2) + cell%h_inv(3, 3)*r(3)
-      s(1) = my_wrap(s(1)) !s(1) - cell%perd(1)*ANINT(s(1))
-      s(2) = my_wrap(s(2)) !s(2) - cell%perd(2)*ANINT(s(2))
-      s(3) = my_wrap(s(3)) !s(3) - cell%perd(3)*ANINT(s(3))
-      r_pbc(1) = cell%hmat(1, 1)*s(1) + cell%hmat(1, 2)*s(2) + cell%hmat(1, 3)*s(3)
-      r_pbc(2) = cell%hmat(2, 1)*s(1) + cell%hmat(2, 2)*s(2) + cell%hmat(2, 3)*s(3)
-      r_pbc(3) = cell%hmat(3, 1)*s(1) + cell%hmat(3, 2)*s(2) + cell%hmat(3, 3)*s(3)
-
-   END FUNCTION my_pbc
-
 
 !> \brief Assign two-electron integrals of a quartet/shell to libGint
 !

@@ -509,7 +509,6 @@ __device__ void execute_CP2S_gpu(
    }
 }
 
-
 __global__ void compute_VRR_batched_gpu_low(
       const int Ncells, const int* __restrict__ plan,
       const unsigned int* const __restrict__ PMX,
@@ -523,59 +522,47 @@ __global__ void compute_VRR_batched_gpu_low(
    int F_size = L+1;
    if (L > 0){ F_size += 4*3+5; }
 
-   for( int block=blockIdx.x; block < Ncells*Ng ; block += gridDim.x ){
-
-      unsigned int p      = block / Ng; 
-      unsigned int Ov     = FVH[p*FVH_SIZE+FVH_OFFSET_OV];
-      unsigned int Og     = FVH[p*FVH_SIZE+FVH_OFFSET_OG];
-      unsigned int n_prm  = FVH[p*FVH_SIZE+FVH_OFFSET_NPRM];
-      unsigned int nlabcd = FVH[p*FVH_SIZE+FVH_OFFSET_NLABCD];
-      unsigned int npabcd = FVH[p*FVH_SIZE+FVH_OFFSET_NPABCD];
-      unsigned int idx_Ka = FVH[p*FVH_SIZE+FVH_OFFSET_IDX_KA];
-      unsigned int idx_Kb = FVH[p*FVH_SIZE+FVH_OFFSET_IDX_KB];
-      unsigned int idx_Kc = FVH[p*FVH_SIZE+FVH_OFFSET_IDX_KC];
-      unsigned int idx_Kd = FVH[p*FVH_SIZE+FVH_OFFSET_IDX_KD];
-
-      const double* Ka = &data[idx_Ka];
-      const double* Kb = &data[idx_Kb];
-      const double* Kc = &data[idx_Kc];
-      const double* Kd = &data[idx_Kd];
-
-       // Note: VRR does not need to know the n1 n2 cell, since it is already in the PA vectors
-       // so we use npa and npb as dummy
-      unsigned int nla,nlb,nlc,nld,npa,npb,npc,npd;
-      decode_shell( nlabcd, &nla,&nlb,&nlc,&nld, &npa,&npb);
-      decode4( npabcd, &npa,&npb,&npc,&npd );
-
-      double* sh_mem = &ABCD[ Og * hrr_blocksize ];
-
-      // arguable
-      const int best_vrr_team_size = (L+1) * (L+2) ;
-      int vrr_team_size = blockDim.x;
-      while ( vrr_team_size > best_vrr_team_size ){ vrr_team_size /= 2; }
+   // arguable
+   const int best_vrr_team_size = (L+1) * (L+2) ;
+   int vrr_team_size = blockDim.x;
+   while ( vrr_team_size > best_vrr_team_size ){ vrr_team_size /= 2; }
 
 //      if ( blockIdx.x + threadIdx.x == 0  ){ printf( " VTS calc: L = %d N = %d  -> %d \n" , L, n_prm, vrr_team_size); }
 
-      int num_vrr_teams = blockDim.x / vrr_team_size;
-      int my_vrr_team = threadIdx.x / vrr_team_size;
-      int my_vrr_rank = threadIdx.x % vrr_team_size;
-      int n3 = block % Ng; 
+   int num_vrr_teams = blockDim.x / vrr_team_size;
+   int my_vrr_team = threadIdx.x / vrr_team_size;
+   int my_vrr_rank = threadIdx.x % vrr_team_size;
+
+   for( int block=blockIdx.x; block < Ncells*Ng ; block += gridDim.x ){
+
+      unsigned int p      = block / Ng; 
+      int n3 = block % Ng;
+
+      unsigned int Ov     = FVH[p*FVH_SIZE+FVH_OFFSET_OV];
+      unsigned int n_prm  = FVH[p*FVH_SIZE+FVH_OFFSET_NPRM];
 
       for ( unsigned i = my_vrr_team; i < n_prm ;  i += num_vrr_teams ){
 
-         unsigned int Of   = ((Ov+i) * Ng + n3 ) * F_size;
-         if (Fm[Of] < 1.e-20 ){ continue; } // Early primitive screening
+         // Screening on the (ab.n1|cd.n2@n3) fondamental integrals
+         bool found = false;
+         unsigned int Of = 0;
 
-         unsigned int ipzn = PMX[Ov+i];
-         unsigned int ipa,ipb,ipc,ipd;
-         // We need to know the index of the pgfs to find the K coefficents
-         decode4( ipzn, &ipa,&ipb,&ipc,&ipd );
+         while ( not found and i < n_prm ){
+            Of = ((Ov+i) * Ng + n3 ) * F_size;
+            // copy Fm[0] ( the ssss(0) integral ) to AC for later screening in ECO
+            double* pr_mem = &AC[ ((Ov+i) * Ng + n3) * vrr_blocksize ];
+            pr_mem[0] = Fm[Of];
+            // Immediate screening
+            if (Fm[Of] > 1.e-30 ){ found = true ; }
+            else { i += num_vrr_teams; }
+         }
+         if ( not found or i >= n_prm ){ break; }
+
+         // Copy the sss(m) integrals         
          double* pr_mem = &AC[ ((Ov+i) * Ng + n3) * vrr_blocksize ];
          for( int il=0; il < L+1; il++ ){
             pr_mem[il] = Fm[Of+il];
          }
-
-
 
          const double* PA = nullptr;
          const double* WP = nullptr;
@@ -636,11 +623,11 @@ __global__ void compute_VRR_batched_gpu_low(
             } else if ( t == VRR6 ){ 
                m4 = &pr_mem[off_m4];
                execute_VRR6_gpu( la, m, m1, m2, m3, m4, QC, WQ, inv_2z, my_vrr_rank, vrr_team_size);
-            } else if ( t == CP2S){
-               m2 = &sh_mem[off_m2];
-               execute_CP2S_gpu( 
-                  la, lc, m1, m2, my_vrr_rank, vrr_team_size, hrr_blocksize,
-                  ipa, ipb, ipc, ipd, nla, nlb, nlc, nld, npa, npb, npc, npd, Ka, Kb, Kc, Kd );
+//            } else if ( t == CP2S){
+//               m2 = &sh_mem[off_m2];
+//               execute_CP2S_gpu( 
+//                  la, lc, m1, m2, my_vrr_rank, vrr_team_size, hrr_blocksize,
+//                  ipa, ipb, ipc, ipd, nla, nlb, nlc, nld, npa, npb, npc, npd, Ka, Kb, Kc, Kd );
             } else if ( t == SYTM ){
                __syncthreads();
             }
