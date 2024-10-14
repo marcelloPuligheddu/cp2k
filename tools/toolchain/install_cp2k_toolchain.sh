@@ -234,7 +234,7 @@ The --with-PKG options follow the rules:
   --with-dftd4            Enable the DFTD4 package by Grimme
                           This package requires cmake, ninja
                           Default = install
-
+  --with-libGint          TODO
 FURTHER INSTRUCTIONS
 
 All packages to be installed locally will be downloaded and built inside
@@ -271,7 +271,7 @@ mpi_list="mpich openmpi intelmpi"
 math_list="mkl acml openblas"
 lib_list="fftw libint libxc libgrpp libxsmm cosma scalapack elpa cusolvermp plumed \
           spfft spla ptscotch superlu pexsi quip gsl spglib hdf5 libvdwxc sirius
-          libvori libtorch deepmd dftd4"
+          libvori libtorch deepmd dftd4 libGint"
 package_list="${tool_list} ${mpi_list} ${math_list} ${lib_list}"
 # ------------------------------------------------------------------------
 
@@ -322,6 +322,7 @@ with_libvori="__INSTALL__"
 with_libtorch="__DONTUSE__"
 with_ninja="__DONTUSE__"
 with_dftd4="__DONTUSE__"
+with_libGint="__DONTUSE__"
 
 # for MPI, we try to detect system MPI variant
 if (command -v mpiexec > /dev/null 2>&1); then
@@ -641,6 +642,9 @@ while [ $# -ge 1 ]; do
     --with-gsl*)
       with_gsl=$(read_with "${1}")
       ;;
+    --with-libGint*)
+      with_libGint=$(read_with "${1}")
+      ;;
     --with-spglib*)
       with_spglib=$(read_with "${1}")
       ;;
@@ -808,6 +812,13 @@ fi
 if [ "${with_dftd4}" = "__INSTALL__" ]; then
   [ "${with_ninja}" = "__DONTUSE__" ] && with_ninja="__INSTALL__"
 fi
+
+#libGitn installation requires cuda enabled
+if [ "${with_libGint}" != "__DONTUSE__" ] && [ ${enable_cuda} != "__TRUE__" ]; then
+  report_error "TODO"
+  exit 1
+fi
+
 
 # several packages require cmake.
 if [ "${with_spglib}" = "__INSTALL__" ] ||
