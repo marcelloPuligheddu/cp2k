@@ -210,8 +210,11 @@ The --with-PKG options follow the rules:
   --with-plumed           Enable interface to the PLUMED library.
                           Default = no
   --with-sirius           Enable interface to the plane wave SIRIUS library.
-                          This package requires: gsl, libspg, elpa, scalapack, hdf5 and libxc.
+                          This package requires: gsl, libspg, elpa, scalapack, hdf5, libxc and pugixml
                           Default = install
+  --with-pugixml          Enable support for XML parsing using the pugixml library.
+                          This library is required by SIRIUS.
+                          Default = no (unless a SIRIUS installation is requested)
   --with-gsl              Enable the gnu scientific library (required for PLUMED and SIRIUS)
                           Default = install
   --with-libvdwxc         Enable support of Van der Waals interactions in SIRIUS. Support provided by libvdwxc
@@ -307,7 +310,7 @@ fi
 with_acml="__SYSTEM__"
 with_openblas="__INSTALL__"
 
-# sirius is activated by default
+# SIRIUS is activated by default
 with_sirius="__INSTALL__"
 with_gsl="__DONTUSE__"
 with_spglib="__INSTALL__"
@@ -639,6 +642,9 @@ while [ $# -ge 1 ]; do
     --with-sirius*)
       with_sirius=$(read_with "${1}")
       ;;
+    --with-pugixml*)
+      with_pugixml=$(read_with "${1}")
+      ;;
     --with-gsl*)
       with_gsl=$(read_with "${1}")
       ;;
@@ -718,7 +724,7 @@ if [ "${MPI_MODE}" = "no" ]; then
     with_pexsi="__DONTUSE__"
   fi
   if [ "${with_sirius}" != "__DONTUSE__" ]; then
-    echo "Not using MPI, so sirius is disabled"
+    echo "Not using MPI, so SIRIUS is disabled"
     with_sirius="__DONTUSE__"
   fi
   if [ "${with_spfft}" != "__DONTUSE__" ]; then
@@ -826,6 +832,7 @@ if [ "${with_spglib}" = "__INSTALL__" ] ||
   [ "${with_scalapack}" = "__INSTALL__" ] ||
   [ "${with_superlu}" = "__INSTALL__" ] ||
   [ "${with_sirius}" = "__INSTALL__" ] ||
+  [ "${with_pugixml}" = "__INSTALL__" ] ||
   [ "${with_cosma}" = "__INSTALL__" ] ||
   [ "${with_spfft}" = "__INSTALL__" ] ||
   [ "${with_spla}" = "__INSTALL__" ] ||
@@ -845,6 +852,9 @@ if [ "${with_sirius}" = "__INSTALL__" ]; then
   [ "${with_hdf5}" = "__DONTUSE__" ] && with_hdf5="__INSTALL__"
   [ "${with_libvdwxc}" = "__DONTUSE__" ] && with_libvdwxc="__INSTALL__"
   [ "${with_cosma}" = "__DONTUSE__" ] && with_cosma="__INSTALL__"
+  [ "${with_pugixml}" = "__DONTUSE__" ] && with_pugixml="__INSTALL__"
+elif [ "${with_sirius}" = "__DONTUSE__" ]; then
+  with_pugixml="__DONTUSE__"
 fi
 
 if [ "${with_plumed}" = "__INSTALL__" ]; then
