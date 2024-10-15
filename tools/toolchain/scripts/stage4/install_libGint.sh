@@ -36,13 +36,13 @@ case "$with_libGint" in
 #      echo "Installing from scratch into ${pkg_install_dir}"
 #      rm -rf spglib-${spglib_ver} "${pkg_install_dir}"
 #      tar -xzf spglib-${spglib_ver}.tar.gz
-
 #     OR
 
       rm -rf libGint-${libGint_ver}
-      cp -r /work4/scd/scarf1152/libGint libGint-${libGint_ver}
-#
+#      cp -r /work4/scd/scarf1152/libGint libGint-${libGint_ver}
+#     OR
 
+      git clone --depth=1 https://github.com/marcelloPuligheddu/libGint.git libGint-${libGint_ver}
       cd libGint-${libGint_ver}
 
 #      mkdir build
