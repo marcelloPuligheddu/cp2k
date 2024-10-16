@@ -6,7 +6,7 @@
 !--------------------------------------------------------------------------------------------------!
 
 ! **************************************************************************************************
-!> \brief Interface to the Libint-Library or a c++ wrapper.
+!> \brief Interface to the LibGint-Library.
 !> \par History
 !>      10.2024 Created
 !> \author Marcello Puligheddu
