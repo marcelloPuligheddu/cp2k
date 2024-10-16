@@ -830,6 +830,11 @@ MODULE input_constants
                                                hfx_ri_do_2c_diag = 2, &
                                                hfx_ri_do_2c_cholesky = 3
 
+   INTEGER, PARAMETER, PUBLIC               :: hfx_library_is_libint = 1, &
+                                               hfx_library_is_libGint = 2, &
+                                               hfx_library_is_both = 12
+
+
    ! mode selctive vibrational analysis
    INTEGER, PARAMETER, PUBLIC               :: ms_guess_bfgs = 1, &
                                                ms_guess_atomic = 2, &
