@@ -61,7 +61,7 @@ CONTAINS
 
 subroutine cp_libGint_init( actual_x_data )
   TYPE(hfx_type), POINTER :: actual_x_data
-#if(__LINGINT)
+#if(__LIBGINT)
    if( first_call) then
       ! Init the offload library, creates an handle unique to this omp thread
       call libgint_init(libGint_handle)
@@ -98,7 +98,7 @@ subroutine libGint_update_env( fac, memory_parameter, do_periodic, cell, actual_
    INTEGER, ALLOCATABLE, DIMENSION(:) :: kind_of
    TYPE(particle_type), DIMENSION(:), POINTER :: particle_set
    TYPE(hfx_basis_type), DIMENSION(:), POINTER :: basis_parameter
-#if(__LINGINT)
+#if(__LIBGINT)
    logical(1) :: do_pbc
    real(dp), dimension(:,:), allocatable :: cell_r
    real(dp), dimension(:), allocatable :: flat_gcc
