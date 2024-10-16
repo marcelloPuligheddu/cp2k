@@ -42,7 +42,6 @@ MODULE libGint_wrapper
 
 CONTAINS
 
-
 subroutine cp_libGint_init( actual_x_data )
   TYPE(hfx_type), POINTER :: actual_x_data
 #if(__LINGINT)
@@ -80,6 +79,7 @@ subroutine libGint_update_env( fac, memory_parameter, do_periodic, cell, actual_
    INTEGER, ALLOCATABLE, DIMENSION(:) :: kind_of
    TYPE(particle_type), DIMENSION(:), POINTER         :: particle_set
 
+#if(__LINGINT)
    logical(1) :: do_pbc
    real(dp), dimension(:,:), allocatable :: cell_r
    real(dp), dimension(:), allocatable :: flat_gcc
@@ -90,7 +90,6 @@ subroutine libGint_update_env( fac, memory_parameter, do_periodic, cell, actual_
    REAL(dp), DIMENSION(:, :), POINTER :: zeta
    REAL(dp), DIMENSION(:, :, : ), POINTER :: gcc
 
-#if(__LINGINT)
    ! Set the multiplicative factor fac (the fraction of exact exchange times the spin factor) for libGint
    call libGint_set_hf_fac( libGint_handle, fac )
    !
@@ -139,7 +138,17 @@ subroutine libGint_update_env( fac, memory_parameter, do_periodic, cell, actual_
       end do 
    end do
 #else
-   MARK_USED(ALL)
+   MARK_USED(fac)
+   MARK_USED(memory_parameter)
+   MARK_USED(do_periodic)
+   MARK_USED(cell)
+   MARK_USED(actual_x_data)
+   MARK_USED(nneighbors)
+   MARK_USED(max_pgf)
+   MARK_USED(natoms)
+   MARK_USED(kind_of)
+   MARK_USED(particle_set)
+   MARK_USED(basis_parameter)
    CPABORT("This CP2K executable has not been linked against the required library libGint.")
 #endif
 end subroutine libGint_update_env
@@ -155,7 +164,7 @@ subroutine libGint_set_density_A( full_density_alpha )
 #if(__LIBGINT)
    call libgint_set_P( libGint_handle, full_density_alpha(:, 1) )
 #else
-   MARK_USED(ALL)
+   MARK_USED(full_density_alpha)
    CPABORT("This CP2K executable has not been linked against the required library libGint.")
 #endif
 
@@ -163,7 +172,8 @@ subroutine libGint_set_density_AB( full_density_alpha, full_density_beta )
 #if(__LIBGINT)
    call libgint_set_P_polarized( libGint_handle, full_density_alpha(:, 1), full_density_beta(:, 1) )
 #else
-   MARK_USED(ALL)
+   MARK_USED(full_density_alpha)
+   MARK_USED(full_density_beta)
    CPABORT("This CP2K executable has not been linked against the required library libGint.")
 #endif
 
@@ -172,24 +182,24 @@ interface libGint_get_fock_matrix
    module subroutine libGint_get_fock_matrix_AB
 end interface
 
-   subroutine libGint_get_fock_matrix_A( full_ks_alpha_from_gpu(:,1) )
+   subroutine libGint_get_fock_matrix_A( full_ks_alpha_from_gpu )
 #if(__LIBGINT)
   call libGint_get_K( full_ks_alpha_from_gpu(:,1) )
 #else
-   MARK_USED(ALL)
+   MARK_USED(full_ks_alpha_from_gpu)
    CPABORT("This CP2K executable has not been linked against the required library libGint.")
 #endif
    end subroutine update_fock_matrix_gpu
 
-   subroutine libGint_get_fock_matrix_AB( full_ks_alpha_from_gpu(:,1), full_ks_beta_from_gpu(:,1) )
+   subroutine libGint_get_fock_matrix_AB( full_ks_alpha_from_gpu, full_ks_beta_from_gpu )
 #if(__LIBGINT)
   call libgint_get_K_polarized( libGint_handle, full_ks_alpha_from_gpu(:, 1), full_ks_beta_from_gpu(:, 1) )
 #else
-   MARK_USED(ALL)
+   MARK_USED(full_ks_alpha_from_gpu)
+   MARK_USED(full_ks_beta_from_gpu)
    CPABORT("This CP2K executable has not been linked against the required library libGint.")
 #endif
    end subroutine update_fock_matrix_gpu
-
 
 !> \brief Assign two-electron integrals of a quartet/shell to libGint
    subroutine libGint_coulomb4( iatom, jatom, katom, latom, iset, jset, kset, lset, &
@@ -197,26 +207,25 @@ end interface
                      potential_parameter, &
                      screen1, screen2, log10_pmax, log10_eps_schwarz, &
                      pgf1, pgf2, &
-                     bra, ket, &
                      neighbor_cells, cell, do_periodic, screened )
-#if(__LIBGINT)
-      type(c_ptr) :: libGint_handle
+
       integer, intent(in) :: iatom, jatom, katom, latom, iset, jset, kset, lset
       REAL(dp), INTENT(IN)                               :: ra(3), rb(3), rc(3), rd(3)
       INTEGER, INTENT(IN)                                :: npgfa, npgfb, npgfc, npgfd 
       TYPE(hfx_potential_type)                           :: potential_parameter
-      TYPE(hfx_cell_type), DIMENSION(:), POINTER         :: neighbor_cells
       REAL(dp), INTENT(IN)                               :: screen1(2), screen2(2)
-      TYPE(cell_type), POINTER                           :: cell
       REAL(dp), INTENT(IN)                               :: log10_pmax, log10_eps_schwarz
       TYPE(hfx_screen_coeff_type), DIMENSION(:, :), &
          POINTER                                         :: pgf1, pgf2
-      TYPE(bra_t)                                        :: bra, ket
+      TYPE(hfx_cell_type), DIMENSION(:), POINTER         :: neighbor_cells
+      TYPE(cell_type), POINTER                           :: cell
       LOGICAL, INTENT(IN)                                :: do_periodic
       logical, intent(out) :: screened
+
+#if(__LIBGINT)
+      TYPE(bra_t)                                        :: bra, ket
       logical :: cell_was_screened
       
-
       integer  :: idx_n1,idx_n2,n1,n2,idx_ij,idx_kl,o_ij,n_ij,o_kl,n_kl !, n3
       integer  :: ipgf,jpgf,kpgf,lpgf,iatom_set,jatom_set,katom_set,latom_set
       real(dp) :: pgf_max_1, pgf_max_2 ! , R1, R2, rpq2
@@ -294,13 +303,39 @@ end interface
          end do ! ket n2
       end do ! bra n1
 #else
-   MARK_USED(ALL)
+   MARK_USED(iatom)
+   MARK_USED(jatom)
+   MARK_USED(katom)
+   MARK_USED(latom)
+   MARK_USED(iset)
+   MARK_USED(jset)
+   MARK_USED(kset)
+   MARK_USED(lset)
+   MARK_USED(ra)
+   MARK_USED(rb)
+   MARK_USED(rc)
+   MARK_USED(rd)
+   MARK_USED(npgfa)
+   MARK_USED(npgfb)
+   MARK_USED(npgfc)
+   MARK_USED(npgfd)
+   MARK_USED(potential_parameter)
+   MARK_USED(screen1)
+   MARK_USED(screen2)
+   MARK_USED(log10_pmax)
+   MARK_USED(log10_eps_schwarz)
+   MARK_USED(pgf1)
+   MARK_USED(pgf2)
+   MARK_USED(neighbor_cells)
+   MARK_USED(cell)
+   MARK_USED(do_periodic)
+   MARK_USED(screened)
    CPABORT("This CP2K executable has not been linked against the required library libGint.")
 #endif
    end subroutine coulomb_4_gpu
 
    subroutine update_fock_matrix_gpu( &
-         libGint_handle, symm_fac, &
+         symm_fac, &
          iatom, jatom, katom, latom, &
          iset, jset, kset, lset, &
          atomic_offset_ac, atomic_offset_ad, atomic_offset_bc, atomic_offset_bd, &
@@ -309,7 +344,7 @@ end interface
          la_min, la_max, lb_min, lb_max, &
          lc_min, lc_max, ld_min, ld_max, &
          nsgfl_a, nsgfl_b, nsgfl_c, nsgfl_d)
-   type(c_ptr) :: libGint_handle
+
    real(dp) :: symm_fac
    integer :: iatom, jatom, katom, latom
    integer :: iset, jset, kset, lset
@@ -476,7 +511,39 @@ end interface
       call libgint_add_set( libGint_handle )
 
 #else
-   MARK_USED(ALL)
+   MARK_USED(symm_fac)
+   MARK_USED(iatom)
+   MARK_USED(jatom)
+   MARK_USED(katom)
+   MARK_USED(latom)
+   MARK_USED(iset)
+   MARK_USED(jset)
+   MARK_USED(kset)
+   MARK_USED(lset)
+   MARK_USED(atomic_offset_ac)
+   MARK_USED(atomic_offset_ad)
+   MARK_USED(atomic_offset_bc)
+   MARK_USED(atomic_offset_bd)
+   MARK_USED(offset_ac_set)
+   MARK_USED(offset_ad_set)
+   MARK_USED(offset_bc_set)
+   MARK_USED(offset_bd_set)
+   MARK_USED(nsgfa)
+   MARK_USED(nsgfb)
+   MARK_USED(nsgfc)
+   MARK_USED(nsgfd)
+   MARK_USED(la_min)
+   MARK_USED(la_max)
+   MARK_USED(lb_min)
+   MARK_USED(lb_max)
+   MARK_USED(lc_min)
+   MARK_USED(lc_max)
+   MARK_USED(ld_min)
+   MARK_USED(ld_max)
+   MARK_USED(nsgfl_a)
+   MARK_USED(nsgfl_b)
+   MARK_USED(nsgfl_c)
+   MARK_USED(nsgfl_d)
    CPABORT("This CP2K executable has not been linked against the required library libGint.")
 #endif
    end subroutine update_fock_matrix_gpu
