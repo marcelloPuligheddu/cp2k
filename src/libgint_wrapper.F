@@ -196,7 +196,7 @@ end subroutine libGint_set_density_AB
 subroutine libGint_get_fock_matrix_A( full_ks_alpha_from_gpu )
    REAL(dp), DIMENSION(:, :), POINTER :: full_ks_alpha_from_gpu
 #if(__LIBGINT)
-   call libGint_get_K( full_ks_alpha_from_gpu(:,1) )
+   call libGint_get_K( libGint_handle, full_ks_alpha_from_gpu(:,1) )
 #else
    MARK_USED(full_ks_alpha_from_gpu)
    CPABORT("This CP2K executable has not been linked against the required library libGint.")
