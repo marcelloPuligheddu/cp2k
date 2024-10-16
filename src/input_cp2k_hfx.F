@@ -83,11 +83,20 @@ CONTAINS
       CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
 
-      CALL keyword_create(keyword, __LOCATION__, name="HFX_OFFLOAD", &
-                          description="TEST. A value of 1 offloads to libGint. "// &
-                          "A value of 0 (default) offloads to libint."// &
-                          "A special value of 2 offloads to both and compare results ", &
-                          usage="OFFLOAD 1", default_i_val=0)
+      CALL keyword_create( &
+         keyword, __LOCATION__, &
+         name="HFX_LIBRARY", &
+         description="Which library should be used in the calculation of the HF exchange "// &
+         "(Libint (cpu, default), libGint(gpu, cuda), both(debug,temporary)", &
+         usage="HFX_LIBRARY libGint", &
+         enum_c_vals=s2a("libint", "libGint, both"), &
+         enum_i_vals=(/hfx_library_is_libint, hfx_library_is_libGint, hfx_library_is_both/), &
+         enum_desc=s2a("libint: use the libint library to compute the 2 electron integrals for HFX/r", &
+                       "libGint: use the libGint library to accelerate the calculation of the HF "// &
+                       "exchange on (cuda) GPUs /r", &
+                       "both: temporary debug option, will run both libint and libGint and "// &
+                       "check if the fock matrix is within tolerance", &
+         default_i_val=use_libint)
       CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
 
