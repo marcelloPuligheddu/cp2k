@@ -11,10 +11,10 @@
 !>      10.2024 Created
 !> \author Marcello Puligheddu
 ! **************************************************************************************************
-MODULE libGint_wrapper
+module libGint_wrapper
 
    USE kinds, ONLY: dp
-#if(__LIBINT)
+#if(__LIBGINT)
    use libGint, only : libgint_init, libgint_set_Potential_Truncated, libgint_set_hf_fac, libgint_set_max_mem, &
                        libgint_set_P, libgint_set_P_polarized, libgint_set_K, libgint_set_K_polarized, &
                        libgint_get_K, libgint_get_K_polarized, libgint_set_Atom, libgint_set_Atom_L, &
@@ -26,6 +26,8 @@ MODULE libGint_wrapper
     use cell_types, only: cell_type
     USE hfx_pair_list_methods, ONLY: build_pair_list_pbc_pgf, bra_t, allocate_bra
     USE particle_types, ONLY: particle_type
+
+    use iso_C_binding, only: c_ptr 
 
 #include "./base/base_uses.f90"
 
