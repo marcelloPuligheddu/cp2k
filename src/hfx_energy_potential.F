@@ -71,7 +71,9 @@ MODULE hfx_energy_potential
                               do_potential_TShPSC, &
                               do_potential_short, &
                               do_potential_coulomb, &
-                              hfx_do_eval_energy
+                              hfx_do_eval_energy, &
+      hfx_library_is_libint, hfx_library_is_libGint, hfx_library_is_both
+
    USE input_section_types, ONLY: section_vals_type
    USE kinds, ONLY: default_string_length, &
                     dp, &
@@ -907,15 +909,15 @@ CONTAINS
 !$OMP END MASTER
 !$OMP BARRIER
 
-      if (general_parameter%offload == 0) then
+      if (general_parameter%hfx_library == hfx_library_is_libint) then
          use_libint = .true.
          use_libGint = .false.
       end if
-      if (general_parameter%offload == 1) then
+      if (general_parameter%hfx_library == hfx_library_is_libGint) then
          use_libint = .false.
          use_libGint = .true.
       end if
-      if (general_parameter%offload == 2) then
+      if (general_parameter%hfx_library == hfx_library_is_both) then
          use_libint = .true.
          use_libGint = .true.
       end if
