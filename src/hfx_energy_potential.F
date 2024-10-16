@@ -96,11 +96,9 @@ MODULE hfx_energy_potential
    use, intrinsic :: iso_c_binding, only : c_ptr
 
    !!!!!!!!!!!!!!!!!!!!!!!
-#if(__LIBGINT)
    use offload_api, only :  offload_get_chosen_device, offload_set_chosen_device, offload_activate_chosen_device
    use libGint_wrapper, only : cp_libGint_init, libGint_update_env, libGint_set_density, libGint_coulomb4, &
                                libGint_update_fock_matrix, libGint_get_fock_matrix
-#endif
    !!!!!!!!!!!!!!!!!!!!!!!
 
 !$ USE OMP_LIB, ONLY: omp_get_max_threads, omp_get_thread_num, omp_get_num_threads
@@ -165,7 +163,7 @@ CONTAINS
       INTEGER :: act_atomic_block_offset, act_set_offset, atomic_offset_ac, atomic_offset_ad, &
                  atomic_offset_bc, atomic_offset_bd, bin, bits_max_val, buffer_left, buffer_size, &
                  buffer_start, cache_size, current_counter, handle, handle_bin, handle_dist_ks, &
-                 handle_getP, handle_load, handle_main, i, l, inla, nla, i_list_ij, i_list_kl, i_set_list_ij, &
+                 handle_getP, handle_load, handle_main, i, inla, nla, i_list_ij, i_list_kl, i_set_list_ij, &
                  i_set_list_ij_start, i_set_list_ij_stop, i_set_list_kl, i_set_list_kl_start, &
                  i_set_list_kl_stop, i_thread, iatom, iatom_block, iatom_end, iatom_start, ikind, img, &
                  iset, iw, j, jatom, jatom_block, jatom_end, jatom_start, jkind, jset, katom, katom_block, &
@@ -346,7 +344,6 @@ CONTAINS
 
 !$OMP PARALLEL DEFAULT(OMP_DEFAULT_NONE_WITH_OOP) &
 !$OMP SHARED(qs_env,&
-!$OMP                                  first_call,&
 !$OMP                                  x_data,&
 !$OMP                                  ks_matrix,&
 !$OMP                                  ehfx,&
@@ -432,7 +429,7 @@ CONTAINS
 !$OMP         ene_x_bb_diag,act_atomic_block_offset,act_set_offset,j,handle_dist_ks,tmp_i8,tmp_i4,dft_control,&
 !$OMP         etmp,nkimages,img,bin,eps_scaling_str,eps_schwarz_min_str, &
 !$OMP         i,inla,nla,gcc,first_set_of_atom,max_abs_delta_KS, screened, &
-!$OMP         iatom_set,jatom_set,katom_set,latom_set,do_pbc,cell_r,flat_gcc,use_only_alpha_spin)
+!$OMP         iatom_set,jatom_set,katom_set,latom_set,use_only_alpha_spin)
 
 ! ,handle_c4g,handle_ufg) 
 
@@ -924,6 +921,10 @@ CONTAINS
       end if
 
       !!!
+      ! use_alpha_beta_spin = (.not. treat_lsd_in_core) .and. nspins == 2
+      ! use_only_alpha_spin = .not. use_alpha_beta_spin = treat_lsd_in_core .or. .not. nspins == 2
+      use_only_alpha_spin = treat_lsd_in_core .or. .not. nspins == 2
+
       ! Set up the gpu enviroment
       if (use_libGint) then
          !
@@ -937,10 +938,17 @@ CONTAINS
          !$omp barrier
          call offload_set_chosen_device( shared_dev )
          call offload_activate_chosen_device()
-         !
-         call cp_libGint_init( actual_x_data ) ! At least once, and before any other call
-         call libGint_update_env(  ) ! At least at geo change
-         call libGint_set_density() ! Everytime
+         ! At least once, and before any other call
+         call cp_libGint_init( actual_x_data ) 
+         ! At least at geo change
+         call libGint_update_env( fac, memory_parameter, do_periodic, cell, actual_x_data, &
+                                  nneighbors, max_pgf, natom, kind_of, particle_set, basis_parameter )
+         ! Every cycle
+         if ( use_only_alpha_spin ) then
+            call libGint_set_density( full_density_alpha )
+         else
+            call libGint_set_density( full_density_alpha, full_density_beta )
+         end if
       end if
       !!!
 
@@ -1536,7 +1544,7 @@ CONTAINS
 
                            !call timeset(routineN//"_c4g", handle_c4g)
                            call libGint_coulomb4( &
-                              iatom, jatom, katom, latom, iset, jset, kset, lset,
+                              iatom, jatom, katom, latom, iset, jset, kset, lset,&
                               ra, rb, rc, rd, &
                               npgfa(iset), npgfb(jset), npgfc(kset), npgfd(lset), &
                               potential_parameter, &
@@ -1834,10 +1842,6 @@ CONTAINS
       !!!
       CALL para_env%sync()
 
-      ! use_alpha_beta_spin = (.not. treat_lsd_in_core) .and. nspins == 2
-      ! use_only_alpha_spin = .not. use_alpha_beta_spin = treat_lsd_in_core .or. .not. nspins == 2
-      use_only_alpha_spin = treat_lsd_in_core .or. .not. nspins == 2
-
       ! IF running both libint and libGint, uses the values from libint to check libGint values
       if ( use_libGint .and. use_libint ) then
          ! barrier needed after allocate  full_ks_alpha(beta)_from_gpu before libGint get K 
@@ -1845,11 +1849,11 @@ CONTAINS
          allocate( full_ks_alpha_from_gpu, Mold = full_ks_alpha )
          !$OMP BARRIER
          if ( use_only_alpha_spin ) then
-            call libGint_get_fock_matrix( full_ks_alpha_from_gpu(:,1) )
+            call libGint_get_fock_matrix( full_ks_alpha_from_gpu )
          else
             allocate( full_ks_beta_from_gpu, Mold = full_ks_beta )
             !$OMP BARRIER
-            call libGint_get_fock_matrix( full_ks_alpha_from_gpu(:, 1), full_ks_beta_from_gpu(:, 1) )
+            call libGint_get_fock_matrix( full_ks_alpha_from_gpu, full_ks_beta_from_gpu )
          end if
 
          !$omp single
@@ -1898,9 +1902,9 @@ CONTAINS
       ! Copy the KS matrix from device to host.
       if ( use_libGint .and. .not. use_libint ) then
          if ( use_only_alpha_spin ) then
-            call libGint_get_fock_matrix( full_ks_alpha(:,1) )
+            call libGint_get_fock_matrix( full_ks_alpha )
          else
-            call libGint_get_fock_matrix( full_ks_alpha(:,1), full_ks_beta(:,1) )
+            call libGint_get_fock_matrix( full_ks_alpha, full_ks_beta )
          end if
       end if
 
