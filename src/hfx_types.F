@@ -48,9 +48,7 @@ MODULE hfx_types
    USE input_constants,                 ONLY: &
         do_hfx_auto_shells, do_potential_coulomb, do_potential_gaussian, do_potential_id, &
         do_potential_long, do_potential_mix_cl, do_potential_mix_cl_trunc, do_potential_mix_lg, &
-        do_potential_short, do_potential_truncated, hfx_ri_do_2c_diag, hfx_ri_do_2c_iter, &
-        hfx_library_is_libint, hfx_library_is_libGint, hfx_library_is_both
-
+        do_potential_short, do_potential_truncated, hfx_ri_do_2c_diag, hfx_ri_do_2c_iter
    USE input_cp2k_hfx,                  ONLY: ri_mo,&
                                               ri_pmat
    USE input_section_types,             ONLY: section_vals_get,&
