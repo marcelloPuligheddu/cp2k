@@ -48,7 +48,9 @@ MODULE hfx_types
    USE input_constants,                 ONLY: &
         do_hfx_auto_shells, do_potential_coulomb, do_potential_gaussian, do_potential_id, &
         do_potential_long, do_potential_mix_cl, do_potential_mix_cl_trunc, do_potential_mix_lg, &
-        do_potential_short, do_potential_truncated, hfx_ri_do_2c_diag, hfx_ri_do_2c_iter
+        do_potential_short, do_potential_truncated, hfx_ri_do_2c_diag, hfx_ri_do_2c_iter, &
+        hfx_library_is_libint, hfx_library_is_libGint, hfx_library_is_both
+
    USE input_cp2k_hfx,                  ONLY: ri_mo,&
                                               ri_pmat
    USE input_section_types,             ONLY: section_vals_get,&
@@ -197,7 +199,7 @@ MODULE hfx_types
 ! **************************************************************************************************
    TYPE hfx_general_type
       REAL(dp)                                 :: fraction = 0.0_dp !! for hybrids
-      INTEGER                                  :: offload = 0
+      INTEGER                                  :: hfx_library = 0
       LOGICAL                                  :: treat_lsd_in_core = .FALSE.
    END TYPE
 
@@ -661,8 +663,8 @@ CONTAINS
             CALL section_vals_val_get(hfx_section, "TREAT_LSD_IN_CORE", l_val=logic_val, i_rep_section=irep)
             actual_x_data%general_parameter%treat_lsd_in_core = logic_val
 
-            CALL section_vals_val_get(hfx_section, "HFX_OFFLOAD", i_val=int_val, i_rep_section=irep)
-            actual_x_data%general_parameter%offload = int_val
+            CALL section_vals_val_get(hfx_section, "HFX_LIBRARY", i_val=int_val, i_rep_section=irep)
+            actual_x_data%general_parameter%hfx_library = int_val
 
             hfx_ri_section => section_vals_get_subs_vals(hfx_section, "RI")
             CALL section_vals_val_get(hfx_ri_section, "_SECTION_PARAMETERS_", l_val=actual_x_data%do_hfx_ri)
