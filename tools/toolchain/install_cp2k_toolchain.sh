@@ -239,7 +239,8 @@ The --with-PKG options follow the rules:
   --with-dftd4            Enable the DFTD4 package by Grimme
                           This package requires cmake, ninja
                           Default = install
-  --with-libGint          TODO
+  --with-libGint          Enable the use of libGint for the calculation of the Hartree-Fock exchange on (nvidia) GPUs
+                          Default = no
 FURTHER INSTRUCTIONS
 
 All packages to be installed locally will be downloaded and built inside
@@ -836,9 +837,9 @@ if [ "${with_dftd4}" = "__INSTALL__" ]; then
   [ "${with_ninja}" = "__DONTUSE__" ] && with_ninja="__INSTALL__"
 fi
 
-#libGitn installation requires cuda enabled
+#libGint installation requires cuda enabled
 if [ "${with_libGint}" != "__DONTUSE__" ] && [ ${enable_cuda} != "__TRUE__" ]; then
-  report_error "TODO"
+  report_error "libGint (at the moment) requires the use of cuda. Add --enable-cuda"
   exit 1
 fi
 

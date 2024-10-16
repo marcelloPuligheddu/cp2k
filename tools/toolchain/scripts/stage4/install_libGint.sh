@@ -45,17 +45,6 @@ case "$with_libGint" in
       git clone --depth=1 https://github.com/marcelloPuligheddu/libGint.git libGint-${libGint_ver}
       cd libGint-${libGint_ver}
 
-#      mkdir build
-#      cd build
-#      cmake \
-#        -DCMAKE_INSTALL_PREFIX="${pkg_install_dir}" \
-#        -DCMAKE_BUILD_TYPE="RelWithDebInfo" \
-#        -DCMAKE_VERBOSE_MAKEFILE=ON \
-#        -DSPGLIB_SHARED_LIBS=OFF \
-#        -DSPGLIB_USE_OMP=ON \
-#        -DSPGLIB_WITH_TESTS=OFF \
-#        .. > configure.log 2>&1 || tail -n ${LOG_LINES} configure.log
-      echo "PKG INSTALL DIR IS " $pkg_install_dir
       make -j $(get_nprocs) > make.log 2>&1 || tail -n ${LOG_LINES} make.log
       make install PREFIX="${pkg_install_dir}" > install.log 2>&1 || tail -n ${LOG_LINES} install.log
       write_checksums "${install_lock_file}" "${SCRIPT_DIR}/stage4/$(basename ${SCRIPT_NAME})"
