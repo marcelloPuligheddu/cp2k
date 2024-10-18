@@ -93,7 +93,7 @@ MODULE hfx_energy_potential
                                    qs_environment_type
    USE qs_ks_types, ONLY: get_ks_env, &
                           qs_ks_env_type
-   USE t_c_g0, ONLY: init, C0
+   USE t_c_g0, ONLY: init
    USE util, ONLY: sort
    use, intrinsic :: iso_c_binding, only: c_ptr
 
@@ -396,7 +396,7 @@ CONTAINS
 !$OMP                                  shm_pmax_block,&
 !$OMP                                  shm_atomic_pair_list,&
 !$OMP                                  shm_mem_compression_counter,&
-!$OMP                                  C0, shared_dev, &
+!$OMP                                  shared_dev, &
 !$OMP                                  do_print_load_balance_info,use_libgint,use_libint) &
 !$OMP PRIVATE(ln_10,i_thread,actual_x_data,do_periodic,screening_parameter,potential_parameter,&
 !$OMP         general_parameter,load_balance_parameter,memory_parameter,cache_size,bits_max_val,&
