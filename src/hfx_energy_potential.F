@@ -72,7 +72,7 @@ MODULE hfx_energy_potential
                               do_potential_short, &
                               do_potential_coulomb, &
                               hfx_do_eval_energy, &
-      hfx_library_is_libint, hfx_library_is_libGint, hfx_library_is_both
+                              hfx_library_is_libint, hfx_library_is_libGint, hfx_library_is_both
 
    USE input_section_types, ONLY: section_vals_type
    USE kinds, ONLY: default_string_length, &
@@ -95,12 +95,12 @@ MODULE hfx_energy_potential
                           qs_ks_env_type
    USE t_c_g0, ONLY: init, C0
    USE util, ONLY: sort
-   use, intrinsic :: iso_c_binding, only : c_ptr
+   use, intrinsic :: iso_c_binding, only: c_ptr
 
    !!!!!!!!!!!!!!!!!!!!!!!
-   use offload_api, only :  offload_get_chosen_device, offload_set_chosen_device, offload_activate_chosen_device
-   use libGint_wrapper, only : cp_libGint_init, libGint_update_env, libGint_set_density, libGint_coulomb4, &
-                               libGint_update_fock_matrix, libGint_get_fock_matrix
+   use offload_api, only: offload_get_chosen_device, offload_set_chosen_device, offload_activate_chosen_device
+   use libGint_wrapper, only: cp_libGint_init, libGint_update_env, libGint_set_density, libGint_coulomb4, &
+                              libGint_update_fock_matrix, libGint_get_fock_matrix
    !!!!!!!!!!!!!!!!!!!!!!!
 
 !$ USE OMP_LIB, ONLY: omp_get_max_threads, omp_get_thread_num, omp_get_num_threads
@@ -219,7 +219,7 @@ CONTAINS
                                                             sphi_c_ext_set, sphi_d_ext_set
       REAL(dp), DIMENSION(:, :, :, :), POINTER           :: sphi_a_ext, sphi_b_ext, sphi_c_ext, &
                                                             sphi_d_ext
-      REAL(dp), DIMENSION(:, :, : ), POINTER             :: gcc
+      REAL(dp), DIMENSION(:, :, :), POINTER             :: gcc
       REAL(KIND=dp)                                      :: coeffs_kind_max0
       TYPE(atomic_kind_type), DIMENSION(:), POINTER      :: atomic_kind_set
       TYPE(cell_type), POINTER                           :: cell
@@ -265,7 +265,6 @@ CONTAINS
       integer :: iatom_set, jatom_set, katom_set, latom_set, shared_dev
 !      integer :: handle_c4g, handle_ufg
       logical :: use_libint, use_libgint, use_only_alpha_spin
-
 
       NULLIFY (dft_control, matrix_ks_aux_fit_hfx)
 
@@ -342,7 +341,6 @@ CONTAINS
       shm_neris_incore = 0
       shm_neris_disk = 0
       shm_stor_count_max_val = 0
-
 
 !$OMP PARALLEL DEFAULT(OMP_DEFAULT_NONE_WITH_OOP) &
 !$OMP SHARED(qs_env,&
@@ -433,8 +431,7 @@ CONTAINS
 !$OMP         i,inla,nla,gcc,first_set_of_atom,max_abs_delta_KS, screened, &
 !$OMP         iatom_set,jatom_set,katom_set,latom_set,use_only_alpha_spin)
 
-! ,handle_c4g,handle_ufg) 
-
+! ,handle_c4g,handle_ufg)
 
       ln_10 = LOG(10.0_dp)
       i_thread = 0
@@ -445,7 +442,6 @@ CONTAINS
       shm_master_x_data => x_data(irep, 1)
 !$OMP END MASTER
 !$OMP BARRIER
-
 
       do_periodic = actual_x_data%periodic_parameter%do_periodic
 
@@ -572,7 +568,6 @@ CONTAINS
             max_pgf = MAX(max_pgf, npgfb(jset))
          END DO
       END DO
-
 
       ! ** Allocate buffers for pgf_lists
       nneighbors = SIZE(actual_x_data%neighbor_cells)
@@ -769,8 +764,6 @@ CONTAINS
          END IF
          CALL timestop(handle_getP)
 
-
-
          !! Calculate the max values of the density matrix actual_pmax stores the data from the actual density matrix
          !! and x_data%initial_p stores the same for the initial guess. The initial guess is updated only in the case of
          !! a changed geometry
@@ -838,7 +831,6 @@ CONTAINS
             full_ks_beta = 0.0_dp
          END IF
       END IF
-
 
 !$OMP END MASTER
 !$OMP BARRIER
@@ -938,22 +930,21 @@ CONTAINS
          shared_dev = offload_get_chosen_device()
          !$omp end master
          !$omp barrier
-         call offload_set_chosen_device( shared_dev )
+         call offload_set_chosen_device(shared_dev)
          call offload_activate_chosen_device()
          ! At least once, and before any other call
-         call cp_libGint_init( actual_x_data ) 
+         call cp_libGint_init(actual_x_data)
          ! At least at geo change
-         call libGint_update_env( fac, memory_parameter, do_periodic, cell, actual_x_data, &
-                                  nneighbors, max_pgf, natom, kind_of, particle_set, basis_parameter )
+         call libGint_update_env(fac, memory_parameter, do_periodic, cell, actual_x_data, &
+                                 nneighbors, max_pgf, natom, kind_of, particle_set, basis_parameter)
          ! Every cycle
-         if ( use_only_alpha_spin ) then
-            call libGint_set_density( full_density_alpha )
+         if (use_only_alpha_spin) then
+            call libGint_set_density(full_density_alpha)
          else
-            call libGint_set_density( full_density_alpha, full_density_beta )
+            call libGint_set_density(full_density_alpha, full_density_beta)
          end if
       end if
       !!!
-
 
       !! Start calculating integrals of the form (ab|cd) or (ij|kl)
       !! In order to do so, there is a main four-loop structure that takes into account the two symmetries
@@ -1509,7 +1500,7 @@ CONTAINS
                      IF (max_val1 + screen_kind_kl + pmax_atom < log10_eps_schwarz) CYCLE
 
                      sphi_a_ext_set => sphi_a_ext(:, :, :, iset)
-                     sphi_b_ext_set => sphi_b_ext(:, :, :, jset)                     
+                     sphi_b_ext_set => sphi_b_ext(:, :, :, jset)
                      DO i_set_list_kl = i_set_list_kl_start, i_set_list_kl_stop
                         kset = set_list_kl(i_set_list_kl)%pair(1)
                         lset = set_list_kl(i_set_list_kl)%pair(2)
@@ -1537,7 +1528,7 @@ CONTAINS
 
                         ! libGint can only run in direct mode at the moment
                         ! so there is no need to check the buffers
-                        if ( use_libGint ) then
+                        if (use_libGint) then
                            tmp_screen_pgf1 => screen_coeffs_pgf(:, :, jset, iset, jkind, ikind)
                            tmp_screen_pgf2 => screen_coeffs_pgf(:, :, lset, kset, lkind, kkind)
 
@@ -1546,7 +1537,7 @@ CONTAINS
 
                            !call timeset(routineN//"_c4g", handle_c4g)
                            call libGint_coulomb4( &
-                              iatom, jatom, katom, latom, iset, jset, kset, lset,&
+                              iatom, jatom, katom, latom, iset, jset, kset, lset, &
                               ra, rb, rc, rd, &
                               npgfa(iset), npgfb(jset), npgfc(kset), npgfd(lset), &
                               potential_parameter, &
@@ -1554,10 +1545,10 @@ CONTAINS
                               screen_coeffs_set(lset, kset, lkind, kkind)%x, &
                               log10_pmax, log10_eps_schwarz, &
                               tmp_screen_pgf1, tmp_screen_pgf2, &
-                              actual_x_data%neighbor_cells, cell, do_periodic, screened )
+                              actual_x_data%neighbor_cells, cell, do_periodic, screened)
                            !call timestop(handle_c4g)
 
-                           if ( .not. screened ) then
+                           if (.not. screened) then
 
                               ! TODO a more modern approach in which the call is more like
                               ! call update_fock_matrix_gpu( HFX_data, iset, jset, kset, lset )
@@ -1573,12 +1564,12 @@ CONTAINS
                                  la_min(iset), la_max(iset), lb_min(jset), lb_max(jset), &
                                  lc_min(kset), lc_max(kset), ld_min(lset), ld_max(lset), &
                                  nsgfl_a, nsgfl_b, nsgfl_c, nsgfl_d)
-                                 !call timestop(handle_ufg)
+                              !call timestop(handle_ufg)
 
                            end if
                         end if
                         ! Run using libint as integral engine
-                        if_use_libint: if ( use_libint ) then
+                        if_use_libint: if (use_libint) then
                            !! store current number of integrals, update total number and number of integrals in buffer
                            current_counter = nsgfa(iset)*nsgfb(jset)*nsgfc(kset)*nsgfd(lset)
                            IF (buffer_overflow) THEN
@@ -1644,33 +1635,32 @@ CONTAINS
                               tmp_screen_pgf1 => screen_coeffs_pgf(:, :, jset, iset, jkind, ikind)
                               tmp_screen_pgf2 => screen_coeffs_pgf(:, :, lset, kset, lkind, kkind)
 
-
                               CALL coulomb4(private_lib, ra, rb, rc, rd, npgfa(iset), npgfb(jset), npgfc(kset), npgfd(lset), &
-                                         la_min(iset), la_max(iset), lb_min(jset), lb_max(jset), &
-                                         lc_min(kset), lc_max(kset), ld_min(lset), ld_max(lset), &
-                                         nsgfa(iset), nsgfb(jset), nsgfc(kset), nsgfd(lset), &
-                                         sphi_a_u1, sphi_a_u2, sphi_a_u3, &
-                                         sphi_b_u1, sphi_b_u2, sphi_b_u3, &
-                                         sphi_c_u1, sphi_c_u2, sphi_c_u3, &
-                                         sphi_d_u1, sphi_d_u2, sphi_d_u3, &
-                                         zeta(1:npgfa(iset), iset), zetb(1:npgfb(jset), jset), &
-                                         zetc(1:npgfc(kset), kset), zetd(1:npgfd(lset), lset), &
-                                         primitive_integrals, &
-                                         potential_parameter, &
-                                         actual_x_data%neighbor_cells, screen_coeffs_set(jset, iset, jkind, ikind)%x, &
-                                         screen_coeffs_set(lset, kset, lkind, kkind)%x, eps_schwarz, &
-                                         max_contraction_val, cartesian_estimate, cell, neris_tmp, &
-                                         log10_pmax, log10_eps_schwarz, &
-                                         tmp_R_1, tmp_R_2, tmp_screen_pgf1, tmp_screen_pgf2, &
-                                         pgf_list_ij, pgf_list_kl, pgf_product_list, &
-                                         nsgfl_a(:, iset), nsgfl_b(:, jset), &
-                                         nsgfl_c(:, kset), nsgfl_d(:, lset), &
-                                         sphi_a_ext_set, &
-                                         sphi_b_ext_set, &
-                                         sphi_c_ext_set, &
-                                         sphi_d_ext_set, &
-                                         ee_work, ee_work2, ee_buffer1, ee_buffer2, ee_primitives_tmp, &
-                                         nimages, do_periodic, p_work)
+                                            la_min(iset), la_max(iset), lb_min(jset), lb_max(jset), &
+                                            lc_min(kset), lc_max(kset), ld_min(lset), ld_max(lset), &
+                                            nsgfa(iset), nsgfb(jset), nsgfc(kset), nsgfd(lset), &
+                                            sphi_a_u1, sphi_a_u2, sphi_a_u3, &
+                                            sphi_b_u1, sphi_b_u2, sphi_b_u3, &
+                                            sphi_c_u1, sphi_c_u2, sphi_c_u3, &
+                                            sphi_d_u1, sphi_d_u2, sphi_d_u3, &
+                                            zeta(1:npgfa(iset), iset), zetb(1:npgfb(jset), jset), &
+                                            zetc(1:npgfc(kset), kset), zetd(1:npgfd(lset), lset), &
+                                            primitive_integrals, &
+                                            potential_parameter, &
+                                            actual_x_data%neighbor_cells, screen_coeffs_set(jset, iset, jkind, ikind)%x, &
+                                            screen_coeffs_set(lset, kset, lkind, kkind)%x, eps_schwarz, &
+                                            max_contraction_val, cartesian_estimate, cell, neris_tmp, &
+                                            log10_pmax, log10_eps_schwarz, &
+                                            tmp_R_1, tmp_R_2, tmp_screen_pgf1, tmp_screen_pgf2, &
+                                            pgf_list_ij, pgf_list_kl, pgf_product_list, &
+                                            nsgfl_a(:, iset), nsgfl_b(:, jset), &
+                                            nsgfl_c(:, kset), nsgfl_d(:, lset), &
+                                            sphi_a_ext_set, &
+                                            sphi_b_ext_set, &
+                                            sphi_c_ext_set, &
+                                            sphi_d_ext_set, &
+                                            ee_work, ee_work2, ee_buffer1, ee_buffer2, ee_primitives_tmp, &
+                                            nimages, do_periodic, p_work)
 
                               nints = nsgfa(iset)*nsgfb(jset)*nsgfc(kset)*nsgfd(lset)
                               neris_total = neris_total + nints
@@ -1734,10 +1724,10 @@ CONTAINS
                                  buffer_start = 1
                                  IF (.NOT. use_disk_storage) THEN
                                     neris_incore = neris_incore + INT(nints, int_8)
-   !                                 neris_incore = neris_incore+nints
+                                    !                                 neris_incore = neris_incore+nints
                                  ELSE
                                     neris_disk = neris_disk + INT(nints, int_8)
-   !                                 neris_disk = neris_disk+nints
+                                    !                                 neris_disk = neris_disk+nints
                                  END IF
                                  DO WHILE (buffer_left > 0)
                                     buffer_size = MIN(buffer_left, CACHE_SIZE)
@@ -1845,56 +1835,56 @@ CONTAINS
       CALL para_env%sync()
 
       ! IF running both libint and libGint, uses the values from libint to check libGint values
-      if ( use_libGint .and. use_libint ) then
-         ! barrier needed after allocate  full_ks_alpha(beta)_from_gpu before libGint get K 
+      if (use_libGint .and. use_libint) then
+         ! barrier needed after allocate  full_ks_alpha(beta)_from_gpu before libGint get K
          ! ? to feed libgint a valid position for full_ks_alpha(beta)_from_gpu ?
-         allocate( full_ks_alpha_from_gpu, Mold = full_ks_alpha )
+         allocate (full_ks_alpha_from_gpu, Mold=full_ks_alpha)
          !$OMP BARRIER
-         if ( use_only_alpha_spin ) then
-            call libGint_get_fock_matrix( full_ks_alpha_from_gpu )
+         if (use_only_alpha_spin) then
+            call libGint_get_fock_matrix(full_ks_alpha_from_gpu)
          else
-            allocate( full_ks_beta_from_gpu, Mold = full_ks_beta )
+            allocate (full_ks_beta_from_gpu, Mold=full_ks_beta)
             !$OMP BARRIER
-            call libGint_get_fock_matrix( full_ks_alpha_from_gpu, full_ks_beta_from_gpu )
+            call libGint_get_fock_matrix(full_ks_alpha_from_gpu, full_ks_beta_from_gpu)
          end if
 
          !$omp single
          max_abs_delta_KS = 0.0_dp
-         do  i=1, size(full_ks_alpha)
-            max_abs_delta_KS = max( max_abs_delta_ks, abs(  full_ks_alpha(i,1) - full_ks_alpha_from_gpu(i,1) ) )
+         do i = 1, size(full_ks_alpha)
+            max_abs_delta_KS = max(max_abs_delta_ks, abs(full_ks_alpha(i, 1) - full_ks_alpha_from_gpu(i, 1)))
          end do
-         write(*,*) " ------------------------------------ "
-         write(*,*) " | rank " , para_env%mepos
-         write(*,*) " |  max abs dif: ", max_abs_delta_KS
-         write(*,*) " ------------------------------------ "
+         write (*, *) " ------------------------------------ "
+         write (*, *) " | rank ", para_env%mepos
+         write (*, *) " |  max abs dif: ", max_abs_delta_KS
+         write (*, *) " ------------------------------------ "
 
          ! Print all F if delta is too large or (suspiciously) too small
-         if ( max_abs_delta_KS > 100*eps_schwarz .or. max_abs_delta_KS < 1.E-20 ) then
-            write (*,*) " K from CPU  |  K from GPU  |  Delta | Ratio " 
-            do  i=1, size(full_ks_alpha)
-               write (*,*) i, full_ks_alpha(i,1) , full_ks_alpha_from_gpu(i,1), &
-                              full_ks_alpha(i,1) - full_ks_alpha_from_gpu(i,1), &
-                              full_ks_alpha(i,1) / full_ks_alpha_from_gpu(i,1)
+         if (max_abs_delta_KS > 100*eps_schwarz .or. max_abs_delta_KS < 1.E-20) then
+            write (*, *) " K from CPU  |  K from GPU  |  Delta | Ratio "
+            do i = 1, size(full_ks_alpha)
+               write (*, *) i, full_ks_alpha(i, 1), full_ks_alpha_from_gpu(i, 1), &
+                  full_ks_alpha(i, 1) - full_ks_alpha_from_gpu(i, 1), &
+                  full_ks_alpha(i, 1)/full_ks_alpha_from_gpu(i, 1)
             end do
          end if
 
-         if ( .not. use_only_alpha_spin ) then
+         if (.not. use_only_alpha_spin) then
             max_abs_delta_KS = 0.0_dp
-            do  i=1, size(full_ks_beta)
-               max_abs_delta_KS = max( max_abs_delta_ks, abs(  full_ks_beta(i,1) - full_ks_beta_from_gpu(i,1) ) )
+            do i = 1, size(full_ks_beta)
+               max_abs_delta_KS = max(max_abs_delta_ks, abs(full_ks_beta(i, 1) - full_ks_beta_from_gpu(i, 1)))
             end do
-            write(*,*) " ------------------------------------ "
-            write(*,*) " | rank " , para_env%mepos
-            write(*,*) " |  max abs dif B: ", max_abs_delta_KS
-            write(*,*) " ------------------------------------ "
+            write (*, *) " ------------------------------------ "
+            write (*, *) " | rank ", para_env%mepos
+            write (*, *) " |  max abs dif B: ", max_abs_delta_KS
+            write (*, *) " ------------------------------------ "
 
             ! Print all F if delta is too large or (suspiciously) too small
-            if ( max_abs_delta_KS > 100*eps_schwarz .or. max_abs_delta_KS < 1.E-18 ) then
-               write (*,*) " BETA K from CPU  |  K from GPU  |  Delta | Ratio " 
-               do  i=1, size(full_ks_beta)
-                  write (*,*) i, full_ks_beta(i,1) , full_ks_beta_from_gpu(i,1), &
-                                 full_ks_beta(i,1) - full_ks_beta_from_gpu(i,1), &
-                                 full_ks_beta(i,1) / full_ks_beta_from_gpu(i,1)
+            if (max_abs_delta_KS > 100*eps_schwarz .or. max_abs_delta_KS < 1.E-18) then
+               write (*, *) " BETA K from CPU  |  K from GPU  |  Delta | Ratio "
+               do i = 1, size(full_ks_beta)
+                  write (*, *) i, full_ks_beta(i, 1), full_ks_beta_from_gpu(i, 1), &
+                     full_ks_beta(i, 1) - full_ks_beta_from_gpu(i, 1), &
+                     full_ks_beta(i, 1)/full_ks_beta_from_gpu(i, 1)
                end do
             end if
          end if
@@ -1902,11 +1892,11 @@ CONTAINS
       end if
 
       ! Copy the KS matrix from device to host.
-      if ( use_libGint .and. .not. use_libint ) then
-         if ( use_only_alpha_spin ) then
-            call libGint_get_fock_matrix( full_ks_alpha )
+      if (use_libGint .and. .not. use_libint) then
+         if (use_only_alpha_spin) then
+            call libGint_get_fock_matrix(full_ks_alpha)
          else
-            call libGint_get_fock_matrix( full_ks_alpha, full_ks_beta )
+            call libGint_get_fock_matrix(full_ks_alpha, full_ks_beta)
          end if
       end if
 
@@ -2341,11 +2331,6 @@ CONTAINS
       CALL timestop(handle)
    END SUBROUTINE integrate_four_center
 
-
-
-
-
-
 ! **************************************************************************************************
 !> \brief calculates two-electron integrals of a quartet/shell using the library
 !>      lib_int in the periodic case
@@ -2486,7 +2471,6 @@ CONTAINS
                  nsob, nsoc, nsod, s_offset_a, s_offset_b, s_offset_c, s_offset_d
       REAL(dp)                                           :: EtaInv, tmp_max, ZetaInv
 
-
       CALL build_pair_list_pgf(npgfa, npgfb, pgf_list_ij, zeta, zetb, screen1, screen2, &
                                pgf1, R1_pgf, log10_pmax, log10_eps_schwarz, ra, rb, &
                                nelements_ij, &
@@ -2495,7 +2479,6 @@ CONTAINS
                                pgf2, R2_pgf, log10_pmax, log10_eps_schwarz, rc, rd, &
                                nelements_kl, &
                                neighbor_cells, nimages, do_periodic)
-
 
       cart_estimate = 0.0_dp
       neris_tmp = 0
