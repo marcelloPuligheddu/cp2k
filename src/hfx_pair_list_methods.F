@@ -50,45 +50,61 @@ MODULE hfx_pair_list_methods
 !***
 
    ! TODO move to hfx types
-   type :: Bra_t
-      real(dp), allocatable, dimension(:,:)    :: pgf_scr
-      integer, allocatable, dimension(:,:)     :: pgf_idx, cell_idx
-      integer :: cell_cnt, pgf_cnt
-   end type Bra_t
+   TYPE :: Bra_t
+      REAL(dp), ALLOCATABLE, DIMENSION(:, :)    :: pgf_scr
+      INTEGER, ALLOCATABLE, DIMENSION(:, :)     :: pgf_idx, cell_idx
+      INTEGER :: cell_cnt, pgf_cnt
+   END TYPE Bra_t
 
 CONTAINS
- 
+
    ! TODO move to hfx types
-   subroutine allocate_Bra( bra, max_npgf, max_ncell )
-      TYPE(bra_t) :: bra
-      integer :: max_npgf, max_ncell
-      allocate( bra%pgf_idx( 3, max_npgf*max_npgf*max_ncell ))
-      allocate( bra%pgf_scr( 5, max_npgf*max_npgf*max_ncell ))
-      allocate( bra%cell_idx( 3, max_ncell ))
-   end subroutine allocate_Bra
+   SUBROUTINE allocate_Bra(bra, max_npgf, max_ncell)
+      TYPE(bra_t)                                        :: bra
+      INTEGER                                            :: max_npgf, max_ncell
 
+      ALLOCATE (bra%pgf_idx(3, max_npgf*max_npgf*max_ncell))
+      ALLOCATE (bra%pgf_scr(5, max_npgf*max_npgf*max_ncell))
+      ALLOCATE (bra%cell_idx(3, max_ncell))
+   END SUBROUTINE allocate_Bra
 
+! **************************************************************************************************
+!> \brief ...
+!> \param npgfa ...
+!> \param npgfb ...
+!> \param bra ...
+!> \param screen1 ...
+!> \param screen2 ...
+!> \param pgf ...
+!> \param log10_pmax ...
+!> \param log10_eps_schwarz ...
+!> \param ra ...
+!> \param rb ...
+!> \param nelements ...
+!> \param neighbor_cells ...
+!> \param do_periodic ...
+! **************************************************************************************************
    SUBROUTINE build_pair_list_pbc_pgf(npgfa, npgfb, bra, screen1, screen2, pgf, &
-                                log10_pmax, log10_eps_schwarz, ra, rb, nelements, &
-                                neighbor_cells, do_periodic)
+                                      log10_pmax, log10_eps_schwarz, ra, rb, nelements, &
+                                      neighbor_cells, do_periodic)
 
       INTEGER, INTENT(IN)                                :: npgfa, npgfb
       TYPE(bra_t)                                        :: bra
-
-
       REAL(dp), INTENT(IN)                               :: screen1(2), screen2(2)
-      TYPE(hfx_screen_coeff_type), DIMENSION(:,:), POINTER :: pgf
+      TYPE(hfx_screen_coeff_type), DIMENSION(:, :), &
+         POINTER                                         :: pgf
       REAL(dp), INTENT(IN)                               :: log10_pmax, log10_eps_schwarz, ra(3), &
                                                             rb(3)
       INTEGER, INTENT(OUT)                               :: nelements
       TYPE(hfx_cell_type), DIMENSION(:), POINTER         :: neighbor_cells
       LOGICAL, INTENT(IN)                                :: do_periodic
 
-      INTEGER                                            :: ipgf, jpgf
-      REAL(dp)                                           :: AB(3), im_B(3), pgf_max, rab2! , &
-                                                            ! Zeta1, Zeta_A, Zeta_B, ZetaInvi , P(3), R
-      integer :: element_idx, element_off, element_cnt, cell_idx, cell_cnt 
+      INTEGER                                            :: cell_cnt, cell_idx, element_cnt, &
+                                                            element_idx, element_off, ipgf, jpgf
+      REAL(dp)                                           :: AB(3), im_B(3), pgf_max, rab2
 
+! , &
+! Zeta1, Zeta_A, Zeta_B, ZetaInvi , P(3), R
 
       element_idx = 0
       element_off = 0
@@ -114,10 +130,10 @@ CONTAINS
                ! Second screening on this actual AB pair and the most diffuse CD from before
                pgf_max = pgf(jpgf, ipgf)%x(1)*rab2 + pgf(jpgf, ipgf)%x(2)
                IF (pgf_max + screen2(2) + log10_pmax < log10_eps_schwarz) CYCLE
-               ! This pair passed screening. Add it to the bra. 
+               ! This pair passed screening. Add it to the bra.
                ! cell idx is not necessary, but convenient
                element_idx = element_idx + 1
-               bra%pgf_idx(:,element_idx) = (/ ipgf, jpgf, cell_idx /)
+               bra%pgf_idx(:, element_idx) = (/ipgf, jpgf, cell_idx/)
 
 !               R = MAX(0.0_dp, R_pgf(jpgf, ipgf)%x(1)*rab2 + R_pgf(jpgf, ipgf)%x(2))
 !               Zeta_A = zeta(ipgf)
@@ -127,29 +143,27 @@ CONTAINS
 !               P = (Zeta_A*ra + Zeta_B*im_B)*ZetaInv
 !               bra%pgf_scr(:,element_idx) = (/ pgf_max, R, P(1), P(2), P(3) /)
 
-               bra%pgf_scr(1,element_idx) = pgf_max
+               bra%pgf_scr(1, element_idx) = pgf_max
                element_cnt = element_cnt + 1
-            end do
-         end do
+            END DO
+         END DO
 
          ! If this cell produced any pair, add this cell to the bra
-         if ( element_cnt == 0 ) cycle
+         IF (element_cnt == 0) CYCLE
          cell_cnt = cell_cnt + 1
-         bra%cell_idx(:,cell_cnt) = (/ cell_idx, element_cnt, element_off /)
+         bra%cell_idx(:, cell_cnt) = (/cell_idx, element_cnt, element_off/)
          element_off = element_off + element_cnt
 
-      end do ! cell
+      END DO ! cell
       bra%cell_cnt = cell_cnt
       nelements = element_idx
-      bra%pgf_cnt  = nelements
-
+      bra%pgf_cnt = nelements
 
 !      write(*,*) ' BRA/KET contains ', bra%pgf_cnt, " pgf pairs in ", bra%cell_cnt, " cells split as"
 !      write(*,*) bra%cell_idx(:,1:bra%cell_cnt)
 !      write(*,*) ' #### pgf are ###'
 !      write(*,*) bra%pgf_idx(:,1:bra%pgf_cnt)
 !      write(*,*) ' --------------------------'
-
 
    END SUBROUTINE build_pair_list_pbc_pgf
 
@@ -399,8 +413,6 @@ CONTAINS
 
                tmp = (Pi*ZetapEtaInv)**3
                factor = factor*S1234*SQRT(tmp)
-
-
 
                DO l = 1, m_max + 1
 !                  write (*,*) " Fm[",l,"] = " , product_list(nproducts)%Fm(l), " * " , factor

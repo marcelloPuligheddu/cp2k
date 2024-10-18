@@ -1898,7 +1898,7 @@ CONTAINS
       primitives_tmp = 0.0_dp
 
 !      write (*,*) " Primitives before contract: ", work2
-      
+
       CALL contract(ncoa, ncob, ncoc, ncod, nsoa, nsob, nsoc, nsod, &
                     n_a, n_b, n_c, n_d, nl_a, nl_b, nl_c, nl_d, work2, &
                     sphi_a, &

@@ -118,7 +118,6 @@ CONTAINS
 
       INTEGER                                            :: handle, nkind
 
-
       CALL timeset(routineN, handle)
 
       ! Get the RI basis set and store in to a nice form

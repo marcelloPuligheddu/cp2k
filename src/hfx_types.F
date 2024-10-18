@@ -276,7 +276,7 @@ MODULE hfx_types
       INTEGER, DIMENSION(:), POINTER           :: nshell => NULL()
       REAL(dp), DIMENSION(:, :, :, :), POINTER &
          :: sphi_ext => NULL()
-      REAL(dp), DIMENSION(:, :, : ), POINTER   :: gcc => NULL()
+      REAL(dp), DIMENSION(:, :, :), POINTER   :: gcc => NULL()
       REAL(dp), DIMENSION(:), POINTER          :: set_radius => NULL()
       REAL(dp), DIMENSION(:, :), POINTER        :: pgf_radius => NULL()
       REAL(dp)                                 :: kind_radius = 0.0_dp

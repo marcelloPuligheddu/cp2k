@@ -834,7 +834,6 @@ MODULE input_constants
                                                hfx_library_is_libGint = 2, &
                                                hfx_library_is_both = 12
 
-
    ! mode selctive vibrational analysis
    INTEGER, PARAMETER, PUBLIC               :: ms_guess_bfgs = 1, &
                                                ms_guess_atomic = 2, &
