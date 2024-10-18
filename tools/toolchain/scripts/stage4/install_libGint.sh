@@ -25,30 +25,30 @@ case "$with_libGint" in
     pkg_install_dir="${INSTALLDIR}/libGint-${libGint_ver}"
     install_lock_file="$pkg_install_dir/install_successful"
 
-#    if verify_checksums "${install_lock_file}"; then
-#      echo "libGint-${libGint_ver} is already installed, skipping it."
-#    else
-#      if [ -f libGint-${libGint_ver}.tar.gz ]; then
-#        echo "libGint-${libGint_ver}.tar.gz is found"
-#      else
-#        download_pkg_from_cp2k_org "${spglib_sha256}" "spglib-${spglib_ver}.tar.gz"
-#      fi
-#      echo "Installing from scratch into ${pkg_install_dir}"
-#      rm -rf spglib-${spglib_ver} "${pkg_install_dir}"
-#      tar -xzf spglib-${spglib_ver}.tar.gz
-#     OR
+    #    if verify_checksums "${install_lock_file}"; then
+    #      echo "libGint-${libGint_ver} is already installed, skipping it."
+    #    else
+    #      if [ -f libGint-${libGint_ver}.tar.gz ]; then
+    #        echo "libGint-${libGint_ver}.tar.gz is found"
+    #      else
+    #        download_pkg_from_cp2k_org "${spglib_sha256}" "spglib-${spglib_ver}.tar.gz"
+    #      fi
+    #      echo "Installing from scratch into ${pkg_install_dir}"
+    #      rm -rf spglib-${spglib_ver} "${pkg_install_dir}"
+    #      tar -xzf spglib-${spglib_ver}.tar.gz
+    #     OR
 
-      rm -rf libGint-${libGint_ver}
-#      cp -r /work4/scd/scarf1152/libGint libGint-${libGint_ver}
-#     OR
+    rm -rf libGint-${libGint_ver}
+    #      cp -r /work4/scd/scarf1152/libGint libGint-${libGint_ver}
+    #     OR
 
-      git clone --depth=1 https://github.com/marcelloPuligheddu/libGint.git libGint-${libGint_ver}
-      cd libGint-${libGint_ver}
+    git clone --depth=1 https://github.com/marcelloPuligheddu/libGint.git libGint-${libGint_ver}
+    cd libGint-${libGint_ver}
 
-      make -j $(get_nprocs) > make.log 2>&1 || tail -n ${LOG_LINES} make.log
-      make install PREFIX="${pkg_install_dir}" > install.log 2>&1 || tail -n ${LOG_LINES} install.log
-      write_checksums "${install_lock_file}" "${SCRIPT_DIR}/stage4/$(basename ${SCRIPT_NAME})"
-#    fi
+    make -j $(get_nprocs) > make.log 2>&1 || tail -n ${LOG_LINES} make.log
+    make install PREFIX="${pkg_install_dir}" > install.log 2>&1 || tail -n ${LOG_LINES} install.log
+    write_checksums "${install_lock_file}" "${SCRIPT_DIR}/stage4/$(basename ${SCRIPT_NAME})"
+    #    fi
 
     LIBGINT_CFLAGS="-I${pkg_install_dir}/include"
     LIBGINT_LDFLAGS="-L'${pkg_install_dir}/lib' -Wl,-rpath,'${pkg_install_dir}/lib'"
@@ -62,13 +62,13 @@ case "$with_libGint" in
     echo "==================== Finding libGint from system paths ===================="
     echo "choose install next time. Or path. "
     exit 1
-#    check_command pkg-config --modversion libGint
-#    add_include_from_paths LIBGINT_CFLAGS "include/libGint.mod" $INCLUDE_PATHS
-#    add_lib_from_paths SPGLIB_LDFLAGS "libspglib.*" $LIB_PATHS
+    #    check_command pkg-config --modversion libGint
+    #    add_include_from_paths LIBGINT_CFLAGS "include/libGint.mod" $INCLUDE_PATHS
+    #    add_lib_from_paths SPGLIB_LDFLAGS "libspglib.*" $LIB_PATHS
     ;;
 
   __DONTUSE__) ;;
-# pass
+    # pass
 
   *)
     echo "==================== Linking libGint to user paths ===================="

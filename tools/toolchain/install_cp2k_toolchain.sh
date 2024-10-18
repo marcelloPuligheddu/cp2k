@@ -843,7 +843,6 @@ if [ "${with_libGint}" != "__DONTUSE__" ] && [ ${enable_cuda} != "__TRUE__" ]; t
   exit 1
 fi
 
-
 # several packages require cmake.
 if [ "${with_spglib}" = "__INSTALL__" ] ||
   [ "${with_libvori}" = "__INSTALL__" ] ||

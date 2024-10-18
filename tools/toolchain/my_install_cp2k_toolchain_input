@@ -1,19 +1,20 @@
-./install_cp2k_toolchain.sh -j 16 \
-	--enable-cuda --gpu-ver=V100\
-        --with-libGint=install \
-	--with-cmake=system \
-	--with-ninja=system \
-	--with-openblas=system\
-	--with-scalapack=system\
-	--with-fftw=system \
-	--with-elpa=no \
-	--with-sirius=no \
-	--with-libvdwxc=no \
-	--with-hdf5=no \
-	--with-spfft=no \
-	--with-spla=no \
-	--with-cosma=no \
-	--with-libvori=no \
-	--with-dftd4=no \
+./install_cp2k_toolchain.sh -j 16 \        
+ --enable-cuda --gpu-ver=V100\
+ --with-libGint=install \
+ --with-cmake=system \
+ --with-ninja=system \
+ --with-openblas=system\
+ --with-scalapack=system\
+ --with-fftw=system \
+ --with-elpa=no \
+ --with-sirius=no \
+ --with-libvdwxc=no \
+ --with-hdf5=no \
+ --with-spfft=no \
+ --with-spla=no \
+ --with-cosma=no \
+ --with-libvori=no \
+ --with-dftd4=no \
+ --with-pugixml=no \
 #
-#         --with-libGint=/work4/scd/scarf1152/cp2k/cp2k/exts/libGint \
+# --with-libGint=/work4/scd/scarf1152/cp2k/cp2k/exts/libGint \
