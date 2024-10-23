@@ -89,7 +89,7 @@ CONTAINS
          description="Which library should be used in the calculation of the HF exchange "// &
          "(Libint (cpu, default), libGint(gpu, cuda), both(debug,temporary)", &
          usage="HFX_LIBRARY libGint", &
-         enum_c_vals=s2a("libint", "libGint, both"), &
+         enum_c_vals=s2a("libint", "libGint", "both"), &
          enum_i_vals=(/hfx_library_is_libint, hfx_library_is_libGint, hfx_library_is_both/), &
          enum_desc=s2a("libint: use the libint library to compute the 2 electron integrals for HFX/r", &
                        "libGint: use the libGint library to accelerate the calculation of the HF "// &
