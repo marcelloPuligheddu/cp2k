@@ -38,9 +38,11 @@ MODULE libGint_wrapper
    IMPLICIT NONE
    PRIVATE
    INTEGER, ALLOCATABLE, DIMENSION(:) :: first_set_of_atom
-   TYPE(bra_t) :: bra, ket
+   TYPE(bra_t), target :: bra, ket
    LOGICAL, SAVE :: first_call = .TRUE.
    TYPE(c_ptr), SAVE :: libGint_handle
+   !$OMP THREADPRIVATE( first_set_of_atom )
+   !$OMP THREADPRIVATE( bra,ket )
    !$OMP THREADPRIVATE( libGint_handle )
 
    PUBLIC :: cp_libGint_init, libGint_update_env, libGint_set_density, libGint_coulomb4, &
@@ -115,6 +117,7 @@ CONTAINS
       REAL(dp) :: ra(3)
       REAL(dp), DIMENSION(:, :), POINTER :: zeta
       REAL(dp), DIMENSION(:, :, :), POINTER :: gcc
+      TYPE(bra_t), pointer                               :: bra_p, ket_p
 
       ! Set the multiplicative factor fac (the fraction of exact exchange times the spin factor) for libGint
       CALL libGint_set_hf_fac(libGint_handle, fac)
@@ -128,12 +131,16 @@ CONTAINS
       END DO
       CALL libgint_set_cell(libGint_handle, do_pbc, cell%hmat, cell%h_inv)
       CALL libgint_set_neighs(libGint_handle, cell_r, nneighbors)
+
       ! CPU side temporary arrays for info about the <AB(g) and CD(n)> pairs
-      CALL allocate_bra(bra, max_pgf, nneighbors)
-      CALL allocate_bra(ket, max_pgf, nneighbors)
+      bra_p => bra
+      ket_p => ket
+      CALL allocate_bra(bra_p, max_pgf, nneighbors)
+      CALL allocate_bra(ket_p, max_pgf, nneighbors)
 
       ! Comunicate atomset and atom info to the engine
       jset = 1
+      if ( allocated(first_set_of_atom) ) deallocate(first_set_of_atom)
       ALLOCATE (first_set_of_atom(natom))
       DO iatom = 1, natom
          ikind = kind_of(iatom)
@@ -247,17 +254,17 @@ CONTAINS
       LOGICAL, INTENT(out) :: screened
 
 #if(__LIBGINT)
-      TYPE(bra_t)                                        :: bra, ket
+      TYPE(bra_t), pointer                               :: bra_p, ket_p
       LOGICAL :: cell_was_screened
-
       INTEGER  :: idx_n1, idx_n2, n1, n2, idx_ij, idx_kl, o_ij, n_ij, o_kl, n_kl !, n3
       INTEGER  :: ipgf, jpgf, kpgf, lpgf, iatom_set, jatom_set, katom_set, latom_set
       REAL(dp) :: pgf_max_1, pgf_max_2 ! , R1, R2, rpq2
-
       INTEGER :: nelements_ij, nelements_kl
 
       cell = cell
       potential_parameter = potential_parameter
+      bra_p => bra
+      ket_p => ket
 
       screened = .TRUE.
       iatom_set = first_set_of_atom(iatom) + iset - 2
@@ -265,11 +272,11 @@ CONTAINS
       katom_set = first_set_of_atom(katom) + kset - 2
       latom_set = first_set_of_atom(latom) + lset - 2
 
-      CALL build_pair_list_pbc_pgf(npgfa, npgfb, bra, screen1, screen2, &
+      CALL build_pair_list_pbc_pgf(npgfa, npgfb, bra_p, screen1, screen2, &
                                    pgf1, log10_pmax, log10_eps_schwarz, ra, rb, &
                                    nelements_ij, neighbor_cells, do_periodic)
 
-      CALL build_pair_list_pbc_pgf(npgfc, npgfd, ket, screen2, screen1, &
+      CALL build_pair_list_pbc_pgf(npgfc, npgfd, ket_p, screen2, screen1, &
                                    pgf2, log10_pmax, log10_eps_schwarz, rc, rd, &
                                    nelements_kl, neighbor_cells, do_periodic)
 

@@ -60,12 +60,15 @@ CONTAINS
 
    ! TODO move to hfx types
    SUBROUTINE allocate_Bra(bra, max_npgf, max_ncell)
-      TYPE(bra_t)                                        :: bra
+      TYPE(bra_t), pointer                               :: bra
       INTEGER                                            :: max_npgf, max_ncell
-
-      ALLOCATE (bra%pgf_idx(3, max_npgf*max_npgf*max_ncell))
-      ALLOCATE (bra%pgf_scr(5, max_npgf*max_npgf*max_ncell))
+      if ( allocated(bra%pgf_idx)  ) deallocate(bra%pgf_idx)  ! TODO add if n_prm changed
+      if ( allocated(bra%pgf_scr)  ) deallocate(bra%pgf_scr)  ! TODO add if n_prm changed
+      if ( allocated(bra%cell_idx) ) deallocate(bra%cell_idx) ! TODO add if n_prm changed
+      ALLOCATE (bra%pgf_idx( 3, max_npgf*max_npgf*max_ncell))
+      ALLOCATE (bra%pgf_scr( 5, max_npgf*max_npgf*max_ncell))
       ALLOCATE (bra%cell_idx(3, max_ncell))
+      write(*,*) "Allocated bra as ", shape(bra%pgf_idx)
    END SUBROUTINE allocate_Bra
 
 ! **************************************************************************************************
@@ -89,7 +92,7 @@ CONTAINS
                                       neighbor_cells, do_periodic)
 
       INTEGER, INTENT(IN)                                :: npgfa, npgfb
-      TYPE(bra_t)                                        :: bra
+      TYPE(bra_t), pointer                               :: bra
       REAL(dp), INTENT(IN)                               :: screen1(2), screen2(2)
       TYPE(hfx_screen_coeff_type), DIMENSION(:, :), &
          POINTER                                         :: pgf
@@ -133,6 +136,8 @@ CONTAINS
                ! This pair passed screening. Add it to the bra.
                ! cell idx is not necessary, but convenient
                element_idx = element_idx + 1
+!               write(*,*) "Bra has size ", shape(bra%pgf_idx)
+!               write(*,*) "requesting ", element_idx
                bra%pgf_idx(:, element_idx) = (/ipgf, jpgf, cell_idx/)
 
 !               R = MAX(0.0_dp, R_pgf(jpgf, ipgf)%x(1)*rab2 + R_pgf(jpgf, ipgf)%x(2))

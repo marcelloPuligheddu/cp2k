@@ -1,5 +1,6 @@
-./install_cp2k_toolchain.sh -j 16 \        
+./install_cp2k_toolchain.sh -j 16 \
  --enable-cuda --gpu-ver=V100\
+ --libint-lmax=4 \
  --with-libGint=install \
  --with-cmake=system \
  --with-ninja=system \
