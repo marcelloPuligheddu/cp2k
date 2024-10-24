@@ -1848,6 +1848,7 @@ CONTAINS
             call libGint_get_fock_matrix(full_ks_alpha_from_gpu, full_ks_beta_from_gpu)
          end if
 
+         !$OMP BARRIER
          !$omp single
          max_abs_delta_KS = 0.0_dp
          do i = 1, size(full_ks_alpha)

@@ -41,7 +41,7 @@ MODULE libGint_wrapper
    TYPE(bra_t), target :: bra, ket
    LOGICAL, SAVE :: first_call = .TRUE.
    TYPE(c_ptr), SAVE :: libGint_handle
-   !$OMP THREADPRIVATE( first_set_of_atom )
+   !$OMP THREADPRIVATE( first_set_of_atom, first_call )
    !$OMP THREADPRIVATE( bra,ket )
    !$OMP THREADPRIVATE( libGint_handle )
 
@@ -67,7 +67,7 @@ CONTAINS
       implicit none
       TYPE(hfx_type), POINTER :: actual_x_data
 #if(__LIBGINT)
-      IF (first_call) THEN
+!      IF (first_call) THEN
          ! Init the offload library, creates an handle unique to this omp thread
          CALL libgint_init(libGint_handle)
          ! Comunicate the chosen potential and its parameters to libGint
@@ -86,7 +86,7 @@ CONTAINS
          CPASSERT(.FALSE.) ! not (yet) implemented
          END SELECT libGint_select_potential
          first_call = .FALSE.
-      END IF
+!      END IF
 #else
       MARK_USED(actual_x_data)
       CPABORT("This CP2K executable has not been linked against the required library libGint.")
@@ -120,6 +120,7 @@ CONTAINS
       TYPE(bra_t), pointer                               :: bra_p, ket_p
 
       ! Set the multiplicative factor fac (the fraction of exact exchange times the spin factor) for libGint
+      write (*,*) "Set hf fac @", "as", fac
       CALL libGint_set_hf_fac(libGint_handle, fac)
       !
       CALL libGint_set_max_mem(libGint_handle, memory_parameter%max_memory)
