@@ -98,6 +98,7 @@ MODULE hfx_energy_potential
    use, intrinsic :: iso_c_binding, only: c_ptr
 
    !!!!!!!!!!!!!!!!!!!!!!!
+   use cp2k_info, only : cp2k_flags
    use offload_api, only: offload_get_chosen_device, offload_set_chosen_device, offload_activate_chosen_device
    use libGint_wrapper, only: cp_libGint_init, libGint_update_env, libGint_set_density, libGint_coulomb4, &
                               libGint_update_fock_matrix, libGint_get_fock_matrix
@@ -265,6 +266,8 @@ CONTAINS
       integer :: iatom_set, jatom_set, katom_set, latom_set, shared_dev
 !      integer :: handle_c4g, handle_ufg
       logical :: use_libint, use_libgint, use_only_alpha_spin
+      logical :: cp2k_was_compiled_with_cuda_offload, cp2k_was_compiled_with_libint
+      logical :: cp2k_was_compiled_with_libGint
 
       NULLIFY (dft_control, matrix_ks_aux_fit_hfx)
 
@@ -397,7 +400,10 @@ CONTAINS
 !$OMP                                  shm_atomic_pair_list,&
 !$OMP                                  shm_mem_compression_counter,&
 !$OMP                                  shared_dev, &
-!$OMP                                  do_print_load_balance_info,use_libgint,use_libint) &
+!$OMP                                  do_print_load_balance_info,use_libgint,use_libint, &
+!$OMP                                  cp2k_was_compiled_with_cuda_offload, &
+!$OMP                                  cp2k_was_compiled_with_libint, &
+!$OMP                                  cp2k_was_compiled_with_libGint) &
 !$OMP PRIVATE(ln_10,i_thread,actual_x_data,do_periodic,screening_parameter,potential_parameter,&
 !$OMP         general_parameter,load_balance_parameter,memory_parameter,cache_size,bits_max_val,&
 !$OMP         basis_parameter,basis_info,treat_lsd_in_core,ncpu,n_processes,neris_total,neris_incore,&
@@ -430,8 +436,6 @@ CONTAINS
 !$OMP         etmp,nkimages,img,bin,eps_scaling_str,eps_schwarz_min_str, &
 !$OMP         i,inla,nla,gcc,first_set_of_atom,max_abs_delta_KS, screened, &
 !$OMP         iatom_set,jatom_set,katom_set,latom_set,use_only_alpha_spin)
-
-! ,handle_c4g,handle_ufg)
 
       ln_10 = LOG(10.0_dp)
       i_thread = 0
@@ -483,6 +487,36 @@ CONTAINS
       nprim_ints = 0_int_8
       neris_tmp = 0_int_8
       max_val_memory = 1_int_8
+
+!$OMP MASTER
+      IF (para_env%is_source() .and. my_geo_change ) THEN
+         cp2k_was_compiled_with_cuda_offload = ( index( cp2k_flags(), "offload_cuda") .ne. 0 )
+         cp2k_was_compiled_with_libint       = ( index( cp2k_flags(), "libint") .ne. 0 )
+         cp2k_was_compiled_with_libgint      = ( index( cp2k_flags(), "libGint") .ne. 0 )
+         if ( general_parameter%hfx_library == hfx_library_is_libint .and. &
+              cp2k_was_compiled_with_cuda_offload .and.                    &
+              cp2k_was_compiled_with_libgint                       ) then
+            WRITE(iw,*) " HFX | You are computing the HFX on CPU on cp2k compiled with cuda support"
+            WRITE(iw,*) " HFX | Consider switching to HFX on GPU using the command"
+            WRITE(iw,*) " HFX | 'HFX_LIBRARY libGint' in the HF section of the input file"
+         end if
+      end if
+!$OMP END MASTER
+!$OMP BARRIER
+
+      if (general_parameter%hfx_library == hfx_library_is_libint) then
+         use_libint = .true.
+         use_libGint = .false.
+      end if
+      if (general_parameter%hfx_library == hfx_library_is_libGint) then
+         use_libint = .false.
+         use_libGint = .true.
+      end if
+      if (general_parameter%hfx_library == hfx_library_is_both) then
+         use_libint = .true.
+         use_libGint = .true.
+      end if
+
 
       max_am = basis_info%max_am
 
@@ -900,19 +934,6 @@ CONTAINS
       CALL timestop(handle_load)
 !$OMP END MASTER
 !$OMP BARRIER
-
-      if (general_parameter%hfx_library == hfx_library_is_libint) then
-         use_libint = .true.
-         use_libGint = .false.
-      end if
-      if (general_parameter%hfx_library == hfx_library_is_libGint) then
-         use_libint = .false.
-         use_libGint = .true.
-      end if
-      if (general_parameter%hfx_library == hfx_library_is_both) then
-         use_libint = .true.
-         use_libGint = .true.
-      end if
 
       !!!
       ! use_alpha_beta_spin = (.not. treat_lsd_in_core) .and. nspins == 2
