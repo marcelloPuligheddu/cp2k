@@ -68,7 +68,6 @@ CONTAINS
       ALLOCATE (bra%pgf_idx( 3, max_npgf*max_npgf*max_ncell))
       ALLOCATE (bra%pgf_scr( 5, max_npgf*max_npgf*max_ncell))
       ALLOCATE (bra%cell_idx(3, max_ncell))
-      write(*,*) "Allocated bra as ", shape(bra%pgf_idx)
    END SUBROUTINE allocate_Bra
 
 ! **************************************************************************************************

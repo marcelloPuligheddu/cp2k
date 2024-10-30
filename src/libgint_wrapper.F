@@ -120,7 +120,6 @@ CONTAINS
       TYPE(bra_t), pointer                               :: bra_p, ket_p
 
       ! Set the multiplicative factor fac (the fraction of exact exchange times the spin factor) for libGint
-      write (*,*) "Set hf fac @", "as", fac
       CALL libGint_set_hf_fac(libGint_handle, fac)
       !
       CALL libGint_set_max_mem(libGint_handle, memory_parameter%max_memory)
