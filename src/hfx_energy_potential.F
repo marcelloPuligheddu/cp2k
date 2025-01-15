@@ -1853,8 +1853,6 @@ CONTAINS
       END DO !bin
 
       !!!
-      CALL para_env%sync()
-
       ! IF running both libint and libGint, uses the values from libint to check libGint values
       if (use_libGint .and. use_libint) then
          ! barrier needed after allocate  full_ks_alpha(beta)_from_gpu before libGint get K
