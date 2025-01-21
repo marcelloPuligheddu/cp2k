@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2025 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -878,7 +878,7 @@ CONTAINS
             pao%need_initial_scf = .FALSE.
             pao%preopt_dm_file = "" ! load only for first MD step
          ELSE
-            CALL ls_scf_qs_atomic_guess(qs_env, ls_scf_env%energy_init)
+            CALL ls_scf_qs_atomic_guess(qs_env, ls_scf_env, ls_scf_env%energy_init)
             IF (pao%iw > 0) WRITE (pao%iw, '(A,F20.9)') &
                " PAO| Energy from initial atomic guess:", ls_scf_env%energy_init
             pao%need_initial_scf = .TRUE.

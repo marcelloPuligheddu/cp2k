@@ -1,6 +1,6 @@
 #!-------------------------------------------------------------------------------------------------!
 #!   CP2K: A general program to perform molecular dynamics simulations                             !
-#!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                  !
+#!   Copyright 2000-2025 CP2K developers group <https://cp2k.org>                                  !
 #!                                                                                                 !
 #!   SPDX-License-Identifier: GPL-2.0-or-later                                                     !
 #!-------------------------------------------------------------------------------------------------!
@@ -60,7 +60,7 @@ if(NOT TARGET cp2k::cp2k)
   endif()
 
   if(@CP2K_USE_LIBXC@)
-    find_dependency(LibXC 6 REQUIRED EXACT)
+    find_dependency(LibXC 7 REQUIRED)
   endif()
 
   if(@CP2K_USE_COSMA@)

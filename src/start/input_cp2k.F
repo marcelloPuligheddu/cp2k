@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2025 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -250,7 +250,7 @@ CONTAINS
       CALL section_release(print_key)
 
       CALL cp_print_key_section_create(print_key, __LOCATION__, "PROGRAM_RUN_INFO", &
-                                       description="controls the printing of tests output", &
+                                       description="Controls the printing of the test output", &
                                        print_level=silent_print_level, add_last=add_last_numeric, filename="__STD_OUT__")
       CALL section_add_subsection(section, print_key)
       CALL section_release(print_key)
@@ -791,7 +791,7 @@ CONTAINS
       CALL section_release(sub_section)
 
       CALL cp_print_key_section_create(print_key, __LOCATION__, "PROGRAM_RUN_INFO", &
-                                       description="controls the printing of FARMING specific output", &
+                                       description="Controls the printing of FARMING specific output", &
                                        print_level=low_print_level, add_last=add_last_numeric, filename="__STD_OUT__")
       CALL section_add_subsection(section, print_key)
       CALL section_release(print_key)

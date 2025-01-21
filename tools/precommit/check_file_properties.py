@@ -26,7 +26,8 @@ FLAG_EXCEPTIONS = (
     r"CUDA_VERSION",
     r"DBM_LIBXSMM_PREFETCH",
     r"DBM_VALIDATE_AGAINST_DBCSR",
-    r"OPENCL_DBM_SOURCE_MULTIPLY",
+    r"OPENMP_TRACE_SYMBOL",
+    r"OPENCL_DBM_..*",
     r"FD_DEBUG",
     r"GRID_DO_COLLOCATE",
     r"INTEL_MKL_VERSION",
@@ -68,6 +69,7 @@ FLAG_EXCEPTIONS = (
     r"LIBXSMM_VERSION4",
     r"__LIBXSMM2",
     r"CPVERSION",
+    r"_WIN32",
 )
 
 FLAG_EXCEPTIONS_RE = re.compile(r"|".join(FLAG_EXCEPTIONS))
@@ -113,7 +115,7 @@ BANNER_C = """\
 
 C_EXTENSIONS = (".c", ".cu", ".cpp", ".cc", ".h", ".hpp")
 
-BSD_DIRECTORIES = ("src/offload/", "src/grid/", "src/dbm/")
+BSD_PATHS = ("src/offload/", "src/grid/", "src/dbm/", "src/base/openmp_trace.c")
 
 
 @lru_cache(maxsize=None)
@@ -132,8 +134,9 @@ def get_flags_src() -> str:
 @lru_cache(maxsize=None)
 def get_bibliography_dois() -> List[str]:
     bib = CP2K_DIR.joinpath("src/common/bibliography.F").read_text(encoding="utf8")
-    matches = re.findall(r'DOI="([^"]+)"', bib, flags=re.IGNORECASE)
-    return [doi for doi in matches if "/" in doi]  # filter invalid DOIs.
+    matches = re.findall(r'doi="([^"]+)"', bib, flags=re.IGNORECASE)
+    assert len(matches) > 260 and "10.1016/j.cpc.2004.12.014" in matches
+    return matches
 
 
 def check_file(path: pathlib.Path) -> List[str]:
@@ -187,7 +190,7 @@ def check_file(path: pathlib.Path) -> List[str]:
 
     # check banner
     year = datetime.now(timezone.utc).year
-    bsd_licensed = any(str(path).startswith(d) for d in BSD_DIRECTORIES)
+    bsd_licensed = any(str(path).startswith(p) for p in BSD_PATHS)
     spdx = "BSD-3-Clause    " if bsd_licensed else "GPL-2.0-or-later"
     if fn_ext == ".F" and not content.startswith(BANNER_F.format(year, spdx)):
         warnings += [f"{path}: Copyright banner malformed"]

@@ -1,6 +1,6 @@
 /*----------------------------------------------------------------------------*/
 /*  CP2K: A general program to perform molecular dynamics simulations         */
-/*  Copyright 2000-2024 CP2K developers group <https://cp2k.org>              */
+/*  Copyright 2000-2025 CP2K developers group <https://cp2k.org>              */
 /*                                                                            */
 /*  SPDX-License-Identifier: BSD-3-Clause                                     */
 /*----------------------------------------------------------------------------*/
@@ -54,12 +54,14 @@ static inline void dbm_dgemm(const char transa, const char transb, const int m,
  *        http://szudzik.com/ElegantPairing.pdf
  * \author Ole Schuett
  ******************************************************************************/
+#if defined(__LIBXSMM)
 static inline unsigned int hash(const dbm_task_t task) {
   const unsigned int m = task.m, n = task.n, k = task.k;
   const unsigned int mn = (m >= n) ? m * m + m + n : m + n * n;
   const unsigned int mnk = (mn >= k) ? mn * mn + mn + k : mn + k * k;
   return mnk;
 }
+#endif
 
 /*******************************************************************************
  * \brief Internal routine for executing the tasks in given batch on the CPU.

@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2025 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -35,7 +35,6 @@ MODULE minbas_methods
                                               cp_fm_to_fm_submat,&
                                               cp_fm_type
    USE kinds,                           ONLY: dp
-   USE lapack,                          ONLY: lapack_ssyev
    USE mao_basis,                       ONLY: mao_generate_basis
    USE message_passing,                 ONLY: mp_para_env_type
    USE parallel_gemm_api,               ONLY: parallel_gemm
@@ -358,7 +357,7 @@ CONTAINS
          ALLOCATE (amat(n, n), bmat(n, n), w(n), work(lwork))
          amat(1:n, 1:n) = sblock(1:n, 1:n)
          info = 0
-         CALL lapack_ssyev("V", "U", n, amat, n, w, work, lwork, info)
+         CALL dsyev("V", "U", n, amat, n, w, work, lwork, info)
          CPASSERT(info == 0)
          w(1:n) = 1._dp/SQRT(w(1:n))
          DO i = 1, n

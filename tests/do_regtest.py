@@ -250,7 +250,7 @@ class Config:
         default_ompthreads = 2 if "smp" in args.version else 1
         self.ompthreads = args.ompthreads if args.ompthreads else default_ompthreads
         self.mpiranks = args.mpiranks if self.use_mpi else 1
-        self.num_workers = int(args.maxtasks / self.ompthreads / self.mpiranks)
+        self.num_workers = int(args.maxtasks / self.ompthreads / self.mpiranks) or 1
         self.workers = Semaphore(self.num_workers)
         self.cp2k_root = Path(__file__).resolve().parent.parent
         self.mpiexec = args.mpiexec
@@ -269,7 +269,7 @@ class Config:
         self.skip_unittests = args.skip_unittests
         self.skip_regtests = args.skip_regtests
         datestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-        leaf_dir = f"TEST-{args.version}-{datestamp}"
+        leaf_dir = f"TEST-{datestamp}"
         self.work_base_dir = (args.workbasedir or args.binary_dir).resolve() / leaf_dir
         self.error_summary = self.work_base_dir / "error_summary"
 
@@ -306,11 +306,11 @@ class Config:
             env["CUDA_VISIBLE_DEVICES"] = ",".join(visible_gpu_devices)
             env["HIP_VISIBLE_DEVICES"] = ",".join(visible_gpu_devices)
         env["OMP_NUM_THREADS"] = str(self.ompthreads)
-        exe_path = Path(f"{exe_stem}.{self.version}")
-        if exe_path.is_absolute():
-            cmd = [str(exe_path)]
-        else:
-            cmd = [str(self.binary_dir / f"{exe_stem}.{self.version}")]
+        env["PIKA_COMMANDLINE_OPTIONS"] = (
+            f"--pika:bind=none --pika:threads={self.ompthreads}"
+        )
+        exe_name = f"{exe_stem}.{self.version}"
+        cmd = [str(self.binary_dir / exe_name)]
         if self.valgrind:
             cmd = ["valgrind", "--error-exitcode=42", "--exit-on-first-error=yes"] + cmd
         if self.use_mpi:

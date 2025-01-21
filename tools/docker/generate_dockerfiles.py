@@ -45,7 +45,7 @@ def main() -> None:
     with OutputFile(f"Dockerfile.test_minimal", args.check) as f:
         f.write(toolchain_ubuntu_nompi() + regtest_cmake("minimal", "ssmp"))
 
-    with OutputFile(f"Dockerfile.test_cmake", args.check) as f:
+    with OutputFile(f"Dockerfile.test_spack", args.check) as f:
         f.write(spack_env_toolchain() + regtest_cmake("spack", "psmp"))
 
     for version in "ssmp", "psmp":
@@ -522,6 +522,7 @@ FROM intel/hpckit:2024.2.1-0-devel-ubuntu22.04
         install_all="",
         with_intelmpi="",
         with_mkl="",
+        with_libsmeagol="",
         with_libtorch="no",
     )
 
@@ -840,15 +841,23 @@ RUN apt-get update -qq && apt-get install -qq --no-install-recommends \
 
 # Install a recent developer version of Spack.
 WORKDIR /opt/spack
+ARG SPACK_VERSION=501ee68606405ea2ac26d369a5139d75be88dac8
 RUN git init --quiet && \
     git remote add origin https://github.com/spack/spack.git && \
-    git fetch --quiet --depth 1 origin 22e40541c75ae952c0afb1011082f3220e3ae2a9 --no-tags && \
+    git fetch --quiet --depth 1 origin ${{SPACK_VERSION}} --no-tags && \
     git checkout --quiet FETCH_HEAD
 ENV PATH="/opt/spack/bin:${{PATH}}"
 
 # Find all external packages and compilers.
 RUN spack compiler find
 RUN spack external find --all --not-buildable
+
+# Enable Spack build cache
+ARG SPACK_BUILD_CACHE=develop-2024-12-15
+RUN spack mirror add ${{SPACK_BUILD_CACHE}} https://binaries.spack.io/${{SPACK_BUILD_CACHE}} && \
+    spack mirror add develop https://binaries.spack.io/develop && \
+    spack buildcache keys --install --trust --force && \
+    spack mirror rm develop
 
 # Install CP2K's dependencies via Spack.
 WORKDIR /

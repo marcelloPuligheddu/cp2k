@@ -1,6 +1,6 @@
 #!-------------------------------------------------------------------------------------------------!
 #!   CP2K: A general program to perform molecular dynamics simulations                             !
-#!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                  !
+#!   Copyright 2000-2025 CP2K developers group <https://cp2k.org>                                  !
 #!                                                                                                 !
 #!   SPDX-License-Identifier: GPL-2.0-or-later                                                     !
 #!-------------------------------------------------------------------------------------------------!
@@ -37,7 +37,7 @@ project(
   cp2k
   DESCRIPTION "CP2K"
   HOMEPAGE_URL "https://www.cp2k.org"
-  VERSION "2024.3"
+  VERSION "2025.1"
   LANGUAGES Fortran C CXX)
 
 list(APPEND CMAKE_MODULE_PATH "${PROJECT_SOURCE_DIR}/cmake/modules")
@@ -508,13 +508,15 @@ if((CP2K_USE_ACCEL MATCHES CUDA) OR (CP2K_USE_ACCEL MATCHES HIP))
   set(CP2K_GPU_ARCH_NUMBER_Mi100 gfx908)
   set(CP2K_GPU_ARCH_NUMBER_Mi200 gfx90a)
   set(CP2K_GPU_ARCH_NUMBER_Mi250 gfx90a)
-  set(CP2K_GPU_ARCH_NUMBER_Mi300 gfx1103)
+  set(CP2K_GPU_ARCH_NUMBER_Mi300 gfx942)
 endif()
 
 set(CP2K_USE_HIP OFF)
 set(CP2K_USE_CUDA OFF)
 
+option(CP2K_USE_PW_GPU "Enable GPU in CUDA" OFF)
 if(CP2K_USE_ACCEL MATCHES "CUDA")
+  option(CP2K_WITH_CUDA_PROFILING "Enable CUDA profiling" OFF)
   # P100 is the default target.
   set(CMAKE_CUDA_ARCHITECTURES 60)
 
@@ -539,10 +541,10 @@ if(CP2K_USE_ACCEL MATCHES "CUDA")
   endif()
 
   set(CMAKE_CUDA_ARCHITECTURES ${CP2K_GPU_ARCH_NUMBER_${CP2K_WITH_GPU}})
-
   message(STATUS "GPU target architecture: ${CP2K_WITH_GPU}\n"
                  "GPU architecture number: ${CMAKE_CUDA_ARCHITECTURES}\n"
                  "GPU profiling enabled: ${CP2K_WITH_CUDA_PROFILING}\n")
+  set(CP2K_ACC_ARCH_NUMBER ${CMAKE_CUDA_ARCHITECTURES})
 
   if(WITH_CUDA_PROFILING)
     find_library(
@@ -554,11 +556,13 @@ if(CP2K_USE_ACCEL MATCHES "CUDA")
   endif()
 
   set(CP2K_USE_CUDA ON)
+  set(CP2K_USE_PW_GPU ON)
 
   if(CP2K_USE_CUSOLVER_MP)
     find_package(CuSolverMP REQUIRED)
   endif()
   message(STATUS ``"-- CUDA compiler and libraries found")
+
 elseif(CP2K_USE_ACCEL MATCHES "HIP")
   enable_language(HIP)
   # Find hip
@@ -577,10 +581,12 @@ elseif(CP2K_USE_ACCEL MATCHES "HIP")
   endif()
 
   set(CMAKE_HIP_ARCHITECTURES "${CP2K_GPU_ARCH_NUMBER_${CP2K_WITH_GPU}}")
+  set(CP2K_ACC_ARCH_NUMBER ${CP2K_GPU_ARCH_NUMBER_${CP2K_WITH_GPU}})
   set(CP2K_USE_HIP ON)
+  set(CP2K_USE_PW_GPU ON)
 
   # use hardware atomic operations on Mi250X.
-  if(CMAKE_HIP_ARCGITECTURES MATCHES "gfx90a|gfx1103")
+  if(CMAKE_HIP_ARCGITECTURES MATCHES "gfx90a|gfx942")
     set(HIP_RELEASE_OPTIONS "-munsafe-fp-atomics")
   endif()
 
@@ -590,8 +596,8 @@ elseif(CP2K_USE_ACCEL MATCHES "HIP")
       set(CMAKE_HIP_ARCHITECTURES "gfx90a:xnack+")
     endif()
 
-    if(CMAKE_HIP_ARCHITECTURES MATCHES "gfx1103")
-      set(CMAKE_HIP_ARCHITECTURES "gfx1103:xnack+")
+    if(CMAKE_HIP_ARCHITECTURES MATCHES "gfx942")
+      set(CMAKE_HIP_ARCHITECTURES "gfx942:xnack+")
     endif()
   endif()
 endif()
@@ -607,7 +613,7 @@ if(CP2K_USE_ELPA)
 endif()
 
 if(CP2K_USE_LIBXC)
-  find_package(LibXC 6 REQUIRED EXACT)
+  find_package(LibXC 7 REQUIRED)
 endif()
 
 # uncomment this when libgrpp cmake support is complete
@@ -766,11 +772,6 @@ endif()
 include(CompilerConfiguration)
 include(CheckCompilerSupport)
 
-if(CP2K_BUILD_DBCSR)
-  add_subdirectory(exts/dbcsr/src)
-  add_library(DBCSR::dbcsr ALIAS dbcsr)
-endif()
-
 include(GNUInstallDirs)
 
 # subdirectories
@@ -818,7 +819,7 @@ if((CP2K_USE_ACCEL MATCHES "CUDA") OR (CP2K_USE_ACCEL MATCHES "HIP"))
   if(CP2K_USE_ACCEL MATCHES "CUDA")
     message(
       "   - CUDA:\n" "     - GPU target architecture : ${CP2K_WITH_GPU}\n"
-      "     - GPU architecture number : ${CP2K_ACC_ARCH_NUMBER}"
+      "     - GPU architecture number : ${CP2K_ACC_ARCH_NUMBER}\n"
       "     - GPU profiling enabled :   ${CP2K_WITH_CUDA_PROFILING}\n\n")
   endif()
 
@@ -829,9 +830,20 @@ if((CP2K_USE_ACCEL MATCHES "CUDA") OR (CP2K_USE_ACCEL MATCHES "HIP"))
 
   message(
     "Note : Enabling hardware acceleration enable acceleration of the grid, pw, and dbm modules by default\n"
-    "    - GRID module : ${CP2K_USE_GRID_GPU}\n"
     "    - PW   module : ${CP2K_USE_PW_GPU}\n"
-    "    - DBM  module : ${CP2K_USE_DBM_GPU}\n\n")
+    "\n")
+endif()
+
+if(CP2K_USE_CUSOLVER_MP)
+  message(
+    "   - CUSolverMP: \n"
+    "     - library: ${CP2K_CUSOLVER_MP_LINK_LIBRARIES} \n"
+    "     - include: ${CP2K_CUSOLVER_MP_INCLUDE_DIRS} \n"
+    "     - CAL library: ${CP2K_CAL_LINK_LIBRARIES} \n"
+    "     - CAL include: ${CP2K_CAL_INCLUDE_DIRS} \n"
+    "     - ucc library: ${CP2K_UCC_LINK_LIBRARIES} \n"
+    "     - ucx library: ${CP2K_UCX_LINK_LIBRARIES} \n"
+    "     - ucc include: ${CP2K_UCC_INCLUDE_DIRS} \n")
 endif()
 
 if(CP2K_USE_LIBXC)

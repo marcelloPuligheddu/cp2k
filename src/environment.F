@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2025 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -84,8 +84,8 @@ MODULE environment
                                               print_kind_info
    USE local_gemm_api,                  ONLY: local_gemm_set_library
    USE machine,                         ONLY: &
-        flush_should_flush, m_cpuid, m_cpuid_name, m_cpuid_static, m_cpuinfo, m_energy, &
-        m_get_omp_stacksize, m_memory_details, m_procrun
+        flush_should_flush, m_cpuid, m_cpuid_name, m_cpuid_static, m_cpuid_vlen, m_cpuinfo, &
+        m_energy, m_memory_details, m_omp_get_stacksize, m_omp_trace_issues, m_procrun
    USE message_passing,                 ONLY: mp_collect_timings,&
                                               mp_para_env_type
    USE mp_perf_env,                     ONLY: add_mp_perf_env,&
@@ -895,10 +895,16 @@ CONTAINS
             num_threads, &
             start_section_label//"| This output is from process", para_env%mepos
 
-         CALL m_get_omp_stacksize(omp_stacksize)
+         CALL m_omp_get_stacksize(omp_stacksize)
          WRITE (UNIT=output_unit, FMT="(T2,A,T68,A13)") &
-            start_section_label//"| Stack size for threads created by OpenMP (OMP_STACKSIZE)", &
+            start_section_label//"| OpenMP stack size per thread (OMP_STACKSIZE)", &
             ADJUSTR(omp_stacksize)
+
+         IF (0 <= m_omp_trace_issues()) THEN ! only show in header if enabled
+            WRITE (UNIT=output_unit, FMT="(T2,A,T68,A13)") &
+               start_section_label//"| OpenMP issue trace (CP2K_OMP_TRACE)", &
+               "enabled"
+         END IF
 
          CALL m_cpuinfo(model_name)
          WRITE (UNIT=output_unit, FMT="(T2,A,T30,A51)") &
@@ -916,7 +922,8 @@ CONTAINS
             END IF
          END IF
 
-         IF (cpuid_static < cpuid) THEN
+         ! filter cpuids by vlen to show more relevant information
+         IF (m_cpuid_vlen(cpuid_static) < m_cpuid_vlen(cpuid)) THEN
             ! base/machine_cpuid.c relies on the (same) target flags as the Fortran code
             CALL cp_hint(__LOCATION__, "The compiler target flags ("// &
                          TRIM(m_cpuid_name(cpuid_static))//") used to build this binary cannot exploit "// &
@@ -1318,8 +1325,11 @@ CONTAINS
             CALL close_file(unit_number=unit_exit, file_status="DELETE")
          END IF
 
-         ! Print warning counter
+         ! Print OpenMP issue counter and number of warnings for this workload
          IF (iw > 0) THEN
+            IF (0 <= m_omp_trace_issues()) THEN
+               WRITE (iw, "(T2,A,I0)") "The number of traced issues for OpenMP : ", m_omp_trace_issues()
+            END IF
             WRITE (iw, "(T2,A,I0)") "The number of warnings for this run is : ", warning_counter
             WRITE (iw, *) ""
             WRITE (UNIT=iw, FMT="(T2,A)") REPEAT("-", 79)

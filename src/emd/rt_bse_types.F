@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2025 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -41,8 +41,7 @@ MODULE rt_bse_types
                            dbcsr_get_info, &
                            dbcsr_copy, &
                            dbcsr_set, &
-                           dbcsr_scale, &
-                           dbcsr_type_complex_8
+                           dbcsr_scale
    USE parallel_gemm_api, ONLY: parallel_gemm
    USE dbt_api, ONLY: dbt_type, &
                       dbt_pgrid_type, &

@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2025 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -1593,6 +1593,28 @@ CONTAINS
       CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
 
+      CALL keyword_create(keyword, __LOCATION__, name="DO_SMEARING", &
+                          description="Implying smeared occupation. ", &
+                          n_var=1, type_of_var=logical_t, &
+                          default_l_val=.FALSE., lone_keyword_l_val=.TRUE.)
+      CALL section_add_keyword(section, keyword)
+      CALL keyword_release(keyword)
+
+      CALL keyword_create(keyword, __LOCATION__, name="EXCITON_DESCRIPTORS", &
+                          description="Compute exciton descriptors. "// &
+                          "Details given in Manual section about Bethe Salpeter equation.", &
+                          n_var=1, type_of_var=logical_t, &
+                          default_l_val=.FALSE.)
+      CALL section_add_keyword(section, keyword)
+      CALL keyword_release(keyword)
+
+      CALL keyword_create(keyword, __LOCATION__, name="DIRECTIONAL_EXCITON_DESCRIPTORS", &
+                          description="Print cartesian components of exciton descriptors.", &
+                          n_var=1, type_of_var=logical_t, &
+                          default_l_val=.FALSE.)
+      CALL section_add_keyword(section, keyword)
+      CALL keyword_release(keyword)
+
       ! Strings
       CALL keyword_create(keyword, __LOCATION__, name="WFN_RESTART_FILE_NAME", &
                           variants=(/"RESTART_FILE_NAME"/), &
@@ -2130,6 +2152,32 @@ CONTAINS
       CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
 
+      CALL keyword_create(keyword, __LOCATION__, name="SIZE_LATTICE_SUM", &
+                          description="Parameter determines how many neighbor cells $\mathbf{R}$ "// &
+                          "are used for computing "// &
+                          "$V_{PQ}(\mathbf{k}) = "// &
+                          "\sum_{\mathbf{R}} e^{i\mathbf{k}\cdot\mathbf{R}}\,\langle P, "// &
+                          "\text{cell}{=}\mathbf{0}|1/r|Q,\text{cell}{=}\mathbf{R}\rangle$. "// &
+                          "Normally, parameter does not need to be touched.", &
+                          usage="SIZE_LATTICE_SUM 4", &
+                          default_i_val=3)
+      CALL section_add_keyword(section, keyword)
+      CALL keyword_release(keyword)
+
+      CALL keyword_create( &
+         keyword, __LOCATION__, name="KPOINTS_W", &
+         description="Monkhorst-Pack k-point mesh of size N_x, N_y, N_z for calculating "// &
+         "$W_{PQ}^\mathbf{R}=\int_\text{BZ}\frac{d\mathbf{k}}{\Omega_\text{BZ}}\, "// &
+         "e^{-i\mathbf{k}\cdot\mathbf{R}}\,W_{PQ}(\mathbf{k})$. "// &
+         "For non-periodic directions α, choose N_α = 1. "// &
+         "Automatic choice of the k-point mesh for negative "// &
+         "values, i.e. KPOINTS_W -1 -1 -1. "// &
+         "K-point extrapolation of W is automatically switched on.", &
+         usage="KPOINTS N_x  N_y  N_z", &
+         n_var=3, type_of_var=integer_t, default_i_vals=(/-1, -1, -1/))
+      CALL section_add_keyword(section, keyword)
+      CALL keyword_release(keyword)
+
       CALL keyword_create(keyword, __LOCATION__, name="HEDIN_SHIFT", &
                           description="If true, use Hedin's shift in G0W0, evGW and evGW0. "// &
                           "Details see in Li et al. JCTC 18, 7570 "// &
@@ -2270,7 +2318,7 @@ CONTAINS
          "the density of states (DOS). In GW, the KPOINT_DOS mesh is thus used as k-point "// &
          "mesh for the self-energy. For non-periodic directions α, choose N_α = 1. "// &
          "Automatic choice of the k-point mesh for negative "// &
-         "values, e.g. KPOINTS_DOS -1 -1 -1 (automatic choice: N_α = 1 in non-periodic "// &
+         "values, i.e. KPOINTS_DOS -1 -1 -1 (automatic choice: N_α = 1 in non-periodic "// &
          "direction, 8 k-points in periodic direction). If you like to compute a "// &
          "band structure along a k-path, you can specify the k-path in "// &
          "&KPOINT_SET.", &
