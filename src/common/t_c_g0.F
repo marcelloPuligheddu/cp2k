@@ -60,10 +60,13 @@ MODULE t_c_g0
 #include "../base/base_uses.f90"
 
    IMPLICIT NONE
+
+   REAL(KIND=dp), DIMENSION(:, :), ALLOCATABLE, SAVE, PUBLIC :: C0
+
    PRIVATE
 
    PUBLIC :: t_c_g0_n, init, free_C0, get_lmax_init
-   REAL(KIND=dp), DIMENSION(:, :), ALLOCATABLE, SAVE :: C0
+!   REAL(KIND=dp), DIMENSION(:, :), ALLOCATABLE, SAVE :: C0
    INTEGER, PARAMETER :: degree = 13
    REAL(KIND=dp), PARAMETER :: target_error = 0.100000E-08
    INTEGER, PARAMETER :: nderiv_max = 21

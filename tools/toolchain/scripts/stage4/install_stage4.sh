@@ -4,6 +4,7 @@
 # shellcheck disable=all
 
 ./scripts/stage4/install_libxsmm.sh
+./scripts/stage4/install_libGint.sh
 ./scripts/stage4/install_scalapack.sh
 ./scripts/stage4/install_cosma.sh
 

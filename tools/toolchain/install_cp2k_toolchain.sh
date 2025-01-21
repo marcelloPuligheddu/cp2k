@@ -243,6 +243,8 @@ The --with-PKG options follow the rules:
                           Default = install
   --with-trexio           Enable the trexio library (read/write TREXIO files)
                           Default = no
+  --with-libGint          Enable the use of libGint for the calculation of the Hartree-Fock exchange on (nvidia) GPUs
+                          Default = no
 
 FURTHER INSTRUCTIONS
 
@@ -280,7 +282,7 @@ mpi_list="mpich openmpi intelmpi"
 math_list="mkl acml openblas"
 lib_list="fftw libint libxc libgrpp libxsmm cosma scalapack elpa cusolvermp plumed \
           spfft spla ptscotch superlu pexsi quip gsl spglib hdf5 libvdwxc sirius
-          libvori libtorch deepmd dftd4 pugixml libsmeagol trexio"
+          libvori libtorch deepmd dftd4 pugixml libsmeagol trexio libGint"
 package_list="${tool_list} ${mpi_list} ${math_list} ${lib_list}"
 # ------------------------------------------------------------------------
 
@@ -332,6 +334,7 @@ with_libvori="__INSTALL__"
 with_libtorch="__DONTUSE__"
 with_ninja="__DONTUSE__"
 with_dftd4="__DONTUSE__"
+with_libGint="__DONTUSE__"
 with_libsmeagol="__DONTUSE__"
 
 # for MPI, we try to detect system MPI variant
@@ -663,6 +666,9 @@ while [ $# -ge 1 ]; do
     --with-gsl*)
       with_gsl=$(read_with "${1}")
       ;;
+    --with-libGint*)
+      with_libGint=$(read_with "${1}")
+      ;;
     --with-spglib*)
       with_spglib=$(read_with "${1}")
       ;;
@@ -843,6 +849,12 @@ fi
 #dftd4 installation requires ninja
 if [ "${with_dftd4}" = "__INSTALL__" ]; then
   [ "${with_ninja}" = "__DONTUSE__" ] && with_ninja="__INSTALL__"
+fi
+
+#libGint installation requires cuda enabled
+if [ "${with_libGint}" != "__DONTUSE__" ] && [ ${enable_cuda} != "__TRUE__" ]; then
+  report_error "libGint (at the moment) requires the use of cuda. Add --enable-cuda"
+  exit 1
 fi
 
 # several packages require cmake.

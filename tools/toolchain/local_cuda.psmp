@@ -1,0 +1,32 @@
+CC          = /usr/bin/mpicc
+CXX         = /usr/bin/mpic++
+AR          = ar -r
+FC          = /usr/bin/mpifort
+LD          = /usr/bin/mpifort
+#
+#DFLAGS      = -D__OFFLOAD_CUDA -D__DBCSR_ACC  -D__LIBXSMM  -D__parallel -D__MPI_F08 -D__FFTW3  -D__LIBINT -D__LIBXC -D__LIBGRPP -D__parallel -D__SPGLIB  
+DFLAGS      = -D__MPI_F08 -D__FFTW3  -D__LIBINT -D__LIBXC -D__LIBGRPP -D_parallel -D__SPGLIB  
+#
+WFLAGS      = -Werror=aliasing -Werror=ampersand -Werror=c-binding-type -Werror=intrinsic-shadow -Werror=intrinsics-std -Werror=line-truncation -Werror=tabs -Werror=target-lifetime -Werror=underflow -Werror=unused-but-set-variable -Werror=unused-variable -Werror=unused-dummy-argument -Werror=unused-parameter -Werror=unused-label -Werror=conversion -Werror=zerotrip -Wno-maybe-uninitialized -Wuninitialized -Wuse-without-only 
+#
+FCDEBFLAGS  = -fbacktrace -ffree-form -fimplicit-none -std=f2008 
+#
+CFLAGS      = -fno-omit-frame-pointer -fopenmp -g -march=native -mtune=native  -O3 -funroll-loops $(PROFOPT)  -I/usr/lib/x86_64-linux-gnu/openmpi/include/openmpi -I/usr/lib/x86_64-linux-gnu/openmpi/include -pthread   -I'/usr/include' -I'/home/qjn24437/cp2k/tools/toolchain/install/libint-v2.6.0-cp2k-lmax-5/include' -I'/home/qjn24437/cp2k/tools/toolchain/install/libxc-6.2.2/include' -I'/home/qjn24437/cp2k/tools/toolchain/install/libgrpp-main-20231225/include' -I'/home/qjn24437/cp2k/tools/toolchain/install/libxsmm-1.17/include' -I/home/qjn24437/cp2k/tools/toolchain/install/spglib-2.3.1/include -std=c11 -Wall -Wextra -Werror -Wno-vla-parameter -Wno-deprecated-declarations $(DFLAGS) -I/usr/local/cuda-12.6/bin/../include -I/home/qjn24437/cp2k/src/Gint
+#
+CXXFLAGS    = -O2 -fPIC -fno-omit-frame-pointer -fopenmp -g -mtune=native --std=c++14 $(DFLAGS) -Wno-deprecated-declarations -I/usr/local/cuda-12.6/bin/../include
+#
+FCFLAGS     = -fno-omit-frame-pointer -fopenmp -g -march=native -mtune=native  -O3 -funroll-loops $(PROFOPT)  -I/usr/lib/x86_64-linux-gnu/openmpi/include/openmpi -I/usr/lib/x86_64-linux-gnu/openmpi/include -pthread   -I'/usr/include' -I'/home/qjn24437/cp2k/tools/toolchain/install/libint-v2.6.0-cp2k-lmax-5/include' -I'/home/qjn24437/cp2k/tools/toolchain/install/libxc-6.2.2/include' -I'/home/qjn24437/cp2k/tools/toolchain/install/libgrpp-main-20231225/include' -I'/home/qjn24437/cp2k/tools/toolchain/install/libxsmm-1.17/include' -I/home/qjn24437/cp2k/tools/toolchain/install/spglib-2.3.1/include $(FCDEBFLAGS) $(WFLAGS) $(DFLAGS) -I/home/qjn24437/cp2k/src/Gint 
+#
+LDFLAGS     =  $(FCFLAGS) -Wl,--enable-new-dtags -pthread -L/usr/lib/x86_64-linux-gnu/openmpi/lib      -L'/home/qjn24437/cp2k/tools/toolchain/install/libint-v2.6.0-cp2k-lmax-5/lib' -L'/home/qjn24437/cp2k/tools/toolchain/install/libxc-6.2.2/lib' -Wl,-rpath,'/home/qjn24437/cp2k/tools/toolchain/install/libxc-6.2.2/lib' -L'/home/qjn24437/cp2k/tools/toolchain/install/libgrpp-main-20231225/lib' -Wl,-rpath,'/home/qjn24437/cp2k/tools/toolchain/install/libgrpp-main-20231225/lib' -L'/home/qjn24437/cp2k/tools/toolchain/install/libxsmm-1.17/lib' -Wl,-rpath,'/home/qjn24437/cp2k/tools/toolchain/install/libxsmm-1.17/lib' -L'/home/qjn24437/cp2k/tools/toolchain/install/scalapack-2.2.1/lib' -Wl,-rpath,'/home/qjn24437/cp2k/tools/toolchain/install/scalapack-2.2.1/lib' -L'/home/qjn24437/cp2k/tools/toolchain/install/spglib-2.3.1/lib' -Wl,-rpath,'/home/qjn24437/cp2k/tools/toolchain/install/spglib-2.3.1/lib' -L/home/qjn24437/cp2k/exts/libGint
+LDFLAGS_C   = 
+LIBS        = -lcp2kGint -lsymspg -lscalapack -lxsmmf -lxsmm -ldl -lpthread -llibgrpp -lxcf03 -lxc -lint2 -lfftw3_mpi -lfftw3 -lfftw3_omp   -lmpi_cxx -lmpi  -lopenblas -lstdc++ -lcudart -lnvrtc -lcuda -lcufft -lcublasLt -lcublas -lrt 
+#
+GPUVER        = V100
+OFFLOAD_CC    = nvcc
+OFFLOAD_FLAGS = -g -arch sm_70 -O3 -allow-unsupported-compiler -Xcompiler='-fopenmp -Wall -Wextra -Werror' --std=c++11 $(DFLAGS) -I'/usr/include'
+OFFLOAD_TARGET = cuda
+#
+FYPPFLAGS   = -n --line-marker-format=gfortran5
+NVCC    = nvcc
+
+LIBS   += -lcudart -lcublas -lcufft -lnvrtc
