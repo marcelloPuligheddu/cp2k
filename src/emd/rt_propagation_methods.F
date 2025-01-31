@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2025 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -14,8 +14,8 @@ MODULE rt_propagation_methods
                                               Kuhne2007,&
                                               cite_reference
    USE cell_types,                      ONLY: cell_type
-   USE cp_cfm_basic_linalg,             ONLY: cp_cfm_cholesky_decompose,&
-                                              cp_cfm_triangular_multiply
+   USE cp_cfm_basic_linalg,             ONLY: cp_cfm_triangular_multiply
+   USE cp_cfm_cholesky,                 ONLY: cp_cfm_cholesky_decompose
    USE cp_cfm_types,                    ONLY: cp_cfm_create,&
                                               cp_cfm_release,&
                                               cp_cfm_type

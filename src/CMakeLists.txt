@@ -1,6 +1,6 @@
 #!-------------------------------------------------------------------------------------------------!
 #!   CP2K: A general program to perform molecular dynamics simulations                             !
-#!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                  !
+#!   Copyright 2000-2025 CP2K developers group <https://cp2k.org>                                  !
 #!                                                                                                 !
 #!   SPDX-License-Identifier: GPL-2.0-or-later                                                     !
 #!-------------------------------------------------------------------------------------------------!
@@ -72,6 +72,8 @@ list(
   bse_main.F
   bse_full_diag.F
   bse_iterative.F
+  bse_print.F
+  bse_properties.F
   bse_util.F
   bsse.F
   cell_methods.F
@@ -131,6 +133,9 @@ list(
   dm_ls_scf_types.F
   domain_submatrix_methods.F
   domain_submatrix_types.F
+  eeq_data.F
+  eeq_input.F
+  eeq_method.F
   ec_efield_local.F
   ec_environment.F
   ec_env_types.F
@@ -586,6 +591,7 @@ list(
   qs_harmonics_atom.F
   qs_hash_table_functions.F
   qs_initial_guess.F
+  qs_eht_guess.F
   qs_integral_utils.F
   qs_integrate_potential.F
   qs_integrate_potential_product.F
@@ -646,6 +652,7 @@ list(
   qs_neighbor_list_types.F
   qs_nl_hash_table_types.F
   qs_nonscf.F
+  qs_nonscf_utils.F
   qs_o3c_methods.F
   qs_o3c_types.F
   qs_oce_methods.F
@@ -705,6 +712,7 @@ list(
   qs_tddfpt2_soc_types.F
   qs_tddfpt2_stda_types.F
   qs_tddfpt2_stda_utils.F
+  qs_tddfpt2_smearing_methods.F
   qs_tddfpt2_subgroups.F
   qs_tddfpt2_types.F
   qs_tddfpt2_utils.F
@@ -819,6 +827,8 @@ list(
   torch_api.F
   transport_env_types.F
   transport.F
+  trexio.F
+  trexio_utils.F
   uff_vdw_radii_table.F
   virial_methods.F
   voronoi_interface.F
@@ -839,10 +849,15 @@ list(
   xas_tp_scf.F
   xray_diffraction.F
   xtb_coulomb.F
+  xtb_eeq.F
   xtb_ehess.F
   xtb_ehess_force.F
+  xtb_hcore.F
+  xtb_hab_force.F
+  xtb_ks_matrix.F
   xtb_matrices.F
   xtb_parameters.F
+  xtb_potentials.F
   xtb_types.F)
 
 list(
@@ -890,7 +905,8 @@ list(
   arnoldi/arnoldi_data_methods.F
   arnoldi/arnoldi_geev.F
   arnoldi/arnoldi_methods.F
-  arnoldi/arnoldi_types.F)
+  arnoldi/arnoldi_types.F
+  arnoldi/arnoldi_vector.F)
 
 list(APPEND CP2K_SRCS_F base/base_hooks.F base/kinds.F base/machine.F)
 
@@ -918,7 +934,6 @@ list(
   common/fparser.F
   common/gamma.F
   common/kahan_sum.F
-  common/lapack.F
   common/lebedev.F
   common/linear_systems.F
   common/list_callstackentry.F
@@ -950,8 +965,6 @@ list(
   common/t_sh_p_s_c.F
   common/util.F
   common/whittaker.F)
-
-list(APPEND CP2K_SRCS_F dbcsrx/dbcsr_vector.F)
 
 list(APPEND CP2K_SRCS_F dbm/dbm_api.F dbm/dbm_tests.F)
 
@@ -1001,6 +1014,7 @@ list(
   CP2K_SRCS_F
   fm/cp_blacs_env.F
   fm/cp_blacs_types.F
+  fm/cp_cfm_cholesky.F
   fm/cp_cfm_basic_linalg.F
   fm/cp_cfm_diag.F
   fm/cp_cfm_basic_linalg.F
@@ -1018,7 +1032,8 @@ list(
 
 list(APPEND CP2K_SRCS_C fm/cp_fm_cusolver.c)
 
-list(APPEND CP2K_SRCS_F fm/cp_dlaf_utils_api.F fm/cp_fm_dlaf_api.F)
+list(APPEND CP2K_SRCS_F fm/cp_dlaf_utils_api.F fm/cp_fm_dlaf_api.F
+     fm/cp_cfm_dlaf_api.F)
 
 list(APPEND CP2K_SRCS_F hfxbase/hfx_compression_core_methods.F
      hfxbase/hfx_contract_block.F hfxbase/hfx_contraction_methods.F)
@@ -1349,7 +1364,7 @@ list(
   xc/xc_xpbe_hole_t_c_lr.F
   xc/xc_xwpbe.F)
 
-list(APPEND CP2K_SRCS_C sockets.c base/machine_cpuid.c)
+list(APPEND CP2K_SRCS_C sockets.c base/machine_cpuid.c base/openmp_trace.c)
 
 set(CP2K_DBM_SRCS_C
     dbm/dbm_distribution.c
@@ -1485,9 +1500,9 @@ if(CP2K_USE_CUDA)
   else()
     target_link_libraries(
       cp2k_cuda_libs
-      INTERFACE $<$<BOOL:${CP2K_USE_CUSOLVER_MP}>:cp2k::CUSOLVER_MP::cusolvermp>
-                CUDA::cufft CUDA::cufftw CUDA::cublas CUDA::cudart
-                CUDA::cuda_driver)
+      INTERFACE
+        $<$<BOOL:${CP2K_USE_CUSOLVER_MP}>:cp2k::CUSOLVER_MP::cusolver_mp>
+        CUDA::cufft CUDA::cufftw CUDA::cublas CUDA::cudart CUDA::cuda_driver)
   endif()
 endif()
 

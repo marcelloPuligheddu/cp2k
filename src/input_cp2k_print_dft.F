@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2025 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -24,7 +24,7 @@ MODULE input_cp2k_print_dft
       Lippert1999, Lu2004, Merlot2014, Perdew1981, Repasky2002, Rocha2006, Schenter2008, Schiffmann2015, &
       Shigeta2001, Stewart1982, Stewart1989, Stewart2007, Thiel1992, VanVoorhis2015, &
       VandeVondele2003, VandeVondele2005a, VandeVondele2005b, VandeVondele2006, Weber2008, &
-      Yin2017
+      Yin2017, Pracht2019, Caldeweyher2019, Caldeweyher2020
    USE cp_output_handling, ONLY: add_last_numeric, &
                                  cp_print_key_section_create, &
                                  debug_print_level, &
@@ -617,6 +617,23 @@ CONTAINS
       CALL section_add_subsection(section, subsection)
       CALL section_release(subsection)
 
+      CALL section_create(subsection, __LOCATION__, name="TREXIO", &
+                          description="Write a TREXIO file to disk.", &
+                          n_keywords=1, n_subsections=0, repeats=.FALSE.)
+      CALL keyword_create(keyword, __LOCATION__, name="FILENAME", &
+                          description="Body of Filename for the trexio file.", &
+                          usage="FILENAME {name}", default_c_val="TREXIO", &
+                          type_of_var=char_t)
+      CALL section_add_keyword(subsection, keyword)
+      CALL keyword_release(keyword)
+      CALL keyword_create(keyword, __LOCATION__, name="CARTESIAN", &
+                          description="Store the MOs in the Cartesian basis instead of the default spherical basis.", &
+                          default_l_val=.FALSE., lone_keyword_l_val=.TRUE.)
+      CALL section_add_keyword(subsection, keyword)
+      CALL keyword_release(keyword)
+      CALL section_add_subsection(section, subsection)
+      CALL section_release(subsection)
+
       CALL section_create(subsection, __LOCATION__, name="GAPW", &
                           description="Controls the printing of some gapw related information (debug).", &
                           n_keywords=0, n_subsections=1, repeats=.FALSE.)
@@ -1201,6 +1218,15 @@ CONTAINS
                           type_of_var=real_t, n_var=-1)
       CALL section_add_keyword(print_key, keyword)
       CALL keyword_release(keyword)
+      CALL section_add_subsection(section, print_key)
+      CALL section_release(print_key)
+
+      ! Print EEQ Charges
+      CALL cp_print_key_section_create(print_key, __LOCATION__, "EEQ_CHARGES", &
+                                       description="Controls the printing of the EEQ charges", &
+                                       print_level=debug_print_level, filename="__STD_OUT__", &
+                                       common_iter_levels=1, &
+                                       citations=(/Pracht2019, Caldeweyher2019, Caldeweyher2020/))
       CALL section_add_subsection(section, print_key)
       CALL section_release(print_key)
 
