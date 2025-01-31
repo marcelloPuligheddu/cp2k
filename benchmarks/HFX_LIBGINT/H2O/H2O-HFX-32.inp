@@ -37,13 +37,13 @@
       &HF
         HFX_LIBRARY both #libint
         &INTERACTION_POTENTIAL
-          CUTOFF_RADIUS 2
+          CUTOFF_RADIUS 3
           POTENTIAL_TYPE TRUNCATED
           T_C_G_DATA ./t_c_g.dat
         &END INTERACTION_POTENTIAL
         &MEMORY
           EPS_STORAGE_SCALING 0.1
-          MAX_MEMORY 1000
+          MAX_MEMORY 20000
         &END MEMORY
         &SCREENING
           EPS_SCHWARZ 1.0E-9

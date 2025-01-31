@@ -7,7 +7,7 @@
   METHOD Quickstep
   STRESS_TENSOR ANALYTICAL
   &DFT
-    BASIS_SET_FILE_NAME  BASIS_SET
+    BASIS_SET_FILE_NAME  ./basis.inp
     POTENTIAL_FILE_NAME  POTENTIAL
     &POISSON
       PERIODIC XYZ
@@ -15,13 +15,13 @@
     &SCF
       SCF_GUESS ATOMIC
       EPS_SCF 1.0E-8
-      MAX_SCF 5
+      MAX_SCF 500
     &END SCF
     &XC
       &HF
-        HFX_LIBRARY both
+        HFX_LIBRARY libint
         &INTERACTION_POTENTIAL
-          CUTOFF_RADIUS 2
+          CUTOFF_RADIUS 2.6
           POTENTIAL_TYPE TRUNCATED
           T_C_G_DATA ./t_c_g.dat
         &END INTERACTION_POTENTIAL
@@ -30,7 +30,7 @@
           MAX_MEMORY 1000
         &END MEMORY
         &SCREENING
-          EPS_SCHWARZ 1.0E-5
+          EPS_SCHWARZ 1.0E-9
         &END SCREENING
       &END HF
       &XC_FUNCTIONAL NONE
@@ -40,7 +40,7 @@
   &SUBSYS
     &KIND Si
       ELEMENT   Si
-      BASIS_SET DZVP-GTH-PBE
+      BASIS_SET SI_1
       POTENTIAL GTH-PBE
     &END KIND
     &CELL
@@ -60,3 +60,4 @@
     &END COORD
   &END SUBSYS
 &END FORCE_EVAL
+

@@ -1,0 +1,70 @@
+&GLOBAL
+  PRINT_LEVEL MEDIUM
+  PROJECT GW100-Ethybenzene
+  RUN_TYPE ENERGY
+&END GLOBAL
+
+
+&FORCE_EVAL
+  METHOD Quickstep
+  &DFT
+    BASIS_SET_FILE_NAME BASIS_MOLOPT_UZH
+    POTENTIAL_FILE_NAME POTENTIAL_UZH
+    &MGRID
+      CUTOFF 300
+      REL_CUTOFF 350
+    &END MGRID
+    &QS
+      EPS_DEFAULT 1.0E-12
+      EPS_FILTER_MATRIX 0.0e0
+      METHOD GAPW
+    &END QS
+    &SCF
+      EPS_SCF 1.0E-8
+      MAX_SCF 200
+      SCF_GUESS RESTART
+      &OT
+        PRECONDITIONER FULL_ALL
+      &END OT
+      &PRINT
+        &RESTART OFF
+        &END RESTART
+      &END PRINT
+    &END SCF
+    &XC
+      &HF
+        HFX_LIBRARY libint
+        &INTERACTION_POTENTIAL
+          CUTOFF_RADIUS 6
+          POTENTIAL_TYPE TRUNCATED
+          T_C_G_DATA ./t_c_g.dat
+        &END INTERACTION_POTENTIAL
+        &MEMORY
+          EPS_STORAGE_SCALING 0.1
+          MAX_MEMORY 100
+        &END MEMORY
+        &SCREENING
+          EPS_SCHWARZ 1.0E-9
+        &END SCREENING
+      &END HF
+      &XC_FUNCTIONAL NONE
+      &END XC_FUNCTIONAL
+    &END XC
+  &END DFT
+  &SUBSYS
+    &CELL
+      ABC 12.252 12.252 12.252
+    &END CELL
+    &COORD
+      Ag 0 0 0
+      Ag 0 0 2.5335
+    &END COORD
+    &KIND Ag
+      BASIS_SET DZVP-MOLOPT-GGA-GTH-q11
+      POTENTIAL GTH-PBE0-q11
+    &END KIND
+  &END SUBSYS
+&END
+
+
+

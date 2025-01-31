@@ -8,7 +8,7 @@
 &FORCE_EVAL
   METHOD QS
   &DFT
-    BASIS_SET_FILE_NAME GTH_BASIS_SETS
+    BASIS_SET_FILE_NAME ./basis.inp
     POTENTIAL_FILE_NAME POTENTIAL
     &MGRID
       CUTOFF 140
@@ -20,14 +20,12 @@
       WF_INTERPOLATION PS
     &END QS
     &SCF
-      MAX_SCF 4
-      IGNORE_CONVERGENCE_FAILURE
+      MAX_SCF 400
       SCF_GUESS ATOMIC
       &OT ON
         MINIMIZER DIIS
       &END OT
-      # SCF_GUESS        RESTART
-      # EPS_SCF      1.0E-7
+      EPS_SCF      1.0E-9
       &PRINT
         &RESTART OFF
         &END RESTART
@@ -35,7 +33,7 @@
     &END SCF
     &XC
       &HF
-        HFX_LIBRARY both #libint
+        HFX_LIBRARY libint
         &INTERACTION_POTENTIAL
           CUTOFF_RADIUS 4 
           POTENTIAL_TYPE TRUNCATED
@@ -43,10 +41,10 @@
         &END INTERACTION_POTENTIAL
         &MEMORY
           EPS_STORAGE_SCALING 0.1
-          MAX_MEMORY 4000
+          MAX_MEMORY 7000
         &END MEMORY
         &SCREENING
-          EPS_SCHWARZ 1.0E-9
+          EPS_SCHWARZ 1.0E-12
         &END SCREENING
       &END HF
       &XC_FUNCTIONAL NONE
@@ -55,27 +53,17 @@
   &END DFT
   &SUBSYS
     &CELL
-      ABC 9.8528 9.8528 9.8528
+      ABC 10. 10. 10.
     &END CELL
-    # 3 H2O cut from 32 H2O (TIP5P,1bar,300K) a = 9.8528
     &COORD
-      O       2.280398       9.146539       5.088696
-      O       1.251703       2.406261       7.769908
-      O       1.596302       6.920128       0.656695
-      H       1.762019       9.820429       5.528454
-      H       3.095987       9.107088       5.588186
-      H       0.554129       2.982634       8.082024
-      H       1.771257       2.954779       7.182181
-      H       2.112148       6.126321       0.798136
-      H       1.776389       7.463264       1.424030
+      H      0. 0. 0.
+      H      5. 0. 0.
+      H      0. 5. 0.
+      H      0. 0. 5.
     &END COORD
     &KIND H
-      BASIS_SET TZV2P-GTH
+      BASIS_SET H_2
       POTENTIAL GTH-PADE-q1
-    &END KIND
-    &KIND O
-      BASIS_SET TZV2P-GTH
-      POTENTIAL GTH-PADE-q6
     &END KIND
   &END SUBSYS
 &END FORCE_EVAL

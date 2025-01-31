@@ -11,8 +11,8 @@
     BASIS_SET_FILE_NAME GTH_BASIS_SETS
     POTENTIAL_FILE_NAME POTENTIAL
     &MGRID
-      CUTOFF 140
-      REL_CUTOFF 10
+      CUTOFF 240
+      REL_CUTOFF 180
     &END MGRID
     &QS
       EPS_DEFAULT 1.0E-12
@@ -20,8 +20,7 @@
       WF_INTERPOLATION PS
     &END QS
     &SCF
-      MAX_SCF 4
-      IGNORE_CONVERGENCE_FAILURE
+      MAX_SCF 128
       SCF_GUESS ATOMIC
       &OT ON
         MINIMIZER DIIS
@@ -35,9 +34,9 @@
     &END SCF
     &XC
       &HF
-        HFX_LIBRARY both #libint
+        HFX_LIBRARY libint
         &INTERACTION_POTENTIAL
-          CUTOFF_RADIUS 4 
+          CUTOFF_RADIUS 4.5
           POTENTIAL_TYPE TRUNCATED
           T_C_G_DATA ./t_c_g.dat
         &END INTERACTION_POTENTIAL
@@ -62,12 +61,21 @@
       O       2.280398       9.146539       5.088696
       O       1.251703       2.406261       7.769908
       O       1.596302       6.920128       0.656695
+      O       3.280398      10.146539       6.088696
+      O       2.251703       3.406261       8.769908
+      O       2.596302       7.920128       1.656695
       H       1.762019       9.820429       5.528454
       H       3.095987       9.107088       5.588186
       H       0.554129       2.982634       8.082024
       H       1.771257       2.954779       7.182181
       H       2.112148       6.126321       0.798136
       H       1.776389       7.463264       1.424030
+      H       2.762019      10.820429       6.528454
+      H       4.095987      10.107088       6.588186
+      H       1.554129       3.982634       9.082024
+      H       2.771257       3.954779       8.182181
+      H       3.112148       7.126321       1.798136
+      H       2.776389       8.463264       2.424030
     &END COORD
     &KIND H
       BASIS_SET TZV2P-GTH
