@@ -496,9 +496,9 @@ CONTAINS
          if ( general_parameter%hfx_library == hfx_library_is_libint .and. &
               cp2k_was_compiled_with_cuda_offload .and.                    &
               cp2k_was_compiled_with_libgint                       ) then
-            WRITE(iw,*) " HFX | You are computing the HFX on CPU on cp2k compiled with cuda support"
-            WRITE(iw,*) " HFX | Consider switching to HFX on GPU using the command"
-            WRITE(iw,*) " HFX | 'HFX_LIBRARY libGint' in the HF section of the input file"
+            WRITE(UNIT=iw,*) " HFX | You are computing the HFX on CPU on cp2k compiled with cuda support"
+            WRITE(UNIT=iw,*) " HFX | Consider switching to HFX on GPU using the command"
+            WRITE(UNIT=iw,*) " HFX | 'HFX_LIBRARY libGint' in the HF section of the input file"
          end if
       end if
 !$OMP END MASTER
@@ -953,11 +953,14 @@ CONTAINS
          !$omp barrier
          call offload_set_chosen_device(shared_dev)
          call offload_activate_chosen_device()
-         ! At least once, and before any other call
+
+         ! At least once, and before any other call from all OMP threads
          call cp_libGint_init(actual_x_data)
+
          ! At least at geo change
          call libGint_update_env(fac, memory_parameter, do_periodic, cell, actual_x_data, &
                                  nneighbors, max_pgf, natom, kind_of, particle_set, basis_parameter)
+
          ! Every cycle
          if (use_only_alpha_spin) then
             call libGint_set_density(full_density_alpha)
