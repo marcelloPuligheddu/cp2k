@@ -7,15 +7,17 @@ tests=(
 # "H2O;H2O-HFX-1.inp;1;1"
 # "H2O;H2O-HFX-1.inp;1;2"
 # "H2O;H2O-HFX-1.inp;2;1"
-# "H2O;H2O-HFX-6.inp;1;1"
-# "H2O;H2O-HFX-6.inp;2;2"
-# "Silicon;silicon8.inp;2;2" 
-# "Silicon;silicon8.inp;4;4" 
-# "H2O_PBE;water_pbe0_from_pbe.inp;4;4"
+ "H2O;H2O-HFX-6.inp;1;1"
+ "H2O;H2O-HFX-6.inp;2;2"
+ "Cyanide;CN.inp;1;1"
+ "Cyanide;CN.inp;2;2"
+ "Silicon;silicon8.inp;2;2" 
+ "KMnF3;KMnF3.inp;4;1"
+ "Silicon;silicon8.inp;4;4" 
+ "H2O_PBE;water_pbe0_from_pbe.inp;4;4"
 # "MgO;MgO_pbe0_energy_smaller.inp;4;4"
- "Ag2;SilverDimer.inp;4;4"
+ "Ag2;SilverDimer.inp;4;1"
  "Ethybenzene;Ethybenzene.inp;4;4"
- "KMnF3;KMnF3.inp;4;4"
 )
 
 echo $tests
@@ -39,6 +41,11 @@ for test_values in "${tests[@]}"; do
    INP="${arr[1]}"
    MPI="${arr[2]}"
    OMP="${arr[3]}"
+
+   if [ ! -d "$FOL" ]; then
+      echo "$FOL does not exist."
+      continue
+   fi
 
    CPU_INPUT=${INP}
    GPU_INPUT=${CPU_INPUT}.gpu

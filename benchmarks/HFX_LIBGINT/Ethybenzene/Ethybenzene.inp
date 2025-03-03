@@ -23,7 +23,7 @@
     &SCF
       EPS_SCF 1.0E-8
       MAX_SCF 200
-      SCF_GUESS RESTART
+      SCF_GUESS ATOMIC
       &OT
         PRECONDITIONER FULL_ALL
       &END OT
