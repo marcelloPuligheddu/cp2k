@@ -434,11 +434,11 @@ CONTAINS
       INTEGER(int_8)                                     :: estimate_to_store_int, neris_tmp, &
                                                             neris_total, nprim_ints
       INTEGER, ALLOCATABLE, DIMENSION(:)                 :: kind_of, nimages
-      INTEGER, DIMENSION(:), POINTER                     :: la_max, la_min, lb_max, lb_min, lc_max, &
+      INTEGER, CONTIGUOUS, DIMENSION(:), POINTER         :: la_max, la_min, lb_max, lb_min, lc_max, &
                                                             lc_min, ld_max, ld_min, npgfa, npgfb, &
                                                             npgfc, npgfd, nsgfa, nsgfb, nsgfc, &
-                                                            nsgfd
-      INTEGER, DIMENSION(:, :), POINTER                  :: nsgfl_a, nsgfl_b, nsgfl_c, nsgfl_d
+                                                            nsgfd, nsgfl1_a, nsgfl1_b, nsgfl1_c, nsgfl1_d
+      INTEGER, CONTIGUOUS, DIMENSION(:, :), POINTER      :: nsgfl_a, nsgfl_b, nsgfl_c, nsgfl_d
       LOGICAL                                            :: do_periodic
       LOGICAL, DIMENSION(:, :), POINTER                  :: shm_atomic_pair_list
       REAL(KIND=dp) :: cartesian_estimate, coeffs_kind_max0, eps_schwarz, ln_10, &
@@ -591,6 +591,9 @@ CONTAINS
                sphi_a_ext_set => sphi_a_ext(:, :, :, iset)
                sphi_b_ext_set => sphi_b_ext(:, :, :, jset)
 
+               nsgfl1_a(la_min(iset):la_max(iset)) => nsgfl_a(la_min(iset):la_max(iset), iset)
+               nsgfl1_b(lb_min(jset):lb_max(jset)) => nsgfl_b(lb_min(jset):lb_max(jset), jset)
+
                L_B_i_start = RI_index_table(iatom, iset)
                L_B_i_end = RI_index_table(iatom, iset) + nsgfa(iset) - 1
 
@@ -615,6 +618,9 @@ CONTAINS
 
                   ALLOCATE (L_block(nsgfa(iset), nsgfc(kset)))
 
+                  nsgfl1_c(lc_min(kset):lc_max(kset)) => nsgfl_c(lc_min(kset):lc_max(kset), kset)
+                  nsgfl1_d(ld_min(lset):ld_max(lset)) => nsgfl_d(ld_min(lset):ld_max(lset), lset)
+
                   CALL coulomb4(private_lib, ra, rb, rc, rd, npgfa(iset), npgfb(jset), npgfc(kset), npgfd(lset), &
                                 la_min(iset), la_max(iset), lb_min(jset), lb_max(jset), &
                                 lc_min(kset), lc_max(kset), ld_min(lset), ld_max(lset), &
@@ -633,8 +639,9 @@ CONTAINS
                                 log10_pmax, log10_eps_schwarz, &
                                 tmp_R_1, tmp_R_2, tmp_screen_pgf1, tmp_screen_pgf2, &
                                 pgf_list_ij, pgf_list_kl, pgf_product_list, &
-                                nsgfl_a(:, iset), nsgfl_b(:, jset), &
-                                nsgfl_c(:, kset), nsgfl_d(:, lset), &
+                                nsgfl1_a, nsgfl1_b, nsgfl1_c, nsgfl1_d, &
+                                !nsgfl_a(:, iset), nsgfl_b(:, jset), &
+                                !nsgfl_c(:, kset), nsgfl_d(:, lset), &
                                 sphi_a_ext_set, &
                                 sphi_b_ext_set, &
                                 sphi_c_ext_set, &
@@ -773,6 +780,9 @@ CONTAINS
             sphi_a_ext_set => sphi_a_ext(:, :, :, iset)
             sphi_b_ext_set => sphi_b_ext(:, :, :, jset)
 
+            nsgfl1_a(la_min(iset):la_max(iset)) => nsgfl_a(la_min(iset):la_max(iset), iset)
+            nsgfl1_b(lb_min(jset):lb_max(jset)) => nsgfl_b(lb_min(jset):lb_max(jset), jset)
+
             L_B_i_start = RI_index_table(iatom, iset)
             L_B_i_end = RI_index_table(iatom, iset) + nsgfa(iset) - 1
 
@@ -842,6 +852,9 @@ CONTAINS
 
                   max_contraction_val = max_contraction(kset, katom)*max_contraction(lset, latom)
 
+                  nsgfl1_c(lc_min(kset):lc_max(kset)) => nsgfl_c(lc_min(kset):lc_max(kset), kset)
+                  nsgfl1_d(ld_min(lset):ld_max(lset)) => nsgfl_d(ld_min(lset):ld_max(lset), lset)
+
                   CALL coulomb4(private_lib, ra, rb, rc, rd, npgfa(iset), npgfb(jset), npgfc(kset), npgfd(lset), &
                                 la_min(iset), la_max(iset), lb_min(jset), lb_max(jset), &
                                 lc_min(kset), lc_max(kset), ld_min(lset), ld_max(lset), &
@@ -860,8 +873,9 @@ CONTAINS
                                 log10_pmax, log10_eps_schwarz, &
                                 tmp_R_1, tmp_R_2, tmp_screen_pgf1, tmp_screen_pgf2, &
                                 pgf_list_ij, pgf_list_kl, pgf_product_list, &
-                                nsgfl_a(:, iset), nsgfl_b(:, jset), &
-                                nsgfl_c(:, kset), nsgfl_d(:, lset), &
+                                nsgfl1_a, nsgfl1_b, nsgfl1_c, nsgfl1_d, &
+                                !nsgfl_a(:, iset), nsgfl_b(:, jset), &
+                                !nsgfl_c(:, kset), nsgfl_d(:, lset), &
                                 sphi_a_ext_set, &
                                 sphi_b_ext_set, &
                                 sphi_c_ext_set, &
@@ -1156,10 +1170,12 @@ CONTAINS
       !! are initialized
 
       IF (.NOT. shm_master_x_data%screen_funct_is_initialized) THEN
-         CALL calc_pair_dist_radii(qs_env, basis_parameter, &
+         !CALL calc_pair_dist_radii(qs_env, basis_parameter, &
+         CALL calc_pair_dist_radii(basis_parameter, &
                                    shm_master_x_data%pair_dist_radii_pgf, max_set, max_pgf, eps_schwarz, &
                                    n_threads, i_thread)
-         CALL calc_screening_functions(qs_env, basis_parameter, private_lib, shm_master_x_data%potential_parameter, &
+         !CALL calc_screening_functions(qs_env, basis_parameter, private_lib, shm_master_x_data%potential_parameter, &
+         CALL calc_screening_functions(basis_parameter, private_lib, shm_master_x_data%potential_parameter, &
                                        shm_master_x_data%screen_funct_coeffs_set, &
                                        shm_master_x_data%screen_funct_coeffs_kind, &
                                        shm_master_x_data%screen_funct_coeffs_pgf, &

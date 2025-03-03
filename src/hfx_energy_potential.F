@@ -38,7 +38,10 @@ MODULE hfx_energy_potential
    USE gamma, ONLY: init_md_ftable
    USE hfx_communication, ONLY: distribute_ks_matrix, &
                                 get_atomic_block_maps, &
-                                get_full_density
+                                get_full_density, &
+                                get_split_atomic_block_maps, &
+                                get_split_full_density, &
+                                distribute_split_ks_matrix
    USE hfx_compression_methods, ONLY: hfx_add_mult_cache_elements, &
                                       hfx_add_single_cache_element, &
                                       hfx_decompress_first_cache, &
@@ -114,7 +117,7 @@ MODULE hfx_energy_potential
    PUBLIC ::  integrate_four_center, coulomb4
 
    CHARACTER(len=*), PARAMETER, PRIVATE :: moduleN = 'hfx_energy_potential'
-
+LOGICAL, PARAMETER, PRIVATE :: sc_debug = .FALSE.
 !***
 
 CONTAINS
@@ -188,12 +191,14 @@ CONTAINS
       INTEGER(int_8) :: stor_count_max_val, storage_counter_integrals, subtr_size_mb, tmp_block, &
                         tmp_i8(8)
       INTEGER(int_8), ALLOCATABLE, DIMENSION(:)          :: tmp_task_list_cost
-      INTEGER, ALLOCATABLE, DIMENSION(:)                 :: kind_of, last_sgf_global, nimages, &
+      INTEGER, ALLOCATABLE, DIMENSION(:)                 :: kind_of, kind_of_merged, last_sgf_global, nimages, &
                                                             tmp_index, first_set_of_atom
-      INTEGER, DIMENSION(:), POINTER :: la_max, la_min, lb_max, lb_min, lc_max, lc_min, ld_max, &
-                                        ld_min, npgfa, npgfb, npgfc, npgfd, nsgfa, nsgfb, nsgfc, nsgfd, shm_block_offset
-      INTEGER, DIMENSION(:, :), POINTER :: first_sgfb, nsgfl_a, nsgfl_b, nsgfl_c, nsgfl_d, &
-                                           offset_ac_set, offset_ad_set, offset_bc_set, offset_bd_set, shm_atomic_block_offset
+      INTEGER, CONTIGUOUS, DIMENSION(:), POINTER         :: la_max, la_min, lb_max, lb_min, lc_max, lc_min, ld_max, &
+                                                            ld_min, npgfa, npgfb, npgfc, npgfd, nsgfa, nsgfb, nsgfc, nsgfd, &
+                                                            nsgfl1_a, nsgfl1_b, nsgfl1_c, nsgfl1_d, shm_block_offset
+      INTEGER, CONTIGUOUS, DIMENSION(:, :), POINTER      :: first_sgfb, nsgfl_a, nsgfl_b, nsgfl_c, nsgfl_d, &
+                                                            offset_ac_set, offset_ad_set, offset_bc_set, offset_bd_set, &
+                                                            shm_atomic_block_offset
       INTEGER, DIMENSION(:, :), POINTER, SAVE            :: shm_is_assoc_atomic_block
       INTEGER, DIMENSION(:, :, :), POINTER               :: cell_to_index
       INTEGER, DIMENSION(:, :, :, :), POINTER            :: shm_set_offset
@@ -216,11 +221,11 @@ CONTAINS
                                             full_ks_beta, max_contraction, ptr_p_1, ptr_p_2, ptr_p_3, ptr_p_4, shm_pmax_atom, &
                                             shm_pmax_block, sphi_b, zeta, zetb, zetc, zetd, &
                                             full_ks_alpha_from_gpu, full_ks_beta_from_gpu
-      REAL(dp), DIMENSION(:, :, :), POINTER              :: sphi_a_ext_set, sphi_b_ext_set, &
+      REAL(dp), DIMENSION(:, :, :), POINTER  :: sphi_a_ext_set, sphi_b_ext_set, &
                                                             sphi_c_ext_set, sphi_d_ext_set
-      REAL(dp), DIMENSION(:, :, :, :), POINTER           :: sphi_a_ext, sphi_b_ext, sphi_c_ext, &
+      REAL(dp), CONTIGUOUS, DIMENSION(:, :, :, :), POINTER :: sphi_a_ext, sphi_b_ext, sphi_c_ext, &
                                                             sphi_d_ext
-      REAL(dp), DIMENSION(:, :, :), POINTER             :: gcc
+      REAL(dp), DIMENSION(:, :, :), POINTER              :: gcc
       REAL(KIND=dp)                                      :: coeffs_kind_max0
       TYPE(atomic_kind_type), DIMENSION(:), POINTER      :: atomic_kind_set
       TYPE(cell_type), POINTER                           :: cell
@@ -229,7 +234,7 @@ CONTAINS
       TYPE(dbcsr_p_type), DIMENSION(:), POINTER          :: matrix_ks_aux_fit_hfx
       TYPE(dft_control_type), POINTER                    :: dft_control
       TYPE(hfx_basis_info_type), POINTER                 :: basis_info
-      TYPE(hfx_basis_type), DIMENSION(:), POINTER        :: basis_parameter
+      TYPE(hfx_basis_type), CONTIGUOUS, DIMENSION(:), POINTER        :: basis_parameter
       TYPE(hfx_cache_type), DIMENSION(:), POINTER        :: integral_caches, integral_caches_disk
       TYPE(hfx_cache_type), POINTER                      :: maxval_cache, maxval_cache_disk
       TYPE(hfx_container_type), DIMENSION(:), POINTER    :: integral_containers, &
@@ -301,7 +306,6 @@ CONTAINS
       END IF
 
       CALL get_qs_env(qs_env=qs_env, atomic_kind_set=atomic_kind_set, cell=cell)
-
       NULLIFY (cell_to_index)
       CALL get_qs_env(qs_env=qs_env, do_kpoints=do_kpoints)
       IF (do_kpoints) THEN
@@ -311,10 +315,16 @@ CONTAINS
       END IF
 
       !! Calculate l_max used in fgamma , because init_md_ftable is definitely not thread safe
-      nkind = SIZE(atomic_kind_set, 1)
+      IF (x_data(1, 1)%do_split_basis) THEN
+         nkind = SIZE(x_data(1, 1)%split_atomic_kind_set, 1)
+         basis_parameter => x_data(1, 1)%split_basis_parameter
+      ELSE
+         nkind = SIZE(atomic_kind_set, 1)
+         basis_parameter => x_data(1, 1)%basis_parameter
+      END IF
       l_max = 0
       DO ikind = 1, nkind
-         l_max = MAX(l_max, MAXVAL(x_data(1, 1)%basis_parameter(ikind)%lmax))
+         l_max = MAX(l_max, MAXVAL(basis_parameter(ikind)%lmax))
       END DO
       l_max = 4*l_max
       CALL init_md_ftable(l_max)
@@ -409,7 +419,7 @@ CONTAINS
 !$OMP         basis_parameter,basis_info,treat_lsd_in_core,ncpu,n_processes,neris_total,neris_incore,&
 !$OMP         neris_disk,neris_onthefly,mem_eris,mem_eris_disk,mem_max_val,compression_factor,&
 !$OMP         compression_factor_disk,nprim_ints,neris_tmp,max_val_memory,max_am,do_p_screening,&
-!$OMP         max_set,particle_set,atomic_kind_set,natom,kind_of,ncos_max,nsgf_max,ikind,&
+!$OMP         max_set,particle_set,atomic_kind_set,natom,kind_of,kind_of_merged,ncos_max,nsgf_max,ikind,&
 !$OMP         nseta,npgfa,la_max,nsgfa,primitive_integrals,pbd_buf,pbc_buf,pad_buf,pac_buf,kbd_buf,kbc_buf,&
 !$OMP         kad_buf,kac_buf,ee_work,ee_work2,ee_buffer1,ee_buffer2,ee_primitives_tmp,nspins,max_contraction,&
 !$OMP         max_pgf,jkind,lb_max,nsetb,npgfb,first_sgfb,sphi_b,nsgfb,ncob,sgfb,nneighbors,pgf_list_ij,pgf_list_kl,&
@@ -435,7 +445,7 @@ CONTAINS
 !$OMP         ene_x_bb_diag,act_atomic_block_offset,act_set_offset,j,handle_dist_ks,tmp_i8,tmp_i4,dft_control,&
 !$OMP         etmp,nkimages,img,bin,eps_scaling_str,eps_schwarz_min_str, &
 !$OMP         i,inla,nla,gcc,first_set_of_atom,max_abs_delta_KS, screened, &
-!$OMP         iatom_set,jatom_set,katom_set,latom_set,use_only_alpha_spin)
+!$OMP         iatom_set,jatom_set,katom_set,latom_set,use_only_alpha_spin,nsgfl1_a,nsgfl1_b,nsgfl1_c,nsgfl1_d)
 
       ln_10 = LOG(10.0_dp)
       i_thread = 0
@@ -466,8 +476,13 @@ CONTAINS
       cache_size = memory_parameter%cache_size
       bits_max_val = memory_parameter%bits_max_val
 
-      basis_parameter => actual_x_data%basis_parameter
-      basis_info => actual_x_data%basis_info
+      IF (actual_x_data%do_split_basis) THEN
+         basis_parameter => actual_x_data%split_basis_parameter
+         basis_info => actual_x_data%split_basis_info
+      ELSE
+         basis_parameter => actual_x_data%basis_parameter
+         basis_info => actual_x_data%basis_info
+      END IF
 
       treat_lsd_in_core = general_parameter%treat_lsd_in_core
 
@@ -496,9 +511,9 @@ CONTAINS
          if ( general_parameter%hfx_library == hfx_library_is_libint .and. &
               cp2k_was_compiled_with_cuda_offload .and.                    &
               cp2k_was_compiled_with_libgint                       ) then
-            WRITE(UNIT=iw,*) " HFX | You are computing the HFX on CPU on cp2k compiled with cuda support"
-            WRITE(UNIT=iw,*) " HFX | Consider switching to HFX on GPU using the command"
-            WRITE(UNIT=iw,*) " HFX | 'HFX_LIBRARY libGint' in the HF section of the input file"
+            WRITE(UNIT=iw,FMT=*) " HFX | You are computing the HFX on CPU on cp2k compiled with cuda support"
+            WRITE(UNIT=iw,FMT=*) " HFX | Consider switching to HFX on GPU using the command"
+            WRITE(UNIT=iw,FMT=*) " HFX | 'HFX_LIBRARY libGint' in the HF section of the input file"
          end if
       end if
 !$OMP END MASTER
@@ -525,6 +540,11 @@ CONTAINS
                       particle_set=particle_set, &
                       dft_control=dft_control)
       IF (dft_control%do_admm) CALL get_admm_env(qs_env%admm_env, matrix_ks_aux_fit_hfx=matrix_ks_aux_fit_hfx)
+      IF (actual_x_data%do_split_basis) THEN
+         CALL get_atomic_kind_set(atomic_kind_set=atomic_kind_set, kind_of=kind_of_merged)
+         atomic_kind_set => actual_x_data%split_atomic_kind_set
+         particle_set => actual_x_data%split_particle_set
+      END IF
 
       do_p_screening = screening_parameter%do_initial_p_screening
       ! Special treatment for MP2 with initial density screening
@@ -621,15 +641,28 @@ CONTAINS
 !$OMP MASTER
       !! Calculate helper array that stores if a certain atomic pair is associated in the KS matrix
       IF (my_geo_change) THEN
-         CALL get_atomic_block_maps(ks_matrix(1, 1)%matrix, basis_parameter, kind_of, &
-                                    shm_master_x_data%is_assoc_atomic_block, &
-                                    shm_master_x_data%number_of_p_entries, &
-                                    para_env, &
-                                    shm_master_x_data%atomic_block_offset, &
-                                    shm_master_x_data%set_offset, &
-                                    shm_master_x_data%block_offset, &
-                                    shm_master_x_data%map_atoms_to_cpus, &
-                                    nkind)
+         IF (shm_master_x_data%do_split_basis) THEN
+            CALL get_split_atomic_block_maps(ks_matrix(1, 1)%matrix, basis_parameter, kind_of, kind_of_merged, &
+                                             shm_master_x_data%n_split_sets_per_kind, shm_master_x_data%split_kind_offset, &
+                                             shm_master_x_data%n_split_sets_per_atom, shm_master_x_data%split_atom_offset, &
+                                             shm_master_x_data%is_assoc_atomic_block, &
+                                             shm_master_x_data%number_of_p_entries, &
+                                             para_env, &
+                                             shm_master_x_data%atomic_block_offset, &
+                                             shm_master_x_data%set_offset, &
+                                             shm_master_x_data%block_offset, &
+                                             shm_master_x_data%map_atoms_to_cpus)
+         ELSE
+            CALL get_atomic_block_maps(ks_matrix(1, 1)%matrix, basis_parameter, kind_of, &
+                                       shm_master_x_data%is_assoc_atomic_block, &
+                                       shm_master_x_data%number_of_p_entries, &
+                                       para_env, &
+                                       shm_master_x_data%atomic_block_offset, &
+                                       shm_master_x_data%set_offset, &
+                                       shm_master_x_data%block_offset, &
+                                       shm_master_x_data%map_atoms_to_cpus, &
+                                       nkind)
+         END IF
 
          shm_is_assoc_atomic_block => shm_master_x_data%is_assoc_atomic_block
 
@@ -782,19 +815,37 @@ CONTAINS
       ALLOCATE (full_density_alpha(shm_block_offset(ncpu + 1), nkimages))
       IF (.NOT. treat_lsd_in_core .OR. nspins == 1) THEN
          CALL timeset(routineN//"_getP", handle_getP)
-         DO img = 1, nkimages
-            CALL get_full_density(para_env, full_density_alpha(:, img), rho_ao(ispin, img)%matrix, shm_number_of_p_entries, &
-                                  shm_master_x_data%block_offset, &
-                                  kind_of, basis_parameter, get_max_vals_spin=.FALSE., antisymmetric=is_anti_symmetric)
-         END DO
-
-         IF (nspins == 2) THEN
-            ALLOCATE (full_density_beta(shm_block_offset(ncpu + 1), nkimages))
+         IF (shm_master_x_data%do_split_basis) THEN
             DO img = 1, nkimages
-               CALL get_full_density(para_env, full_density_beta(:, img), rho_ao(2, img)%matrix, shm_number_of_p_entries, &
+               CALL get_split_full_density(para_env, full_density_alpha(:, img), rho_ao(ispin, img)%matrix, &
+                                           shm_number_of_p_entries, shm_master_x_data%block_offset, kind_of_merged, &
+                                           shm_master_x_data%n_split_sets_per_kind, shm_master_x_data%split_kind_offset, &
+                                           basis_parameter, get_max_vals_spin=.FALSE., antisymmetric=is_anti_symmetric)
+            END DO
+         ELSE
+            DO img = 1, nkimages
+               CALL get_full_density(para_env, full_density_alpha(:, img), rho_ao(ispin, img)%matrix, shm_number_of_p_entries, &
                                      shm_master_x_data%block_offset, &
                                      kind_of, basis_parameter, get_max_vals_spin=.FALSE., antisymmetric=is_anti_symmetric)
             END DO
+         END IF
+
+         IF (nspins == 2) THEN
+            ALLOCATE (full_density_beta(shm_block_offset(ncpu + 1), nkimages))
+            IF (shm_master_x_data%do_split_basis) THEN
+               DO img = 1, nkimages
+                  CALL get_split_full_density(para_env, full_density_beta(:, img), rho_ao(2, img)%matrix, &
+                                              shm_number_of_p_entries, shm_master_x_data%block_offset, kind_of_merged, &
+                                              shm_master_x_data%n_split_sets_per_kind, shm_master_x_data%split_kind_offset, &
+                                              basis_parameter, get_max_vals_spin=.FALSE., antisymmetric=is_anti_symmetric)
+               END DO
+            ELSE
+               DO img = 1, nkimages
+                  CALL get_full_density(para_env, full_density_beta(:, img), rho_ao(2, img)%matrix, shm_number_of_p_entries, &
+                                        shm_master_x_data%block_offset, &
+                                        kind_of, basis_parameter, get_max_vals_spin=.FALSE., antisymmetric=is_anti_symmetric)
+               END DO
+            END IF
          END IF
          CALL timestop(handle_getP)
 
@@ -805,7 +856,7 @@ CONTAINS
          IF (do_p_screening) THEN
             shm_initial_p => shm_master_x_data%initial_p
             shm_pmax_atom => shm_master_x_data%pmax_atom
-            IF (my_geo_change) THEN
+            IF (my_geo_change) THEN ! SC TODO: it seems to work but check it actually works correctly with split_basis
                CALL update_pmax_mat(shm_master_x_data%initial_p, &
                                     shm_master_x_data%map_atom_to_kind_atom, &
                                     shm_master_x_data%set_offset, &
@@ -817,40 +868,62 @@ CONTAINS
             END IF
          END IF
       ELSE
-         IF (do_p_screening) THEN
+         IF (do_p_screening) THEN ! SC TODO: check it works correctly with split_basis
             CALL timeset(routineN//"_getP", handle_getP)
-            DO img = 1, nkimages
-               CALL get_full_density(para_env, full_density_alpha(:, img), rho_ao(1, img)%matrix, shm_number_of_p_entries, &
-                                     shm_master_x_data%block_offset, &
-                                     kind_of, basis_parameter, get_max_vals_spin=.TRUE., &
-                                     rho_beta=rho_ao(2, img)%matrix, antisymmetric=is_anti_symmetric)
-            END DO
+            IF (shm_master_x_data%do_split_basis) THEN
+               DO img = 1, nkimages
+                  CALL get_split_full_density(para_env, full_density_alpha(:, img), rho_ao(1, img)%matrix, &
+                                              shm_number_of_p_entries, shm_master_x_data%block_offset, kind_of_merged, &
+                                              shm_master_x_data%n_split_sets_per_kind, shm_master_x_data%split_kind_offset, &
+                                              basis_parameter, get_max_vals_spin=.TRUE., &
+                                              rho_beta=rho_ao(2, img)%matrix, antisymmetric=is_anti_symmetric)
+               END DO
+            ELSE
+               DO img = 1, nkimages
+                  CALL get_full_density(para_env, full_density_alpha(:, img), rho_ao(1, img)%matrix, shm_number_of_p_entries, &
+                                        shm_master_x_data%block_offset, &
+                                        kind_of, basis_parameter, get_max_vals_spin=.TRUE., &
+                                        rho_beta=rho_ao(2, img)%matrix, antisymmetric=is_anti_symmetric)
+               END DO
+            END IF
             CALL timestop(handle_getP)
 
             !! Calculate the max values of the density matrix actual_pmax stores the data from the actual density matrix
             !! and x_data%initial_p stores the same for the initial guess. The initial guess is updated only in the case of
             !! a changed geometry
             NULLIFY (shm_initial_p)
-            shm_initial_p => actual_x_data%initial_p
-            shm_pmax_atom => shm_master_x_data%pmax_atom
-            IF (my_geo_change) THEN
-               CALL update_pmax_mat(shm_master_x_data%initial_p, &
-                                    shm_master_x_data%map_atom_to_kind_atom, &
-                                    shm_master_x_data%set_offset, &
-                                    shm_master_x_data%atomic_block_offset, &
-                                    shm_pmax_atom, &
-                                    full_density_alpha, full_density_beta, &
-                                    natom, kind_of, basis_parameter, &
-                                    nkind, shm_master_x_data%is_assoc_atomic_block)
+            IF (do_p_screening) THEN ! SC [potential bug fix]: added missing IF-statement
+               shm_initial_p => actual_x_data%initial_p
+               shm_pmax_atom => shm_master_x_data%pmax_atom
+               IF (my_geo_change) THEN
+                  CALL update_pmax_mat(shm_master_x_data%initial_p, &
+                                       shm_master_x_data%map_atom_to_kind_atom, &
+                                       shm_master_x_data%set_offset, &
+                                       shm_master_x_data%atomic_block_offset, &
+                                       shm_pmax_atom, &
+                                       full_density_alpha, full_density_beta, &
+                                       natom, kind_of, basis_parameter, &
+                                       nkind, shm_master_x_data%is_assoc_atomic_block)
+               END IF
             END IF
          END IF
          ! ** Now get the density(ispin)
-         DO img = 1, nkimages
-            CALL get_full_density(para_env, full_density_alpha(:, img), rho_ao(ispin, img)%matrix, shm_number_of_p_entries, &
-                                  shm_master_x_data%block_offset, &
-                                  kind_of, basis_parameter, get_max_vals_spin=.FALSE., &
-                                  antisymmetric=is_anti_symmetric)
-         END DO
+         IF (shm_master_x_data%do_split_basis) THEN
+            DO img = 1, nkimages
+               CALL get_split_full_density(para_env, full_density_alpha(:, img), rho_ao(ispin, img)%matrix, &
+                                           shm_number_of_p_entries, shm_master_x_data%block_offset, kind_of_merged, &
+                                           shm_master_x_data%n_split_sets_per_kind, shm_master_x_data%split_kind_offset, &
+                                           basis_parameter, get_max_vals_spin=.FALSE., &
+                                           antisymmetric=is_anti_symmetric)
+            END DO
+         ELSE
+            DO img = 1, nkimages
+               CALL get_full_density(para_env, full_density_alpha(:, img), rho_ao(ispin, img)%matrix, shm_number_of_p_entries, &
+                                     shm_master_x_data%block_offset, &
+                                     kind_of, basis_parameter, get_max_vals_spin=.FALSE., &
+                                     antisymmetric=is_anti_symmetric)
+            END DO
+         END IF
       END IF
 
       NULLIFY (full_ks_alpha, full_ks_beta)
@@ -875,11 +948,13 @@ CONTAINS
       !! are initialized
 
       IF (.NOT. shm_master_x_data%screen_funct_is_initialized) THEN
-         CALL calc_pair_dist_radii(qs_env, basis_parameter, &
+         !CALL calc_pair_dist_radii(qs_env, basis_parameter, &
+         CALL calc_pair_dist_radii(basis_parameter, &
                                    shm_master_x_data%pair_dist_radii_pgf, max_set, max_pgf, eps_schwarz, &
                                    n_threads, i_thread)
 !$OMP BARRIER
-         CALL calc_screening_functions(qs_env, basis_parameter, private_lib, shm_master_x_data%potential_parameter, &
+         !CALL calc_screening_functions(qs_env, basis_parameter, private_lib, shm_master_x_data%potential_parameter, &
+         CALL calc_screening_functions(basis_parameter, private_lib, shm_master_x_data%potential_parameter, &
                                        shm_master_x_data%screen_funct_coeffs_set, &
                                        shm_master_x_data%screen_funct_coeffs_kind, &
                                        shm_master_x_data%screen_funct_coeffs_pgf, &
@@ -1221,6 +1296,19 @@ CONTAINS
 !$OMP MASTER
          CALL timeset(routineN//"_bin", handle_bin)
 !$OMP END MASTER
+!SC DEBUG
+IF (sc_debug) THEN
+   WRITE(6,'(A)') "[SC DEBUG]"
+   DO ikind = 1,nkind
+      WRITE(6,'(5X,A,I3,A,I3)') "ikind = ", ikind, " nset = ", basis_parameter(ikind)%nset
+      DO jkind = basis_parameter(ikind)%lmin(1), basis_parameter(ikind)%lmax(1)
+         WRITE(6,'(A,I3,A,I3,A,I10)') "ikind = ", ikind, ' l = ', jkind, ' nsgfl = ',  basis_parameter(ikind)%nsgfl(jkind, 1)
+      END DO
+   END DO
+   WRITE(6,*)
+   FLUSH(6)
+END IF
+!SC DEBUG
 
          bintime_start = m_walltime()
          my_istart = distribution_energy%istart
@@ -1288,10 +1376,10 @@ CONTAINS
                nseta = basis_parameter(ikind)%nset
                zeta => basis_parameter(ikind)%zet
                nsgfa => basis_parameter(ikind)%nsgf
-               sphi_a_ext => basis_parameter(ikind)%sphi_ext(:, :, :, :)
+               sphi_a_ext => basis_parameter(ikind)%sphi_ext!(:, :, :, :)
                nsgfl_a => basis_parameter(ikind)%nsgfl
                sphi_a_u1 = UBOUND(sphi_a_ext, 1)
-               sphi_a_u2 = UBOUND(sphi_a_ext, 2)
+               !sphi_a_u2 = UBOUND(sphi_a_ext, 2)
                sphi_a_u3 = UBOUND(sphi_a_ext, 3)
 
                lb_max => basis_parameter(jkind)%lmax
@@ -1300,10 +1388,10 @@ CONTAINS
                nsetb = basis_parameter(jkind)%nset
                zetb => basis_parameter(jkind)%zet
                nsgfb => basis_parameter(jkind)%nsgf
-               sphi_b_ext => basis_parameter(jkind)%sphi_ext(:, :, :, :)
+               sphi_b_ext => basis_parameter(jkind)%sphi_ext!(:, :, :, :)
                nsgfl_b => basis_parameter(jkind)%nsgfl
                sphi_b_u1 = UBOUND(sphi_b_ext, 1)
-               sphi_b_u2 = UBOUND(sphi_b_ext, 2)
+               !sphi_b_u2 = UBOUND(sphi_b_ext, 2)
                sphi_b_u3 = UBOUND(sphi_b_ext, 3)
 
                DO i_list_kl = 1, list_kl%n_element
@@ -1356,10 +1444,10 @@ CONTAINS
                   npgfc => basis_parameter(kkind)%npgf
                   zetc => basis_parameter(kkind)%zet
                   nsgfc => basis_parameter(kkind)%nsgf
-                  sphi_c_ext => basis_parameter(kkind)%sphi_ext(:, :, :, :)
+                  sphi_c_ext => basis_parameter(kkind)%sphi_ext!(:, :, :, :)
                   nsgfl_c => basis_parameter(kkind)%nsgfl
                   sphi_c_u1 = UBOUND(sphi_c_ext, 1)
-                  sphi_c_u2 = UBOUND(sphi_c_ext, 2)
+                  !sphi_c_u2 = UBOUND(sphi_c_ext, 2)
                   sphi_c_u3 = UBOUND(sphi_c_ext, 3)
 
                   ld_max => basis_parameter(lkind)%lmax
@@ -1367,10 +1455,10 @@ CONTAINS
                   npgfd => basis_parameter(lkind)%npgf
                   zetd => basis_parameter(lkind)%zet
                   nsgfd => basis_parameter(lkind)%nsgf
-                  sphi_d_ext => basis_parameter(lkind)%sphi_ext(:, :, :, :)
+                  sphi_d_ext => basis_parameter(lkind)%sphi_ext!(:, :, :, :)
                   nsgfl_d => basis_parameter(lkind)%nsgfl
                   sphi_d_u1 = UBOUND(sphi_d_ext, 1)
-                  sphi_d_u2 = UBOUND(sphi_d_ext, 2)
+                  !sphi_d_u2 = UBOUND(sphi_d_ext, 2)
                   sphi_d_u3 = UBOUND(sphi_d_ext, 3)
 
                   ! Note: shm_atomic_block_offset is already symmetric
@@ -1523,8 +1611,19 @@ CONTAINS
 
                      IF (max_val1 + screen_kind_kl + pmax_atom < log10_eps_schwarz) CYCLE
 
-                     sphi_a_ext_set => sphi_a_ext(:, :, :, iset)
-                     sphi_b_ext_set => sphi_b_ext(:, :, :, jset)
+                     !sphi_a_ext_set => sphi_a_ext(:, :, :, iset)
+                     !sphi_b_ext_set => sphi_b_ext(:, :, :, jset)
+                     sphi_a_ext_set => sphi_a_ext(:, la_min(iset):la_max(iset), :, iset)
+                     sphi_b_ext_set => sphi_b_ext(:, lb_min(jset):lb_max(jset), :, jset)
+                     sphi_a_u2 = UBOUND(sphi_a_ext_set, 2)
+                     sphi_b_u2 = UBOUND(sphi_b_ext_set, 2)
+                     !sphi_a_ext_set(1:sphi_a_u1, la_min(iset):la_max(iset), 1:sphi_a_u3) => &
+                     !   sphi_a_ext(1:sphi_a_u1, la_min(iset):la_max(iset), 1:sphi_a_u3, iset)
+                     !sphi_b_ext_set(1:sphi_b_u1, lb_min(jset):lb_max(jset), 1:sphi_b_u3) => &
+                     !   sphi_b_ext(1:sphi_b_u1, lb_min(jset):lb_max(jset), 1:sphi_b_u3, jset)
+                     nsgfl1_a(la_min(iset):la_max(iset)) => nsgfl_a(la_min(iset):la_max(iset), iset)
+                     nsgfl1_b(lb_min(jset):lb_max(jset)) => nsgfl_b(lb_min(jset):lb_max(jset), jset)
+
                      DO i_set_list_kl = i_set_list_kl_start, i_set_list_kl_stop
                         kset = set_list_kl(i_set_list_kl)%pair(1)
                         lset = set_list_kl(i_set_list_kl)%pair(2)
@@ -1535,8 +1634,16 @@ CONTAINS
 
                         !! Near field screening
                         IF (max_val2 + pmax_atom < log10_eps_schwarz) CYCLE
-                        sphi_c_ext_set => sphi_c_ext(:, :, :, kset)
-                        sphi_d_ext_set => sphi_d_ext(:, :, :, lset)
+                        !sphi_c_ext_set => sphi_c_ext(:, :, :, kset)
+                        !sphi_d_ext_set => sphi_d_ext(:, :, :, lset)
+                        sphi_c_ext_set => sphi_c_ext(:, lc_min(kset):lc_max(kset), :, kset)
+                        sphi_d_ext_set => sphi_d_ext(:, ld_min(lset):ld_max(lset), :, lset)
+                        sphi_c_u2 = UBOUND(sphi_c_ext_set, 2)
+                        sphi_d_u2 = UBOUND(sphi_d_ext_set, 2)
+                        !sphi_c_ext_set(1:sphi_c_u1, lc_min(kset):lc_max(kset), 1:sphi_c_u3) => &
+                        !   sphi_c_ext(1:sphi_c_u1, lc_min(kset):lc_max(kset), 1:sphi_c_u3, kset)
+                        !sphi_d_ext_set(1:sphi_d_u1, ld_min(lset):ld_max(lset), 1:sphi_d_u3) => &
+                        !   sphi_d_ext(1:sphi_c_u1, lc_min(kset):lc_max(kset), 1:sphi_c_u3, lset)
                         !! get max_vals if we screen on initial density
                         IF (do_p_screening) THEN
                            CALL get_pmax_val(ptr_p_1, ptr_p_2, ptr_p_3, ptr_p_4, &
@@ -1659,6 +1766,12 @@ CONTAINS
                               tmp_screen_pgf1 => screen_coeffs_pgf(:, :, jset, iset, jkind, ikind)
                               tmp_screen_pgf2 => screen_coeffs_pgf(:, :, lset, kset, lkind, kkind)
 
+IF (sc_debug) THEN
+WRITE(6,'(A,4I5,A,I10)') "[i/j/k/latom] = ", iatom, jatom, katom, latom, " max ", nsgf_max**4 ! SC DEBUG
+FLUSH(6) ! SC DEBUG
+END IF
+                              nsgfl1_c(lc_min(kset):lc_max(kset)) => nsgfl_c(lc_min(kset):lc_max(kset), kset)
+                              nsgfl1_d(ld_min(lset):ld_max(lset)) => nsgfl_d(ld_min(lset):ld_max(lset), lset)
                               CALL coulomb4(private_lib, ra, rb, rc, rd, npgfa(iset), npgfb(jset), npgfc(kset), npgfd(lset), &
                                             la_min(iset), la_max(iset), lb_min(jset), lb_max(jset), &
                                             lc_min(kset), lc_max(kset), ld_min(lset), ld_max(lset), &
@@ -1677,8 +1790,9 @@ CONTAINS
                                             log10_pmax, log10_eps_schwarz, &
                                             tmp_R_1, tmp_R_2, tmp_screen_pgf1, tmp_screen_pgf2, &
                                             pgf_list_ij, pgf_list_kl, pgf_product_list, &
-                                            nsgfl_a(:, iset), nsgfl_b(:, jset), &
-                                            nsgfl_c(:, kset), nsgfl_d(:, lset), &
+                                            nsgfl1_a, nsgfl1_b, nsgfl1_c, nsgfl1_d, &
+                                            !nsgfl_a(:, iset), nsgfl_b(:, jset), &
+                                            !nsgfl_c(:, kset), nsgfl_d(:, lset), &
                                             sphi_a_ext_set, &
                                             sphi_b_ext_set, &
                                             sphi_c_ext_set, &
@@ -2089,24 +2203,44 @@ CONTAINS
       CALL para_env%sync()
       afac = 1.0_dp
       IF (is_anti_symmetric) afac = 0._dp
+!CPABORT("integrate_four_center OK")
       IF (distribute_fock_matrix) THEN
          !! Distribute the current KS-matrix to all the processes
          CALL timeset(routineN//"_dist_KS", handle_dist_ks)
-         DO img = 1, nkimages
-            CALL distribute_ks_matrix(para_env, full_ks_alpha(:, img), ks_matrix(ispin, img)%matrix, shm_number_of_p_entries, &
-                                      shm_block_offset, kind_of, basis_parameter, &
-                                      off_diag_fac=0.5_dp, diag_fac=afac)
-         END DO
+         IF (shm_master_x_data%do_split_basis) THEN
+            DO img = 1, nkimages
+               CALL distribute_split_ks_matrix(para_env, full_ks_alpha(:, img), ks_matrix(ispin, img)%matrix, &
+                                         shm_number_of_p_entries, shm_block_offset, kind_of_merged, &
+                                         shm_master_x_data%n_split_sets_per_kind, shm_master_x_data%split_kind_offset, &
+                                         basis_parameter, off_diag_fac=0.5_dp, diag_fac=afac)
+            END DO
+         ELSE
+            DO img = 1, nkimages
+               CALL distribute_ks_matrix(para_env, full_ks_alpha(:, img), ks_matrix(ispin, img)%matrix, &
+                                         shm_number_of_p_entries, shm_block_offset, kind_of, basis_parameter, &
+                                         off_diag_fac=0.5_dp, diag_fac=afac)
+            END DO
+         END IF
 
          NULLIFY (full_ks_alpha)
          DEALLOCATE (shm_master_x_data%full_ks_alpha)
          IF (.NOT. treat_lsd_in_core) THEN
             IF (nspins == 2) THEN
-               DO img = 1, nkimages
-                  CALL distribute_ks_matrix(para_env, full_ks_beta(:, img), ks_matrix(2, img)%matrix, shm_number_of_p_entries, &
-                                            shm_block_offset, kind_of, basis_parameter, &
-                                            off_diag_fac=0.5_dp, diag_fac=afac)
-               END DO
+               IF (shm_master_x_data%do_split_basis) THEN
+                  DO img = 1, nkimages
+                     CALL distribute_split_ks_matrix(para_env, full_ks_beta(:, img), ks_matrix(2, img)%matrix, &
+                                                     shm_number_of_p_entries, shm_block_offset, kind_of_merged, &
+                                                     shm_master_x_data%n_split_sets_per_kind, &
+                                                     shm_master_x_data%split_kind_offset, &
+                                                     basis_parameter, off_diag_fac=0.5_dp, diag_fac=afac)
+                  END DO
+               ELSE
+                  DO img = 1, nkimages
+                     CALL distribute_ks_matrix(para_env, full_ks_beta(:, img), ks_matrix(2, img)%matrix, shm_number_of_p_entries, &
+                                               shm_block_offset, kind_of, basis_parameter, &
+                                               off_diag_fac=0.5_dp, diag_fac=afac)
+                  END DO
+               END IF
                NULLIFY (full_ks_beta)
                DEALLOCATE (shm_master_x_data%full_ks_beta)
             END IF
@@ -2343,6 +2477,9 @@ CONTAINS
       DEALLOCATE (pgf_product_list)
 
       DEALLOCATE (max_contraction, kind_of)
+      IF (actual_x_data%do_split_basis) THEN
+         DEALLOCATE (kind_of_merged)
+      END IF
 
       DEALLOCATE (ee_work, ee_work2, ee_buffer1, ee_buffer2, ee_primitives_tmp)
 
@@ -2479,7 +2616,9 @@ CONTAINS
       TYPE(hfx_pgf_list), DIMENSION(*)                   :: pgf_list_ij, pgf_list_kl
       TYPE(hfx_pgf_product_list), ALLOCATABLE, &
          DIMENSION(:), INTENT(INOUT)                     :: pgf_product_list
-      INTEGER, DIMENSION(0:), INTENT(IN)                 :: nsgfl_a, nsgfl_b, nsgfl_c, nsgfl_d
+      !INTEGER, DIMENSION(0:), INTENT(IN)                 :: nsgfl_a, nsgfl_b, nsgfl_c, nsgfl_d
+      INTEGER, CONTIGUOUS, DIMENSION(:), POINTER, INTENT(IN)         :: nsgfl_a, nsgfl_b, nsgfl_c, nsgfl_d
+      !REAL(dp), DIMENSION(:,:,:), POINTER, INTENT(IN) :: sphi_a_ext, sphi_b_ext, sphi_c_ext, sphi_d_ext
       REAL(dp), INTENT(IN) :: sphi_a_ext(sphi_a_u1, sphi_a_u2, sphi_a_u3), &
                               sphi_b_ext(sphi_b_u1, sphi_b_u2, sphi_b_u3), sphi_c_ext(sphi_c_u1, sphi_c_u2, sphi_c_u3), &
                               sphi_d_ext(sphi_d_u1, sphi_d_u2, sphi_d_u3)
@@ -2508,6 +2647,10 @@ CONTAINS
       primitive_integrals = 0.0_dp
       max_l = la_max + lb_max + lc_max + ld_max
 
+IF (sc_debug) THEN
+WRITE(6,'(A,2I8)') "[DEB] nelements_ij, nelements_kl ", nelements_ij, nelements_kl
+FLUSH(6) ! SC DEBUG
+END IF
       DO list_ij = 1, nelements_ij
          ZetaInv = pgf_list_ij(list_ij)%ZetaInv
          ipgf = pgf_list_ij(list_ij)%ipgf
@@ -2547,6 +2690,12 @@ CONTAINS
                         nsod = nso(ld)
 
                         tmp_max = 0.0_dp
+IF (sc_debug) THEN
+!WRITE(6,'(A,4I8,3X,4I3,3X,4I3)') "[DEB] ", nsgfla,nsgflb,nsgflc,nsgfld,nsoa,nsob,nsoc,nsod,la,lb,lc,ld ! SC DEBUG
+WRITE(6,'(A,4I8,3X,4I3,3X,4I3,5X,I10)') "[DEB] ", nsgfla,nsgflb,nsgflc,nsgfld,nsoa,nsob,nsoc,nsod,la,lb,lc,ld,&
+            nsgfla*nsgflb*nsgflc*nsgfld*nsoa*nsob*nsoc*nsod ! SC DEBUG
+FLUSH(6) ! SC DEBUG
+END IF
                         CALL evaluate_eri(lib, nproducts, pgf_product_list, &
                                           la, lb, lc, ld, &
                                           ncoa, ncob, ncoc, ncod, &
@@ -2556,10 +2705,14 @@ CONTAINS
                                           neris_tmp, ZetaInv, EtaInv, &
                                           s_offset_a, s_offset_b, s_offset_c, s_offset_d, &
                                           nsgfla, nsgflb, nsgflc, nsgfld, nsoa, nsob, nsoc, nsod, &
-                                          sphi_a_ext(1, la + 1, ipgf), &
-                                          sphi_b_ext(1, lb + 1, jpgf), &
-                                          sphi_c_ext(1, lc + 1, kpgf), &
-                                          sphi_d_ext(1, ld + 1, lpgf), &
+                                          sphi_a_ext(1, la - la_min + 1, ipgf), &
+                                          sphi_b_ext(1, lb - lb_min + 1, jpgf), &
+                                          sphi_c_ext(1, lc - lc_min + 1, kpgf), &
+                                          sphi_d_ext(1, ld - ld_min + 1, lpgf), &
+                                          !sphi_a_ext(1, la + 1, ipgf), &
+                                          !sphi_b_ext(1, lb + 1, jpgf), &
+                                          !sphi_c_ext(1, lc + 1, kpgf), &
+                                          !sphi_d_ext(1, ld + 1, lpgf), &
                                           ee_work, ee_work2, ee_buffer1, ee_buffer2, ee_primitives_tmp, &
                                           p_work)
                         cart_estimate = MAX(tmp_max, cart_estimate)

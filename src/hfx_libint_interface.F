@@ -1896,6 +1896,20 @@ CONTAINS
 
       IF (tmp_max < eps_schwarz) RETURN
       primitives_tmp = 0.0_dp
+IF (.FALSE.) THEN ! SC_DEBUG
+DO l = 1, ncod
+   DO k = 1, ncoc
+      DO j = 1, ncob
+         DO i = 1, ncoa
+            !work2(i, j, k, l) = work(p4)
+            WRITE(6,'(4I4,A,F24.16)') i,j,k,l, " work2(i, j, k, l) = ", work2(i, j, k, l)
+         END DO
+      END DO
+   END DO
+END DO
+CPABORT("evaluate_eri")
+END IF
+
 
 !      write (*,*) " Primitives before contract: ", work2
 
@@ -1907,7 +1921,33 @@ CONTAINS
                     sphi_d, &
                     primitives_tmp, &
                     buffer1, buffer2)
+IF (.FALSE.) THEN ! SC_DEBUG
+WRITE(6,'(A30,4I8)') "contract ncoa/b/c/d", ncoa, ncob, ncoc, ncod
+WRITE(6,'(A30,4I8)') "contract nsoa/b/c/d", nsoa, nsob, nsoc, nsod
+WRITE(6,'(A30,4I8)') "contract n_a/b/c/d", n_a, n_b, n_c, n_d
+WRITE(6,'(A30,4I8)') "contract nl_a/b/c/d", nl_a, nl_b, nl_c, nl_d
 
+DO l = 1, ncod
+   DO k = 1, ncoc
+      DO j = 1, ncob
+         DO i = 1, ncoa
+            !work2(i, j, k, l) = work(p4)
+            WRITE(6,'(4I4,A,F24.16)') i,j,k,l, " primitives_tmp(i, j, k, l) = ", primitives_tmp(i, j, k, l)
+         END DO
+      END DO
+   END DO
+END DO
+CPABORT("evaluate_eri")
+END IF
+
+IF (.FALSE.) THEN ! SC_DEBUG
+WRITE(6,'(A,2I8)') "sphi_a ", ncoa, nsoa*nl_a
+DO i = 1, ncoa
+   WRITE(6,'(20F12.8)') sphi_a(i, :)
+END DO
+!REAL(dp), DIMENSION(ncoa, nsoa*nl_a), INTENT(IN)   :: sphi_a
+CPABORT("evaluate_eri")
+END IF
 !      write (*,*) " Primitives after contract: ", primitives_tmp
 
       primitives(s_offset_a + 1:s_offset_a + nsoa*nl_a, &

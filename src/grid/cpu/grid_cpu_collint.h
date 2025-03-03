@@ -12,7 +12,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#if defined(__AVX2__) && defined(__FMA__)
+#if 0 && defined(__AVX2__) && defined(__FMA__)
 #include <immintrin.h>
 #endif
 
@@ -78,7 +78,7 @@ ortho_cx_to_grid_scalar(const int lp, const int cmax, const int i,
  *        This routine always processes four consecutive grid elements at once.
  * \author Ole Schuett
  ******************************************************************************/
-#if defined(__AVX2__) && defined(__FMA__)
+#if 0 && defined(__AVX2__) && defined(__FMA__)
 static inline void __attribute__((always_inline))
 ortho_cx_to_grid_avx2(const int lp, const int cmax, const int i,
                       const double pol[3][lp + 1][2 * cmax + 1],
@@ -190,7 +190,7 @@ ortho_cx_to_grid(const int lp, const int kg1, const int kg2, const int jg1,
     GRID_CONST_WHEN_INTEGRATE double *grid_base_3 = &grid[grid_index_3];
 
     // Use AVX2 to process grid points in chunks of four, ie. 256 bit vectors.
-#if defined(__AVX2__) && defined(__FMA__)
+#if 0 && defined(__AVX2__) && defined(__FMA__)
     const int istop_vec = istart + 4 * ((istop - istart + 1) / 4) - 1;
     for (int i = istart; i <= istop_vec; i += 4) {
       const int ig = i + cube2grid;

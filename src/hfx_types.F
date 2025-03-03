@@ -14,6 +14,7 @@
 ! **************************************************************************************************
 MODULE hfx_types
    USE atomic_kind_types,               ONLY: atomic_kind_type,&
+                                              deallocate_atomic_kind_set,&
                                               get_atomic_kind,&
                                               get_atomic_kind_set
    USE basis_set_types,                 ONLY: get_gto_basis_set,&
@@ -73,7 +74,9 @@ MODULE hfx_types
                                               ncoset,&
                                               nso
    USE particle_methods,                ONLY: get_particle_set
-   USE particle_types,                  ONLY: particle_type
+   USE particle_types,                  ONLY: allocate_particle_set,&
+                                              deallocate_particle_set,&
+                                              particle_type
    USE qs_integral_utils,               ONLY: basis_set_list_setup
    USE qs_kind_types,                   ONLY: get_qs_kind,&
                                               get_qs_kind_set,&
@@ -84,6 +87,7 @@ MODULE hfx_types
         split_block_sizes
    USE string_utilities,                ONLY: compress
    USE t_c_g0,                          ONLY: free_C0
+   USE util,                            ONLY: sort
 
 !$ USE OMP_LIB, ONLY: omp_get_max_threads, omp_get_thread_num, omp_get_num_threads
 
@@ -109,10 +113,15 @@ MODULE hfx_types
              hfx_ri_type, hfx_compression_type, block_ind_type, hfx_ri_init, hfx_ri_release, &
              compare_hfx_sections
 
+   PUBLIC :: get_number_of_hfx_atoms !, get_number_of_hfx_kinds
+
 #define CACHE_SIZE 1024
 #define BITS_MAX_VAL 6
 
    CHARACTER(len=*), PARAMETER, PRIVATE :: moduleN = 'hfx_types'
+!LOGICAL, PARAMETER, PRIVATE :: global_do_split_basis = .FALSE.
+LOGICAL, PARAMETER, PRIVATE :: global_do_split_basis = .TRUE.
+LOGICAL, PARAMETER, PRIVATE :: sc_debug = .TRUE.
    INTEGER, PARAMETER, PUBLIC                 :: max_atom_block = 32
    INTEGER, PARAMETER, PUBLIC                 :: max_images = 27
    REAL(dp), PARAMETER, PUBLIC                :: log_zero = -1000.0_dp
@@ -262,24 +271,43 @@ MODULE hfx_types
 
 ! **************************************************************************************************
    TYPE hfx_basis_type
-      INTEGER, DIMENSION(:), POINTER           :: lmax => NULL()
-      INTEGER, DIMENSION(:), POINTER           :: lmin => NULL()
-      INTEGER, DIMENSION(:), POINTER           :: npgf => NULL()
+      INTEGER, CONTIGUOUS, DIMENSION(:), &
+         POINTER                               :: lmax => NULL()
+      INTEGER, CONTIGUOUS, DIMENSION(:), &
+         POINTER                               :: lmin => NULL()
+      INTEGER, CONTIGUOUS, DIMENSION(:), &
+         POINTER                               :: npgf => NULL()
       INTEGER                                  :: nset = 0
-      REAL(dp), DIMENSION(:, :), POINTER        :: zet => NULL()
-      INTEGER, DIMENSION(:), POINTER           :: nsgf => NULL()
-      INTEGER, DIMENSION(:, :), POINTER         :: first_sgf => NULL()
-      REAL(dp), DIMENSION(:, :), POINTER        :: sphi => NULL()
+      REAL(dp), CONTIGUOUS, DIMENSION(:, :), &
+         POINTER                               :: zet => NULL()
+      INTEGER, CONTIGUOUS, DIMENSION(:), &
+         POINTER                               :: nsgf => NULL()
+      INTEGER, CONTIGUOUS, DIMENSION(:, :), &
+         POINTER                               :: first_sgf => NULL()
+      REAL(dp), CONTIGUOUS, DIMENSION(:, :), &
+         POINTER                               :: sphi => NULL()
       INTEGER                                  :: nsgf_total = 0
-      INTEGER, DIMENSION(:, :), POINTER         :: nl => NULL()
-      INTEGER, DIMENSION(:, :), POINTER         :: nsgfl => NULL()
-      INTEGER, DIMENSION(:), POINTER           :: nshell => NULL()
-      REAL(dp), DIMENSION(:, :, :, :), POINTER &
-         :: sphi_ext => NULL()
-      REAL(dp), DIMENSION(:, :, :), POINTER   :: gcc => NULL()
-      REAL(dp), DIMENSION(:), POINTER          :: set_radius => NULL()
-      REAL(dp), DIMENSION(:, :), POINTER        :: pgf_radius => NULL()
+      INTEGER, CONTIGUOUS, DIMENSION(:, :), &
+         POINTER                               :: nl => NULL()
+      INTEGER, CONTIGUOUS, DIMENSION(:, :), &
+         POINTER                               :: nsgfl => NULL()
+      INTEGER, CONTIGUOUS, DIMENSION(:), &
+         POINTER                               :: nshell => NULL()
+      REAL(dp), CONTIGUOUS, &
+         DIMENSION(:, :, :, :), POINTER        :: sphi_ext => NULL()
+      REAL(dp), CONTIGUOUS, &
+         DIMENSION(:, :, :), POINTER           :: gcc => NULL()
+      REAL(dp), CONTIGUOUS, DIMENSION(:), &
+         POINTER                               :: set_radius => NULL()
+      REAL(dp), CONTIGUOUS, DIMENSION(:, :), &
+         POINTER                               :: pgf_radius => NULL()
       REAL(dp)                                 :: kind_radius = 0.0_dp
+      ! split basis set (1 contracted set of particular angular momentum per 'splitted' atomic kind)
+      !> index of atomic kind and contracted set in the original ('unsplitted', 'merged') basis set
+      INTEGER                                  :: merged_ikind = 0
+      INTEGER                                  :: merged_iset = 0
+      INTEGER, CONTIGUOUS, DIMENSION(:), &
+         POINTER                               :: first_sgf_merged => NULL()
    END TYPE
 
 ! **************************************************************************************************
@@ -519,49 +547,73 @@ MODULE hfx_types
       TYPE(hfx_compression_type) :: store_ints = hfx_compression_type()
       TYPE(hfx_compression_type) :: store_forces = hfx_compression_type()
 
-      TYPE(hfx_cell_type), DIMENSION(:), &
-         POINTER                       :: neighbor_cells => NULL()
-      TYPE(hfx_distribution), DIMENSION(:), &
-         POINTER         :: distribution_energy => NULL()
-      TYPE(hfx_distribution), DIMENSION(:), &
-         POINTER         :: distribution_forces => NULL()
-      INTEGER, DIMENSION(:, :), POINTER         :: is_assoc_atomic_block => NULL()
+      TYPE(hfx_cell_type), CONTIGUOUS, DIMENSION(:), &
+         POINTER                               :: neighbor_cells => NULL()
+      TYPE(hfx_distribution), CONTIGUOUS, DIMENSION(:), &
+         POINTER                               :: distribution_energy => NULL()
+      TYPE(hfx_distribution), CONTIGUOUS, DIMENSION(:), &
+         POINTER                               :: distribution_forces => NULL()
+      INTEGER, CONTIGUOUS, DIMENSION(:, :), &
+         POINTER                               :: is_assoc_atomic_block => NULL()
       INTEGER                                  :: number_of_p_entries = 0
-      TYPE(hfx_basis_type), DIMENSION(:), &
-         POINTER           :: basis_parameter => NULL()
+      TYPE(hfx_basis_type), CONTIGUOUS, DIMENSION(:), &
+         POINTER                               :: basis_parameter => NULL()
       INTEGER                                  :: n_rep_hf = 0
       LOGICAL                                  :: b_first_load_balance_energy = .FALSE., &
                                                   b_first_load_balance_forces = .FALSE.
-      REAL(dp), DIMENSION(:, :), POINTER        :: full_ks_alpha => NULL()
-      REAL(dp), DIMENSION(:, :), POINTER        :: full_ks_beta => NULL()
+      REAL(dp), CONTIGUOUS, DIMENSION(:, :), POINTER        :: full_ks_alpha => NULL()
+      REAL(dp), CONTIGUOUS, DIMENSION(:, :), POINTER        :: full_ks_beta => NULL()
       TYPE(cp_libint_t)                        :: lib
       TYPE(hfx_basis_info_type)                :: basis_info = hfx_basis_info_type()
-      TYPE(hfx_screen_coeff_type), &
+      TYPE(hfx_screen_coeff_type), CONTIGUOUS, &
          DIMENSION(:, :, :, :, :, :), POINTER     :: screen_funct_coeffs_pgf => NULL(), &
                                                      pair_dist_radii_pgf => NULL()
-      TYPE(hfx_screen_coeff_type), &
+      TYPE(hfx_screen_coeff_type), CONTIGUOUS, &
          DIMENSION(:, :, :, :), POINTER         :: screen_funct_coeffs_set => NULL()
-      TYPE(hfx_screen_coeff_type), &
+      TYPE(hfx_screen_coeff_type), CONTIGUOUS, &
          DIMENSION(:, :), POINTER             :: screen_funct_coeffs_kind => NULL()
       LOGICAL                                  :: screen_funct_is_initialized = .FALSE.
       TYPE(hfx_p_kind), DIMENSION(:), POINTER  :: initial_p => NULL()
       TYPE(hfx_p_kind), DIMENSION(:), POINTER  :: initial_p_forces => NULL()
-      INTEGER, DIMENSION(:), POINTER           :: map_atom_to_kind_atom => NULL()
-      TYPE(hfx_2D_map), DIMENSION(:), POINTER  :: map_atoms_to_cpus => NULL()
-      INTEGER, DIMENSION(:, :), POINTER         :: atomic_block_offset => NULL()
-      INTEGER, DIMENSION(:, :, :, :), POINTER     :: set_offset => NULL()
-      INTEGER, DIMENSION(:), POINTER           :: block_offset => NULL()
-      TYPE(hfx_block_range_type), DIMENSION(:), &
+      INTEGER, CONTIGUOUS, DIMENSION(:), POINTER           :: map_atom_to_kind_atom => NULL()
+      TYPE(hfx_2D_map), CONTIGUOUS, DIMENSION(:), POINTER  :: map_atoms_to_cpus => NULL()
+      INTEGER, CONTIGUOUS, DIMENSION(:, :), POINTER         :: atomic_block_offset => NULL()
+      INTEGER, CONTIGUOUS, DIMENSION(:, :, :, :), POINTER     :: set_offset => NULL()
+      INTEGER, CONTIGUOUS, DIMENSION(:), POINTER           :: block_offset => NULL()
+      TYPE(hfx_block_range_type), CONTIGUOUS, DIMENSION(:), &
          POINTER      :: blocks => NULL()
-      TYPE(hfx_task_list_type), DIMENSION(:), &
+      TYPE(hfx_task_list_type), CONTIGUOUS, DIMENSION(:), &
          POINTER        :: task_list => NULL()
-      REAL(dp), DIMENSION(:, :), POINTER        :: pmax_atom => NULL(), pmax_atom_forces => NULL()
+      REAL(dp), CONTIGUOUS, DIMENSION(:, :), &
+         POINTER                                :: pmax_atom => NULL(), pmax_atom_forces => NULL()
       TYPE(cp_libint_t)                         :: lib_deriv
       REAL(dp), DIMENSION(:, :), POINTER        :: pmax_block => NULL()
-      LOGICAL, DIMENSION(:, :), POINTER         :: atomic_pair_list => NULL()
-      LOGICAL, DIMENSION(:, :), POINTER         :: atomic_pair_list_forces => NULL()
+      LOGICAL, CONTIGUOUS, DIMENSION(:, :), POINTER         :: atomic_pair_list => NULL()
+      LOGICAL, CONTIGUOUS, DIMENSION(:, :), POINTER         :: atomic_pair_list_forces => NULL()
       LOGICAL                                   :: do_hfx_ri = .FALSE.
       TYPE(hfx_ri_type), POINTER                :: ri_data => NULL()
+
+      LOGICAL                                   :: do_split_basis = .FALSE.
+      TYPE(hfx_basis_type), CONTIGUOUS, DIMENSION(:), &
+         POINTER           :: split_basis_parameter => NULL()
+      TYPE(hfx_basis_info_type)                :: split_basis_info = hfx_basis_info_type()
+      !> [n_merged_kinds] number of split basis sets per original (merged) atomic kind
+      INTEGER, ALLOCATABLE, DIMENSION(:)       :: n_split_sets_per_kind
+      !> [n_merged_kinds] offset of the first split basis sets relevant to the original (merged) atomic kind
+      INTEGER, ALLOCATABLE, DIMENSION(:)       :: split_kind_offset
+      !> [n_split_kinds = SUM(n_split_sets_per_kind(:))]
+      TYPE(atomic_kind_type), CONTIGUOUS, &
+         DIMENSION(:), POINTER                 :: split_atomic_kind_set => NULL()
+      !> [n_split_atoms]
+      TYPE(particle_type),              &
+         DIMENSION(:), POINTER                 :: split_particle_set => NULL()
+      !> [n_merged_atoms = natoms] number of split atoms for every actual ('merged') atom
+      INTEGER, ALLOCATABLE, DIMENSION(:)       :: n_split_sets_per_atom
+      !> [n_merged_atoms = natoms] offset of the first split atoms for every actual ('merged') atom
+      INTEGER, ALLOCATABLE, DIMENSION(:)       :: split_atom_offset
+      !INTEGER, ALLOCATABLE, DIMENSION(:)       :: split_to_merged_atom_map
+      !INTEGER, ALLOCATABLE, DIMENSION(:)       :: merged_to_split_atom_map
+      INTEGER, ALLOCATABLE, DIMENSION(:)       :: set_inds_sorted
    END TYPE hfx_type
 
 CONTAINS
@@ -592,7 +644,7 @@ CONTAINS
 ! **************************************************************************************************
    SUBROUTINE hfx_create(x_data, para_env, hfx_section, atomic_kind_set, qs_kind_set, &
                          particle_set, dft_control, cell, orb_basis, ri_basis, &
-                         nelectron_total, nkp_grid)
+                         nelectron_total, nkp_grid, do_split_basis)
       TYPE(hfx_type), DIMENSION(:, :), POINTER           :: x_data
       TYPE(mp_para_env_type)                             :: para_env
       TYPE(section_vals_type), POINTER                   :: hfx_section
@@ -604,27 +656,30 @@ CONTAINS
       CHARACTER(LEN=*), OPTIONAL                         :: orb_basis, ri_basis
       INTEGER, OPTIONAL                                  :: nelectron_total
       INTEGER, DIMENSION(3), OPTIONAL                    :: nkp_grid
+      LOGICAL, OPTIONAL                                  :: do_split_basis
 
       CHARACTER(LEN=*), PARAMETER                        :: routineN = 'hfx_create'
 
       CHARACTER(LEN=512)                                 :: error_msg
       CHARACTER(LEN=default_path_length)                 :: char_val
       CHARACTER(LEN=default_string_length)               :: orb_basis_type, ri_basis_type
-      INTEGER :: handle, i, i_thread, iatom, ikind, int_val, irep, jkind, max_set, n_rep_hf, &
+      INTEGER :: handle, i, j, i_thread, iatom, ikind, int_val, irep, jkind, max_set, n_rep_hf, &
          n_threads, natom, natom_a, natom_b, nkind, nseta, nsetb, pbc_shells, storage_id
       INTEGER, ALLOCATABLE, DIMENSION(:)                 :: atom2kind, kind_of
-      LOGICAL                                            :: do_ri, explicit, logic_val
+      LOGICAL                                            :: do_ri, explicit, logic_val, my_do_split_basis
       REAL(dp)                                           :: real_val
+      !TYPE(hfx_basis_type), CONTIGUOUS, DIMENSION(:), &
+      !   POINTER                                         :: basis_parameter
       TYPE(hfx_type), POINTER                            :: actual_x_data
       TYPE(section_vals_type), POINTER                   :: hf_pbc_section, hf_sub_section, &
                                                             hfx_ri_section
+
+
 
       CALL timeset(routineN, handle)
 
       CALL cite_reference(Guidon2008)
       CALL cite_reference(Guidon2009)
-
-      natom = SIZE(particle_set)
 
       !! There might be 2 hf sections
       CALL section_vals_get(hfx_section, n_repetition=n_rep_hf)
@@ -649,6 +704,14 @@ CONTAINS
       DO i_thread = 1, n_threads
          DO irep = 1, n_rep_hf
             actual_x_data => x_data(irep, i_thread)
+            IF (PRESENT(do_split_basis)) actual_x_data%do_split_basis = do_split_basis
+! SC DEBUG TODO: should be controlled via subroutine's argument
+IF (global_do_split_basis) THEN
+IF (.NOT. actual_x_data%do_hfx_ri) THEN
+  actual_x_data%do_split_basis = .TRUE. ! [SC] SPLIT BASIS DEBUG; RI not implemented (hfx_ri_init_read_input_from_hfx should be adjusted)
+END IF
+END IF
+            my_do_split_basis = actual_x_data%do_split_basis
             !! Get data from input file
             !!
             !! GENERAL params
@@ -751,6 +814,36 @@ CONTAINS
             IF (ASSOCIATED(dft_control%rtp_control)) &
                actual_x_data%load_balance_parameter%rtp_redistribute = dft_control%rtp_control%hfx_redistribute
 
+            CALL hfx_create_basis_types(actual_x_data%basis_parameter, actual_x_data%basis_info, qs_kind_set, &
+                                        orb_basis_type)
+            IF (my_do_split_basis) THEN
+               nkind = SIZE(qs_kind_set, 1)
+               ALLOCATE (actual_x_data%n_split_sets_per_kind(nkind))
+               ALLOCATE (actual_x_data%split_kind_offset(nkind))
+               natom = SIZE(particle_set)
+               ALLOCATE (actual_x_data%n_split_sets_per_atom(natom))
+               ALLOCATE (actual_x_data%split_atom_offset(natom))
+               CALL hfx_split_basis_types(actual_x_data%split_basis_parameter, actual_x_data%split_basis_info, &
+                                          actual_x_data%n_split_sets_per_kind, actual_x_data%split_kind_offset, &
+                                          actual_x_data%basis_parameter)
+               ALLOCATE (actual_x_data%set_inds_sorted(SIZE(actual_x_data%split_basis_parameter)))
+               CALL hfx_sort_split_basis_types(actual_x_data%split_basis_parameter, actual_x_data%set_inds_sorted)
+               CALL hfx_split_atomic_kind_set(actual_x_data%split_atomic_kind_set, &
+                                              actual_x_data%n_split_sets_per_kind, atomic_kind_set)
+            END IF
+
+            natom = get_number_of_hfx_atoms(actual_x_data, qs_kind_set, atomic_kind_set)
+
+            IF (my_do_split_basis) THEN
+               CALL allocate_particle_set(actual_x_data%split_particle_set, natom)
+               ! TO DO: use actual_x_data%split_kind_offset
+               CALL hfx_split_particle_set(actual_x_data%split_particle_set, &
+                                           actual_x_data%n_split_sets_per_atom, actual_x_data%split_atom_offset, &
+                                           actual_x_data%split_atomic_kind_set, &
+                                           actual_x_data%n_split_sets_per_kind, actual_x_data%split_kind_offset, &
+                                           particle_set, atomic_kind_set)
+            END IF
+
             CALL section_vals_val_get(hf_sub_section, "BLOCK_SIZE", i_val=int_val)
             ! negative values ask for a computed default
             IF (int_val <= 0) THEN
@@ -760,9 +853,6 @@ CONTAINS
             END IF
             ! at least 1 atom per block, and avoid overly large blocks
             actual_x_data%load_balance_parameter%block_size = MIN(max_atom_block, MAX(1, int_val))
-
-            CALL hfx_create_basis_types(actual_x_data%basis_parameter, actual_x_data%basis_info, qs_kind_set, &
-                                        orb_basis_type)
 
 !!**************************************************************************************************
 !! **        !! ** This code writes the contraction routines
@@ -873,8 +963,16 @@ CONTAINS
                actual_x_data%periodic_parameter%R_max_stress = 1.0_dp
             END IF
 
-            nkind = SIZE(qs_kind_set, 1)
-            max_set = actual_x_data%basis_info%max_set
+            ! ALTERNATIVE: nkind = get_number_of_hfx_kinds(actual_x_data, qs_kind_set)
+            IF (my_do_split_basis) THEN
+               nkind = SIZE(actual_x_data%split_basis_parameter, 1)
+               max_set = actual_x_data%split_basis_info%max_set
+               !basis_parameter => actual_x_data%split_basis_parameter
+            ELSE
+               nkind = SIZE(qs_kind_set, 1)
+               max_set = actual_x_data%basis_info%max_set
+               !basis_parameter => actual_x_data%basis_parameter
+            END IF
 
             !! ** This guy is allocated on the master thread only
             IF (i_thread == 1) THEN
@@ -901,11 +999,23 @@ CONTAINS
                   ALLOCATE (actual_x_data%initial_p(nkind*(nkind + 1)/2))
                   i = 1
                   DO ikind = 1, nkind
-                     CALL get_atomic_kind(atomic_kind_set(ikind), natom=natom_a)
-                     nseta = actual_x_data%basis_parameter(ikind)%nset
+                     IF (my_do_split_basis) THEN
+                        CALL get_atomic_kind(atomic_kind_set(actual_x_data%split_basis_parameter(ikind)%merged_ikind),&
+                                             natom=natom_a)
+                        nseta = 1
+                     ELSE
+                        CALL get_atomic_kind(atomic_kind_set(ikind), natom=natom_a)
+                        nseta = actual_x_data%basis_parameter(ikind)%nset
+                     ENDIF
                      DO jkind = ikind, nkind
-                        CALL get_atomic_kind(atomic_kind_set(jkind), natom=natom_b)
-                        nsetb = actual_x_data%basis_parameter(jkind)%nset
+                        IF (my_do_split_basis) THEN
+                           CALL get_atomic_kind(atomic_kind_set(actual_x_data%split_basis_parameter(jkind)%merged_ikind),&
+                                                natom=natom_b)
+                           nsetb = 1
+                        ELSE
+                           CALL get_atomic_kind(atomic_kind_set(jkind), natom=natom_b)
+                           nsetb = actual_x_data%basis_parameter(jkind)%nset
+                        END IF
                         ALLOCATE (actual_x_data%initial_p(i)%p_kind(nseta, nsetb, natom_a, natom_b))
                         actual_x_data%memory_parameter%size_p_screen = &
                            actual_x_data%memory_parameter%size_p_screen + nseta*nsetb*natom_a*natom_b
@@ -917,11 +1027,23 @@ CONTAINS
                   ALLOCATE (actual_x_data%initial_p_forces(nkind*(nkind + 1)/2))
                   i = 1
                   DO ikind = 1, nkind
-                     CALL get_atomic_kind(atomic_kind_set(ikind), natom=natom_a)
-                     nseta = actual_x_data%basis_parameter(ikind)%nset
+                     IF (my_do_split_basis) THEN
+                        CALL get_atomic_kind(atomic_kind_set(actual_x_data%split_basis_parameter(ikind)%merged_ikind),&
+                                             natom=natom_a)
+                        nseta = 1
+                     ELSE
+                        CALL get_atomic_kind(atomic_kind_set(ikind), natom=natom_a)
+                        nseta = actual_x_data%basis_parameter(ikind)%nset
+                     ENDIF
                      DO jkind = ikind, nkind
-                        CALL get_atomic_kind(atomic_kind_set(jkind), natom=natom_b)
-                        nsetb = actual_x_data%basis_parameter(jkind)%nset
+                        IF (my_do_split_basis) THEN
+                           CALL get_atomic_kind(atomic_kind_set(actual_x_data%split_basis_parameter(jkind)%merged_ikind),&
+                                                natom=natom_b)
+                           nsetb = 1
+                        ELSE
+                           CALL get_atomic_kind(atomic_kind_set(jkind), natom=natom_b)
+                           nsetb = actual_x_data%basis_parameter(jkind)%nset
+                        END IF
                         ALLOCATE (actual_x_data%initial_p_forces(i)%p_kind(nseta, nsetb, natom_a, natom_b))
                         actual_x_data%memory_parameter%size_p_screen = &
                            actual_x_data%memory_parameter%size_p_screen + nseta*nsetb*natom_a*natom_b
@@ -930,7 +1052,11 @@ CONTAINS
                   END DO
                END IF
                ALLOCATE (actual_x_data%map_atom_to_kind_atom(natom))
-               CALL get_atomic_kind_set(atomic_kind_set, kind_of=kind_of)
+               IF (my_do_split_basis) THEN
+                  CALL get_atomic_kind_set(actual_x_data%split_atomic_kind_set, kind_of=kind_of)
+               ELSE
+                  CALL get_atomic_kind_set(atomic_kind_set, kind_of=kind_of)
+               END IF
 
                ALLOCATE (atom2kind(nkind))
                atom2kind = 0
@@ -1006,6 +1132,67 @@ CONTAINS
          actual_x_data => x_data(irep, 1)
          CALL hfx_print_info(actual_x_data, hfx_section, irep)
       END DO
+
+#if 1
+! SC DEBUG
+IF (sc_debug) THEN
+      IF (my_do_split_basis .AND. para_env%mepos == para_env%source) THEN
+         DO irep = 1, n_rep_hf
+            actual_x_data => x_data(irep, 1)
+            WRITE(6,'(A,I0)') "DEBUG SPLIT HFX BASIS INFO REPLICA ", irep
+            WRITE(6,'(A40,I10)') "DEBUG basis_info%max_sgf = ", actual_x_data%split_basis_info%max_sgf
+            WRITE(6,'(A40,I10)') "DEBUG basis_info%max_am = ", actual_x_data%split_basis_info%max_am
+            WRITE(6,*)
+            WRITE(6, *) "SPLIT_BASIS_SIZE = ", SIZE(actual_x_data%split_basis_parameter)
+            WRITE(6, '(T3,5A10)') "nl", "npgf", "nsgfl", "iset", "ikind"
+            DO i = 1,SIZE(actual_x_data%split_basis_parameter)
+               WRITE(6, '(T3,5I10)') actual_x_data%split_basis_parameter(i)%lmin(1), &
+                     actual_x_data%split_basis_parameter(i)%npgf(1), &
+                     actual_x_data%split_basis_parameter(i)%nsgfl(actual_x_data%split_basis_parameter(i)%lmin(1), 1), &
+                     actual_x_data%split_basis_parameter(i)%merged_iset, &
+                     actual_x_data%split_basis_parameter(i)%merged_ikind
+      !      tmp = hfx_split_basis(nblocks)
+      !WRITE(6, '(T3,5I10)') tmp%lmin(1), &
+      !            tmp%npgf(1), &
+      !            tmp%nsgfl(tmp%lmin(1), 1), &
+      !            tmp%merged_iset, tmp%merged_ikind
+            END DO
+            WRITE(6, *) "ORDERED SPLIT_BASIS_SIZE = ", SIZE(actual_x_data%split_basis_parameter)
+            WRITE(6, '(T3,5A10)') "nl", "npgf", "nsgfl", "iset", "ikind"
+            DO i = 1,SIZE(actual_x_data%split_basis_parameter)
+               j = actual_x_data%set_inds_sorted(i)
+               WRITE(6, '(T3,5I10)') actual_x_data%split_basis_parameter(j)%lmin(1), &
+                     actual_x_data%split_basis_parameter(j)%npgf(1), &
+                     actual_x_data%split_basis_parameter(j)%nsgfl(actual_x_data%split_basis_parameter(j)%lmin(1), 1), &
+                     actual_x_data%split_basis_parameter(j)%merged_iset, &
+                     actual_x_data%split_basis_parameter(j)%merged_ikind
+      !      tmp = hfx_split_basis(nblocks)
+      !WRITE(6, '(T3,5I10)') tmp%lmin(1), &
+      !            tmp%npgf(1), &
+      !            tmp%nsgfl(tmp%lmin(1), 1), &
+      !            tmp%merged_iset, tmp%merged_ikind
+            END DO
+            WRITE(6,*)
+            WRITE(6,*) "SPLIT_ATOMIC_KIND"
+            DO i = 1,SIZE(actual_x_data%split_atomic_kind_set)
+            WRITE(6,'(I3,A,100(I4))') i, " : ", actual_x_data%split_atomic_kind_set(i)%atom_list(:)
+            END DO
+            WRITE(6,*)
+            WRITE(6,*) "SPLIT_PARTICLES_SET"
+            WRITE(6,'(A10,1X,A10)') "iatom_splt", "ikind_splt"
+            CALL get_atomic_kind_set(actual_x_data%split_atomic_kind_set, kind_of=kind_of)
+            DO i = 1,SIZE(actual_x_data%split_particle_set)
+            WRITE(6,'(I10,1X,I10)') i, kind_of(i)
+            END DO
+            DEALLOCATE (kind_of)
+            WRITE(6,*)
+         END DO
+         FLUSH(6)
+      END IF
+!CPABORT("hfx_split_basis_type")
+END IF
+! END DEBUG
+#endif
 
       CALL timestop(handle)
 
@@ -1802,6 +1989,388 @@ CONTAINS
 
    END SUBROUTINE hfx_release_basis_types
 
+   SUBROUTINE hfx_split_basis_types(hfx_split_basis, basis_info, nsets_per_kind, split_kind_offset, hfx_basis)
+      TYPE(hfx_basis_type), CONTIGUOUS, DIMENSION(:), &
+         POINTER                                         :: hfx_split_basis
+      TYPE(hfx_basis_info_type), INTENT(out)             :: basis_info
+      INTEGER, CONTIGUOUS, DIMENSION(:), INTENT(out)     :: nsets_per_kind ! (nkinds)
+      INTEGER, CONTIGUOUS, DIMENSION(:), INTENT(out)     :: split_kind_offset ! (nkinds)
+      TYPE(hfx_basis_type), CONTIGUOUS, DIMENSION(:), &
+         POINTER, INTENT(in)                             :: hfx_basis
+
+      CHARACTER(LEN=*), PARAMETER :: routineN = 'hfx_split_basis'
+
+      INTEGER :: handle, ikind, ipgf, iset, ishell, isgfl, l, nblocks, nco_l, ncoset_l, nco_nso_nsgfl, nkinds, &
+                 npgf, npgf_component_ncoset, npgf_component_offset, nsgf_total, nsgfl, nso_l, &
+                 offset_sgf_merged, offset_sgf_split, sgfl_offset, sphi_merged_offset, sphi_split_offset
+      INTEGER :: max_am, max_sgf
+
+      CALL timeset(routineN, handle)
+
+      CPASSERT(.NOT.ASSOCIATED(hfx_split_basis))
+      CPASSERT(ASSOCIATED(hfx_basis))
+
+      nkinds = SIZE(hfx_basis)
+      CPASSERT(SIZE(nsets_per_kind) == nkinds)
+      CPASSERT(SIZE(split_kind_offset) == nkinds)
+      nsets_per_kind = 0
+
+      ! number of basis set blocks
+      nblocks = 0
+      DO ikind = 1, nkinds
+         !nset = hfx_basis(ikind)%nset
+         DO iset = 1, hfx_basis(ikind)%nset
+            DO l = hfx_basis(ikind)%lmin(iset), hfx_basis(ikind)%lmax(iset)
+               IF (hfx_basis(ikind)%nsgfl(l, iset) > 0) THEN
+                  nsets_per_kind(ikind) = nsets_per_kind(ikind) + 1
+               END IF
+            END DO
+         END DO
+      END DO
+      nblocks = SUM(nsets_per_kind)
+
+      split_kind_offset(1) = 0
+      DO ikind = 1, nkinds-1
+         split_kind_offset(ikind+1) = split_kind_offset(ikind) + nsets_per_kind(ikind)
+      END DO
+
+      ALLOCATE (hfx_split_basis(nblocks))
+
+      max_am = 0
+      max_sgf = 0
+      nblocks = 0
+      DO ikind = 1, nkinds
+         DO iset = 1, hfx_basis(ikind)%nset
+            max_am = MAX(max_am, hfx_basis(ikind)%lmax(iset))
+            npgf_component_ncoset = ncoset(hfx_basis(ikind)%lmax(iset))
+            sgfl_offset = 0
+            DO l = hfx_basis(ikind)%lmin(iset), hfx_basis(ikind)%lmax(iset)
+               nsgfl = hfx_basis(ikind)%nsgfl(l, iset) ! number of shell with the particular angular momentum
+WRITE(6,*) 'ikind, iset, l, nsgfl = ', ikind, iset, l, nsgfl
+               IF (nsgfl > 0) THEN
+                  nblocks = nblocks + 1
+
+                  npgf = hfx_basis(ikind)%npgf(iset)
+                  nco_l = nco(l)
+                  ncoset_l = ncoset(l)
+                  nso_l = nso(l)
+
+                  ! split basis set always has 1 set
+                  ALLOCATE (hfx_split_basis(nblocks)%lmax(1))
+                  hfx_split_basis(nblocks)%lmax = l
+                  ALLOCATE (hfx_split_basis(nblocks)%lmin(1))
+                  hfx_split_basis(nblocks)%lmin = l
+                  !hfx_split_basis(nblocks)%lmax => hfx_basis(ikind)%lmax(iset:iset)
+                  !hfx_split_basis(nblocks)%lmin => hfx_basis(ikind)%lmin(iset:iset)
+                  hfx_split_basis(nblocks)%npgf => hfx_basis(ikind)%npgf(iset:iset)
+                  hfx_split_basis(nblocks)%nset = 1
+                  hfx_split_basis(nblocks)%zet => hfx_basis(ikind)%zet(1:npgf, iset:iset)
+
+                  hfx_split_basis(nblocks)%merged_ikind = ikind
+                  hfx_split_basis(nblocks)%merged_iset = iset
+
+                  !hfx_split_basis(nblocks)%nsgf = nso_l * nsgfl
+                  ALLOCATE (hfx_split_basis(nblocks)%nsgf(1))
+                  nsgf_total = nso_l * nsgfl
+                  max_sgf = MAX(max_sgf, nsgf_total)
+                  hfx_split_basis(nblocks)%nsgf(1) = nsgf_total
+                  hfx_split_basis(nblocks)%nsgf_total = nsgf_total
+
+                  ALLOCATE (hfx_split_basis(nblocks)%first_sgf(nsgfl, 1))
+                  ALLOCATE (hfx_split_basis(nblocks)%first_sgf_merged(nsgfl))
+                  !npgf_component_offset = npgf*(ncoset(l) - nco(l) - &
+                  !                        (ncoset(hfx_basis(ikind)%lmin(iset)) - nco(hfx_basis(ikind)%lmin(iset))))
+                  !ALLOCATE (hfx_split_basis(nblocks)%sphi(nco_l*npgf, nsgf_total))
+                  !npgf_component_inc == ncoset(l)
+                  npgf_component_offset = ncoset(l) - nco(l)
+                  ALLOCATE (hfx_split_basis(nblocks)%sphi(ncoset_l*npgf, nsgf_total))
+                  hfx_split_basis(nblocks)%sphi = 0.0_dp
+
+                  isgfl = 0
+                  DO ishell = 1, hfx_basis(ikind)%nshell(iset)
+                     IF (hfx_basis(ikind)%nl(ishell, iset) == l) THEN
+                        offset_sgf_split = isgfl*nso_l
+                        offset_sgf_merged = hfx_basis(ikind)%first_sgf(ishell, iset)-1
+                        isgfl = isgfl + 1
+
+                        hfx_split_basis(nblocks)%first_sgf(isgfl, 1) = offset_sgf_split + 1
+                        hfx_split_basis(nblocks)%first_sgf_merged(isgfl) = offset_sgf_merged + 1
+
+                        !hfx_split_basis(nblocks)%sphi(1:nco_l*npgf, offset_sgf_split+1:offset_sgf_split+nso_l) = &
+                        !   hfx_basis(ikind)%sphi(npgf_component_offset+1:npgf_component_offset+nco_l*npgf, &
+                        !                         offset_sgf_merged+1:offset_sgf_merged+nso_l)
+                        DO ipgf = 1,npgf
+                           sphi_split_offset = (ipgf-1)*ncoset_l+npgf_component_offset
+                           sphi_merged_offset = (ipgf-1)*npgf_component_ncoset+npgf_component_offset
+                           hfx_split_basis(nblocks)%sphi(sphi_split_offset+1:sphi_split_offset+nco_l, &
+                                                         offset_sgf_split+1:offset_sgf_split+nso_l) = &
+                              hfx_basis(ikind)%sphi(sphi_merged_offset+1:sphi_merged_offset+nco_l, &
+                                                    offset_sgf_merged+1:offset_sgf_merged+nso_l)
+                        END DO
+                     END IF
+                  END DO
+                  !IF (debug_this_module) THEN
+                  !   CPASSERT(isgfl == nsgfl)
+                  !END IF
+IF (.FALSE. .AND. sc_debug) THEN
+   WRITE(6,'(A,I10)') "[DEBUG] npgf_component_offset = ", npgf_component_offset ! SC DEBUG
+   WRITE(6,'(A,2I8)') "hfx_basis(ikind)%sphi", SIZE(hfx_basis(ikind)%sphi,1), SIZE(hfx_basis(ikind)%sphi,2)
+   DO ishell = 1,SIZE(hfx_basis(ikind)%sphi,1)
+      WRITE(6,'(32F12.8)') hfx_basis(ikind)%sphi(ishell, :)
+   END DO
+   WRITE(6,'(A,2I8)') "hfx_split_basis(nblocks)%sphi", SIZE(hfx_split_basis(nblocks)%sphi,1), SIZE(hfx_split_basis(nblocks)%sphi,2)
+   DO ishell = 1,SIZE(hfx_split_basis(nblocks)%sphi,1)
+      WRITE(6,'(32F12.8)') hfx_split_basis(nblocks)%sphi(ishell, :)
+   END DO
+   WRITE(6,*)
+   FLUSH(6)
+END IF
+
+                  ALLOCATE (hfx_split_basis(nblocks)%nl(nsgfl, 1))
+                  hfx_split_basis(nblocks)%nl(:, :) = l
+                  ALLOCATE (hfx_split_basis(nblocks)%nsgfl(l:l, 1))
+                  hfx_split_basis(nblocks)%nsgfl(l:l, 1) = nsgfl
+
+                  !ALLOCATE (hfx_split_basis(nblocks)%nshell(1))
+                  hfx_split_basis(nblocks)%nshell => hfx_basis(ikind)%nshell(iset:iset)
+
+                  nco_nso_nsgfl = nco_l*nso_l*nsgfl
+                  ALLOCATE (hfx_split_basis(nblocks)%sphi_ext(nco_nso_nsgfl, l:l, npgf, 1))
+                  DO ipgf = 1,npgf
+                     hfx_split_basis(nblocks)%sphi_ext(1:nco_nso_nsgfl, l, ipgf, 1) = &
+                        hfx_basis(ikind)%sphi_ext(1:nco_nso_nsgfl, l, ipgf, iset)
+                  END DO
+
+                  ! hfx_basis(ikind)%gcc(max_npgf, max_nshell, nset)
+                  hfx_split_basis(nblocks)%gcc => & !(1:npgf, 1:nsgfl) = &
+                     hfx_basis(ikind)%gcc(1:npgf, sgfl_offset+1:sgfl_offset+nsgfl, iset:iset)
+
+                  hfx_split_basis(nblocks)%pgf_radius => hfx_basis(ikind)%pgf_radius(1:npgf, iset:iset)
+                  hfx_split_basis(nblocks)%set_radius => hfx_basis(ikind)%set_radius(iset:iset)
+                  hfx_split_basis(nblocks)%kind_radius = hfx_basis(ikind)%set_radius(iset)
+
+                  sgfl_offset = sgfl_offset + nsgfl
+               END IF
+            END DO
+         END DO
+      END DO
+
+!      CALL hfx_sort_split_basis_types(hfx_split_basis, set_inds, kind_inds)
+
+      ! split bases always have 1 set
+      basis_info%max_set = 1
+      basis_info%max_sgf = max_sgf
+      basis_info%max_am = max_am
+
+      CALL timestop(handle)
+   END SUBROUTINE hfx_split_basis_types
+
+   SUBROUTINE hfx_split_atomic_kind_set(split_atomic_kind_set, n_split_sets_per_kind, atomic_kind_set)
+      TYPE(atomic_kind_type), CONTIGUOUS, DIMENSION(:), &
+         POINTER                                         :: split_atomic_kind_set
+      INTEGER, CONTIGUOUS, DIMENSION(:), INTENT(in)      :: n_split_sets_per_kind
+!      TYPE(qs_kind_type), DIMENSION(:), POINTER, &
+!         INTENT(in)                                      :: qs_kind_set
+      TYPE(atomic_kind_type), DIMENSION(:), POINTER, &
+         INTENT(in)                                      :: atomic_kind_set
+
+      INTEGER :: iatom, iatom_kind, ikind, ikind_split, iset, natom, natom_kind, nkind, nkind_split, nset
+      INTEGER, ALLOCATABLE, DIMENSION(:) :: kind_of, offset_atom
+
+      nkind = SIZE(n_split_sets_per_kind)
+      nkind_split = SUM(n_split_sets_per_kind)
+
+      ALLOCATE (split_atomic_kind_set(nkind_split))
+      ikind_split = 0
+      DO ikind = 1, nkind
+         nset = n_split_sets_per_kind(ikind)
+         natom_kind = atomic_kind_set(ikind)%natom
+         DO iset = 1, nset
+            ikind_split = ikind_split + 1
+            split_atomic_kind_set(ikind_split)%element_symbol = atomic_kind_set(ikind)%element_symbol
+            split_atomic_kind_set(ikind_split)%mass = atomic_kind_set(ikind)%mass
+            split_atomic_kind_set(ikind_split)%kind_number = ikind_split
+            split_atomic_kind_set(ikind_split)%natom = natom_kind
+            ALLOCATE (split_atomic_kind_set(ikind_split)%atom_list(natom_kind))
+         END DO
+      END DO
+
+      CALL get_atomic_kind_set(atomic_kind_set, kind_of=kind_of)
+      natom = SIZE(kind_of)
+      ALLOCATE (offset_atom(natom))
+      offset_atom(1) = 0
+      DO iatom = 1, SIZE(offset_atom)-1
+         ikind = kind_of(iatom)
+         offset_atom(iatom+1) = offset_atom(iatom) + n_split_sets_per_kind(ikind)
+      END DO
+
+      ikind_split = 0
+      DO ikind = 1, nkind
+         nset = n_split_sets_per_kind(ikind)
+         natom_kind = atomic_kind_set(ikind)%natom
+         DO iset = 1, nset
+            ikind_split = ikind_split + 1
+            DO iatom_kind = 1,natom_kind
+               iatom = atomic_kind_set(ikind)%atom_list(iatom_kind)
+               split_atomic_kind_set(ikind_split)%atom_list(iatom_kind) = offset_atom(iatom)+iset
+            END DO
+         END DO
+      END DO
+      DEALLOCATE (kind_of, offset_atom)
+
+   END SUBROUTINE hfx_split_atomic_kind_set
+
+   FUNCTION get_number_of_hfx_atoms(x_data, qs_kind_set, atomic_kind_set) RESULT(natom)
+      TYPE(hfx_type), POINTER, INTENT(in)                :: x_data
+      TYPE(qs_kind_type), DIMENSION(:), POINTER, &
+         INTENT(in)                                      :: qs_kind_set
+      TYPE(atomic_kind_type), DIMENSION(:), POINTER      :: atomic_kind_set
+      INTEGER                                            :: natom
+
+      INTEGER :: ikind, natom_kind, nkind
+
+      natom = 0
+      nkind = SIZE(qs_kind_set, 1)
+      IF (x_data%do_split_basis) THEN
+         DO ikind = 1, nkind
+            CALL get_atomic_kind(atomic_kind_set(ikind), natom=natom_kind)
+            natom = natom + x_data%n_split_sets_per_kind(ikind) * natom_kind
+         END DO
+      ELSE
+         DO ikind = 1, nkind
+            CALL get_atomic_kind(atomic_kind_set(ikind), natom=natom_kind)
+            natom = natom + natom_kind
+         END DO
+      END IF
+   END FUNCTION get_number_of_hfx_atoms
+
+   SUBROUTINE hfx_split_particle_set(split_particle_set, n_split_sets_per_atom, split_atom_offset, &
+                                     split_atomic_kind_set, n_split_sets_per_kind, split_kind_offset, &
+                                     particle_set, atomic_kind_set)
+      TYPE(particle_type), DIMENSION(:), POINTER, &
+         INTENT(inout)                                   :: split_particle_set
+      INTEGER, CONTIGUOUS, DIMENSION(:), INTENT(out)     :: n_split_sets_per_atom, split_atom_offset
+      TYPE(atomic_kind_type), DIMENSION(:), POINTER, &
+         INTENT(in)                                      :: split_atomic_kind_set
+      INTEGER, CONTIGUOUS, DIMENSION(:), INTENT(in)      :: n_split_sets_per_kind
+      INTEGER, CONTIGUOUS, DIMENSION(:), INTENT(in)      :: split_kind_offset
+      TYPE(particle_type), DIMENSION(:), POINTER, &
+         INTENT(in)                                      :: particle_set
+      TYPE(atomic_kind_type), DIMENSION(:), POINTER, &
+         INTENT(in)                                      :: atomic_kind_set
+
+      INTEGER :: iatom, iatom_split, ikind, ikind_split_offset, iset, natom, nset
+      INTEGER, ALLOCATABLE, DIMENSION(:) :: kind_of
+
+      CALL get_atomic_kind_set(atomic_kind_set, kind_of=kind_of)
+
+      natom = SIZE(particle_set)
+      iatom_split = 0
+      DO iatom = 1, natom
+         ikind = kind_of(iatom)
+         nset = n_split_sets_per_kind(ikind)
+         n_split_sets_per_atom(iatom) = nset
+         ikind_split_offset = split_kind_offset(ikind) !SUM(n_split_sets_per_kind(1:ikind)) - nset
+         DO iset = 1, nset
+            iatom_split = iatom_split + 1
+            split_particle_set(iatom_split) = particle_set(iatom)
+            split_particle_set(iatom_split)%atomic_kind => split_atomic_kind_set(ikind_split_offset+iset)
+         END DO
+      END DO
+
+      split_atom_offset(1) = 0
+      DO iatom = 1, natom-1
+         split_atom_offset(iatom+1) = split_atom_offset(iatom) + n_split_sets_per_atom(iatom)
+      END DO
+
+      DEALLOCATE (kind_of)
+
+   END SUBROUTINE hfx_split_particle_set
+
+   SUBROUTINE hfx_sort_split_basis_types(hfx_split_basis, set_inds_sorted)
+      TYPE(hfx_basis_type), DIMENSION(:), &
+         POINTER                                         :: hfx_split_basis
+      INTEGER,  DIMENSION(:), INTENT(out)                :: set_inds_sorted
+
+      CHARACTER(LEN=*), PARAMETER :: routineN = 'hfx_sort_split_basis_types'
+
+      INTEGER :: handle, iblock, l, nblocks
+      INTEGER(kind=int_8) :: max_ikind, max_iset, max_l, max_npgf, max_nsgfl
+      INTEGER(kind=int_8), ALLOCATABLE, DIMENSION(:)     :: arr
+      !TYPE(hfx_basis_type), CONTIGUOUS, DIMENSION(:), POINTER  :: hfx_split_basis_sorted
+
+      CALL timeset(routineN, handle)
+
+      nblocks = SIZE(hfx_split_basis)
+      max_l = 0
+      max_npgf = 0
+      max_nsgfl = 0
+      DO iblock = 1,nblocks
+         l = hfx_split_basis(iblock)%lmax(1)
+         max_l = MAX(max_l, INT(l, kind=int_8)) ! 0 .. max_l
+         max_npgf = MAX(max_npgf, INT(hfx_split_basis(iblock)%npgf(1), kind=int_8))
+         max_nsgfl = MAX(max_nsgfl, INT(hfx_split_basis(iblock)%nsgfl(l, 1), kind=int_8))
+      END DO
+      max_ikind = MAXVAL(hfx_split_basis(:)%merged_ikind)
+      max_iset = MAXVAL(hfx_split_basis(:)%merged_iset)
+
+      !ALLOCATE (hfx_split_basis_sorted(nblocks))
+      !ALLOCATE (ind(nblocks))
+      ALLOCATE (arr(nblocks))
+
+      DO iblock = 1,nblocks
+         l = hfx_split_basis(iblock)%lmax(1)
+         arr(iblock) = ((((max_l-l) * max_npgf + &
+                       max_npgf - hfx_split_basis(iblock)%npgf(1)) * max_nsgfl + &
+                       max_nsgfl - hfx_split_basis(iblock)%nsgfl(l,1)) * max_iset + &
+                       hfx_split_basis(iblock)%merged_iset - 1) * max_ikind + hfx_split_basis(iblock)%merged_ikind
+      END DO
+
+      CALL sort(arr, nblocks, set_inds_sorted)
+      DEALLOCATE (arr)
+
+      !DO iblock = 1,nblocks
+      !   i = ind(iblock)
+      !   hfx_split_basis_sorted(iblock) = hfx_split_basis(i)
+      !END DO
+
+      !DEALLOCATE(hfx_split_basis)
+      !hfx_split_basis => hfx_split_basis_sorted
+
+      CALL timestop(handle)
+
+   END SUBROUTINE hfx_sort_split_basis_types
+
+! **************************************************************************************************
+!> \brief ...
+!> \param basis_parameter ...
+! **************************************************************************************************
+   SUBROUTINE hfx_release_split_basis_types(basis_parameter)
+      TYPE(hfx_basis_type), DIMENSION(:), POINTER        :: basis_parameter
+
+      CHARACTER(LEN=*), PARAMETER :: routineN = 'hfx_release_split_basis_types'
+
+      INTEGER                                            :: handle, i
+
+      CALL timeset(routineN, handle)
+
+      !! BASIS parameter
+      DO i = 1, SIZE(basis_parameter)
+         DEALLOCATE (basis_parameter(i)%lmax)
+         DEALLOCATE (basis_parameter(i)%lmin)
+         DEALLOCATE (basis_parameter(i)%nsgf)
+         DEALLOCATE (basis_parameter(i)%first_sgf)
+         DEALLOCATE (basis_parameter(i)%first_sgf_merged)
+         DEALLOCATE (basis_parameter(i)%sphi)
+         DEALLOCATE (basis_parameter(i)%nl)
+         DEALLOCATE (basis_parameter(i)%nsgfl)
+         DEALLOCATE (basis_parameter(i)%sphi_ext)
+      END DO
+      DEALLOCATE (basis_parameter)
+      CALL timestop(handle)
+
+   END SUBROUTINE hfx_release_split_basis_types
+
 ! **************************************************************************************************
 !> \brief - Parses the memory section
 !> \param memory_parameter ...
@@ -1911,6 +2480,7 @@ CONTAINS
       TYPE(hfx_type), DIMENSION(:, :), POINTER           :: x_data
 
       INTEGER                                            :: i, i_thread, irep, n_rep_hf, n_threads
+      LOGICAL                                            :: do_split_basis
       TYPE(cp_logger_type), POINTER                      :: logger
       TYPE(hfx_type), POINTER                            :: actual_x_data
 
@@ -1927,6 +2497,7 @@ CONTAINS
       DO i_thread = 1, n_threads
          DO irep = 1, n_rep_hf
             actual_x_data => x_data(irep, i_thread)
+            do_split_basis = actual_x_data%do_split_basis
             DEALLOCATE (actual_x_data%neighbor_cells)
             DEALLOCATE (actual_x_data%distribution_energy)
             DEALLOCATE (actual_x_data%distribution_forces)
@@ -1968,6 +2539,16 @@ CONTAINS
             END IF
 
             !! BASIS parameter
+            IF (do_split_basis) THEN
+               CALL hfx_release_split_basis_types(actual_x_data%split_basis_parameter)
+               DEALLOCATE (actual_x_data%n_split_sets_per_kind)
+               DEALLOCATE (actual_x_data%split_kind_offset)
+               DEALLOCATE (actual_x_data%n_split_sets_per_atom)
+               DEALLOCATE (actual_x_data%split_atom_offset)
+               CALL deallocate_atomic_kind_set(actual_x_data%split_atomic_kind_set)
+               CALL deallocate_particle_set(actual_x_data%split_particle_set)
+               DEALLOCATE (actual_x_data%set_inds_sorted)
+            END IF
             CALL hfx_release_basis_types(actual_x_data%basis_parameter)
 
             !MK Release libint and libderiv data structure
@@ -2068,6 +2649,8 @@ CONTAINS
       REAL(dp) :: cross_product(3), dist_min, distance(14), l_min, normal(3, 6), P(3, 14), &
          plane_vector(3, 2), point_in_plane(3), r(3), R1, R_max, R_max_stress, s(3), x, y, z, Zeta1
       REAL(dp), DIMENSION(:, :), POINTER                 :: zeta, zetb
+      TYPE(hfx_basis_type), CONTIGUOUS, DIMENSION(:), &
+         POINTER                                         :: basis_parameter
       TYPE(hfx_cell_type), ALLOCATABLE, DIMENSION(:)     :: tmp_neighbor_cells
 
       total_number_of_cells = 0
@@ -2075,6 +2658,11 @@ CONTAINS
       nkp = 1
       IF (PRESENT(nkp_grid)) nkp = nkp_grid
       do_kpoints = ANY(nkp > 1)
+      IF (x_data%do_split_basis) THEN
+         basis_parameter => x_data%split_basis_parameter
+      ELSE
+         basis_parameter => x_data%basis_parameter
+      END IF
 
       ! ** Check some settings
       IF (i_thread == 1) THEN
@@ -2115,16 +2703,16 @@ CONTAINS
       SELECT CASE (x_data%potential_parameter%potential_type)
       CASE (do_potential_truncated, do_potential_mix_cl_trunc, do_potential_short)
          R_max = 0.0_dp
-         DO ikind = 1, SIZE(x_data%basis_parameter)
-            la_max => x_data%basis_parameter(ikind)%lmax
-            zeta => x_data%basis_parameter(ikind)%zet
-            nseta = x_data%basis_parameter(ikind)%nset
-            npgfa => x_data%basis_parameter(ikind)%npgf
-            DO jkind = 1, SIZE(x_data%basis_parameter)
-               lb_max => x_data%basis_parameter(jkind)%lmax
-               zetb => x_data%basis_parameter(jkind)%zet
-               nsetb = x_data%basis_parameter(jkind)%nset
-               npgfb => x_data%basis_parameter(jkind)%npgf
+         DO ikind = 1, SIZE(basis_parameter)
+            la_max => basis_parameter(ikind)%lmax
+            zeta => basis_parameter(ikind)%zet
+            nseta = basis_parameter(ikind)%nset
+            npgfa => basis_parameter(ikind)%npgf
+            DO jkind = 1, SIZE(basis_parameter)
+               lb_max => basis_parameter(jkind)%lmax
+               zetb => basis_parameter(jkind)%zet
+               nsetb = basis_parameter(jkind)%nset
+               npgfb => basis_parameter(jkind)%npgf
                DO iset = 1, nseta
                   DO jset = 1, nsetb
                      DO ipgf = 1, npgfa(iset)

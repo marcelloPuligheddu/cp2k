@@ -297,11 +297,11 @@ CONTAINS
 !>      screening matrices
 ! **************************************************************************************************
 
-   SUBROUTINE calc_screening_functions(qs_env, basis_parameter, lib, potential_parameter, &
+   SUBROUTINE calc_screening_functions(basis_parameter, lib, potential_parameter, &
                                        coeffs_set, coeffs_kind, coeffs_pgf, radii_pgf, &
                                        max_set, max_pgf, n_threads, i_thread, &
                                        p_work)
-      TYPE(qs_environment_type), POINTER                 :: qs_env
+      !TYPE(qs_environment_type), POINTER                 :: qs_env
       TYPE(hfx_basis_type), DIMENSION(:), POINTER        :: basis_parameter
       TYPE(cp_libint_t)                                  :: lib
       TYPE(hfx_potential_type)                           :: potential_parameter
@@ -327,20 +327,21 @@ CONTAINS
       REAL(dp), DIMENSION(:), POINTER                    :: set_radius_a, set_radius_b
       REAL(dp), DIMENSION(:, :), POINTER                 :: rpgfa, rpgfb, sphi_a, sphi_b, zeta, zetb
       REAL(dp), SAVE                                     :: DATA(2, 0:100)
-      TYPE(gto_basis_set_type), POINTER                  :: orb_basis
+      !TYPE(gto_basis_set_type), POINTER                  :: orb_basis
       TYPE(hfx_screen_coeff_type), DIMENSION(:, :), &
          POINTER                                         :: tmp_R_1
-      TYPE(qs_kind_type), DIMENSION(:), POINTER          :: qs_kind_set
-      TYPE(qs_kind_type), POINTER                        :: qs_kind
+      !TYPE(qs_kind_type), DIMENSION(:), POINTER          :: qs_kind_set
+      !TYPE(qs_kind_type), POINTER                        :: qs_kind
 
 !$OMP MASTER
       CALL timeset(routineN, handle)
 !$OMP END MASTER
 
-      CALL get_qs_env(qs_env=qs_env, &
-                      qs_kind_set=qs_kind_set)
+      !CALL get_qs_env(qs_env=qs_env, &
+      !                qs_kind_set=qs_kind_set)
 
-      nkind = SIZE(qs_kind_set, 1)
+      !nkind = SIZE(qs_kind_set, 1)
+      nkind = SIZE(basis_parameter, 1)
 
 !$OMP MASTER
       ALLOCATE (coeffs_pgf(max_pgf, max_pgf, max_set, max_set, nkind, nkind))
@@ -364,9 +365,9 @@ CONTAINS
       ra = 0.0_dp
       rb = 0.0_dp
       DO ikind = 1, nkind
-         NULLIFY (qs_kind, orb_basis)
-         qs_kind => qs_kind_set(ikind)
-         CALL get_qs_kind(qs_kind=qs_kind, basis_set=orb_basis)
+         !NULLIFY (qs_kind, orb_basis)
+         !qs_kind => qs_kind_set(ikind)
+         !CALL get_qs_kind(qs_kind=qs_kind, basis_set=orb_basis)
          NULLIFY (la_max, la_min, npgfa, zeta)
 
          la_max => basis_parameter(ikind)%lmax
@@ -381,9 +382,9 @@ CONTAINS
          rpgfa => basis_parameter(ikind)%pgf_radius
 
          DO jkind = 1, nkind
-            NULLIFY (qs_kind, orb_basis)
-            qs_kind => qs_kind_set(jkind)
-            CALL get_qs_kind(qs_kind=qs_kind, basis_set=orb_basis)
+            !NULLIFY (qs_kind, orb_basis)
+            !qs_kind => qs_kind_set(jkind)
+            !CALL get_qs_kind(qs_kind=qs_kind, basis_set=orb_basis)
             NULLIFY (lb_max, lb_min, npgfb, zetb)
 
             lb_max => basis_parameter(jkind)%lmax
@@ -465,9 +466,9 @@ CONTAINS
       ra = 0.0_dp
       rb = 0.0_dp
       DO ikind = 1, nkind
-         NULLIFY (qs_kind, orb_basis)
-         qs_kind => qs_kind_set(ikind)
-         CALL get_qs_kind(qs_kind=qs_kind, basis_set=orb_basis)
+         !NULLIFY (qs_kind, orb_basis)
+         !qs_kind => qs_kind_set(ikind)
+         !CALL get_qs_kind(qs_kind=qs_kind, basis_set=orb_basis)
          NULLIFY (la_max, la_min, npgfa, zeta)
 !      CALL get_gto_basis_set(gto_basis_set=orb_basis,&
 !                             lmax=la_max,&
@@ -490,9 +491,9 @@ CONTAINS
          nsgfa => basis_parameter(ikind)%nsgf
 
          DO jkind = 1, nkind
-            NULLIFY (qs_kind, orb_basis)
-            qs_kind => qs_kind_set(jkind)
-            CALL get_qs_kind(qs_kind=qs_kind, basis_set=orb_basis)
+            !NULLIFY (qs_kind, orb_basis)
+            !qs_kind => qs_kind_set(jkind)
+            !CALL get_qs_kind(qs_kind=qs_kind, basis_set=orb_basis)
             NULLIFY (lb_max, lb_min, npgfb, zetb)
 
             lb_max => basis_parameter(jkind)%lmax
@@ -557,9 +558,9 @@ CONTAINS
       ra = 0.0_dp
       rb = 0.0_dp
       DO ikind = 1, nkind
-         NULLIFY (qs_kind, orb_basis)
-         qs_kind => qs_kind_set(ikind)
-         CALL get_qs_kind(qs_kind=qs_kind, basis_set=orb_basis)
+         !NULLIFY (qs_kind, orb_basis)
+         !qs_kind => qs_kind_set(ikind)
+         !CALL get_qs_kind(qs_kind=qs_kind, basis_set=orb_basis)
          NULLIFY (la_max, la_min, npgfa, zeta)
 
          la_max => basis_parameter(ikind)%lmax
@@ -573,9 +574,9 @@ CONTAINS
          nsgfa => basis_parameter(ikind)%nsgf
 
          DO jkind = 1, nkind
-            NULLIFY (qs_kind, orb_basis)
-            qs_kind => qs_kind_set(jkind)
-            CALL get_qs_kind(qs_kind=qs_kind, basis_set=orb_basis)
+            !NULLIFY (qs_kind, orb_basis)
+            !qs_kind => qs_kind_set(jkind)
+            !CALL get_qs_kind(qs_kind=qs_kind, basis_set=orb_basis)
             NULLIFY (lb_max, lb_min, npgfb, zetb)
 
             lb_max => basis_parameter(jkind)%lmax
@@ -654,11 +655,12 @@ CONTAINS
 !>
 ! **************************************************************************************************
 
-   SUBROUTINE calc_pair_dist_radii(qs_env, basis_parameter, &
+   !SUBROUTINE calc_pair_dist_radii(qs_env, basis_parameter, &
+   SUBROUTINE calc_pair_dist_radii(basis_parameter, &
                                    radii_pgf, max_set, max_pgf, eps_schwarz, &
                                    n_threads, i_thread)
 
-      TYPE(qs_environment_type), POINTER                 :: qs_env
+      !TYPE(qs_environment_type), POINTER                 :: qs_env
       TYPE(hfx_basis_type), DIMENSION(:), POINTER        :: basis_parameter
       TYPE(hfx_screen_coeff_type), &
          DIMENSION(:, :, :, :, :, :), POINTER            :: radii_pgf
@@ -678,17 +680,18 @@ CONTAINS
          rab(3), rab2, radius, rap(3), rb(3), rp(3), x(2), zetp
       REAL(dp), DIMENSION(:, :), POINTER                 :: rpgfa, rpgfb, sphi_a, sphi_b, zeta, zetb
       REAL(dp), SAVE                                     :: DATA(2, 0:100)
-      TYPE(gto_basis_set_type), POINTER                  :: orb_basis
-      TYPE(qs_kind_type), DIMENSION(:), POINTER          :: qs_kind_set
-      TYPE(qs_kind_type), POINTER                        :: qs_kind
+      !TYPE(gto_basis_set_type), POINTER                  :: orb_basis
+      !TYPE(qs_kind_type), DIMENSION(:), POINTER          :: qs_kind_set
+      !TYPE(qs_kind_type), POINTER                        :: qs_kind
 
 !$OMP MASTER
       CALL timeset(routineN, handle)
 !$OMP END MASTER
-      CALL get_qs_env(qs_env=qs_env, &
-                      qs_kind_set=qs_kind_set)
+      !CALL get_qs_env(qs_env=qs_env, &
+      !                qs_kind_set=qs_kind_set)
 
-      nkind = SIZE(qs_kind_set, 1)
+      !nkind = SIZE(qs_kind_set, 1)
+      nkind = SIZE(basis_parameter, 1)
       ra = 0.0_dp
       rb = 0.0_dp
 !$OMP MASTER
@@ -712,9 +715,9 @@ CONTAINS
 !$OMP BARRIER
 
       DO ikind = 1, nkind
-         NULLIFY (qs_kind, orb_basis)
-         qs_kind => qs_kind_set(ikind)
-         CALL get_qs_kind(qs_kind=qs_kind, basis_set=orb_basis)
+         !NULLIFY (qs_kind, orb_basis)
+         !qs_kind => qs_kind_set(ikind)
+         !CALL get_qs_kind(qs_kind=qs_kind, basis_set=orb_basis)
          NULLIFY (la_max, la_min, npgfa, zeta)
 
          la_max => basis_parameter(ikind)%lmax
@@ -728,9 +731,9 @@ CONTAINS
          rpgfa => basis_parameter(ikind)%pgf_radius
 
          DO jkind = 1, nkind
-            NULLIFY (qs_kind, orb_basis)
-            qs_kind => qs_kind_set(jkind)
-            CALL get_qs_kind(qs_kind=qs_kind, basis_set=orb_basis)
+            !NULLIFY (qs_kind, orb_basis)
+            !qs_kind => qs_kind_set(jkind)
+            !CALL get_qs_kind(qs_kind=qs_kind, basis_set=orb_basis)
             NULLIFY (lb_max, lb_min, npgfb, zetb)
 
             lb_max => basis_parameter(jkind)%lmax
