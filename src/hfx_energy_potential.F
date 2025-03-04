@@ -68,7 +68,7 @@ MODULE hfx_energy_potential
       hfx_general_type, hfx_init_container, hfx_load_balance_type, hfx_memory_type, hfx_p_kind, &
       hfx_pgf_list, hfx_pgf_product_list, hfx_potential_type, hfx_reset_memory_usage_counter, &
       hfx_screen_coeff_type, hfx_screening_type, hfx_task_list_type, hfx_type, init_t_c_g0_lmax, &
-      log_zero, pair_list_type, pair_set_list_type
+      log_zero, pair_list_type, pair_set_list_type, hfx_sort_block_range_types
    USE input_constants, ONLY: do_potential_mix_cl_trunc, &
                               do_potential_truncated, &
                               do_potential_TShPSC, &
@@ -273,7 +273,6 @@ CONTAINS
       logical :: use_libint, use_libgint, use_only_alpha_spin
       logical :: cp2k_was_compiled_with_cuda_offload, cp2k_was_compiled_with_libint
       logical :: cp2k_was_compiled_with_libGint
-
       NULLIFY (dft_control, matrix_ks_aux_fit_hfx)
 
       CALL timeset(routineN, handle)
@@ -663,6 +662,13 @@ CONTAINS
                                        shm_master_x_data%map_atoms_to_cpus, &
                                        nkind)
          END IF
+IF (.FALSE.) THEN ! SC DEBUG
+WRITE(6,*) "DEB SIZE(atomic_block_offset) = ", SIZE(shm_master_x_data%atomic_block_offset, 1), &
+     SIZE(shm_master_x_data%atomic_block_offset, 2)
+DO iatom = 1,SIZE(shm_master_x_data%atomic_block_offset, 2)
+   WRITE(6,'(100I8)') shm_master_x_data%atomic_block_offset(iatom, :)
+END DO
+END IF
 
          shm_is_assoc_atomic_block => shm_master_x_data%is_assoc_atomic_block
 
@@ -998,11 +1004,26 @@ CONTAINS
                                   cell, do_p_screening, actual_x_data%map_atom_to_kind_atom, &
                                   nkind, hfx_do_eval_energy, shm_pmax_block, use_virial=.FALSE.)
             actual_x_data%b_first_load_balance_energy = .FALSE.
+            !IF (actual_x_data%do_split_basis) THEN
+            !   CALL hfx_sort_block_range_types(actual_x_data%blocks, load_balance_parameter%nblocks, &
+            !                                   actual_x_data%set_inds_sorted, actual_x_data%split_particle_set)
+            !END IF
          ELSE
             CALL hfx_update_load_balance(actual_x_data, para_env, &
                                          load_balance_parameter, &
                                          i_thread, n_threads, hfx_do_eval_energy)
+            !IF (actual_x_data%do_split_basis) THEN
+            !   CALL hfx_sort_block_range_types(actual_x_data%blocks, load_balance_parameter%nblocks, &
+            !                                   actual_x_data%set_inds_sorted, actual_x_data%split_particle_set)
+            !END IF
          END IF
+IF (sc_debug) THEN
+  WRITE(6,'(A)') "ORDERED SPLIT BLOCKS"
+DO img = 1,SIZE(actual_x_data%blocks)
+  WRITE(6,'(3(A,I5),A,I20)') "iblock = ", img, " istart = ", actual_x_data%blocks(img)%istart, &
+        " iend = ", actual_x_data%blocks(img)%iend, " cost = ", actual_x_data%blocks(img)%cost
+END DO
+END IF
       END IF
 !$OMP BARRIER
 !$OMP MASTER
@@ -2690,7 +2711,7 @@ END IF
                         nsod = nso(ld)
 
                         tmp_max = 0.0_dp
-IF (sc_debug) THEN
+IF (sc_debug .AND. .FALSE.) THEN
 !WRITE(6,'(A,4I8,3X,4I3,3X,4I3)') "[DEB] ", nsgfla,nsgflb,nsgflc,nsgfld,nsoa,nsob,nsoc,nsod,la,lb,lc,ld ! SC DEBUG
 WRITE(6,'(A,4I8,3X,4I3,3X,4I3,5X,I10)') "[DEB] ", nsgfla,nsgflb,nsgflc,nsgfld,nsoa,nsob,nsoc,nsod,la,lb,lc,ld,&
             nsgfla*nsgflb*nsgflc*nsgfld*nsoa*nsob*nsoc*nsod ! SC DEBUG
@@ -2715,6 +2736,7 @@ END IF
                                           !sphi_d_ext(1, ld + 1, lpgf), &
                                           ee_work, ee_work2, ee_buffer1, ee_buffer2, ee_primitives_tmp, &
                                           p_work)
+
                         cart_estimate = MAX(tmp_max, cart_estimate)
                         s_offset_d = s_offset_d + nsod*nsgfld
                      END DO !ld

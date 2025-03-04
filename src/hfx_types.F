@@ -113,7 +113,7 @@ MODULE hfx_types
              hfx_ri_type, hfx_compression_type, block_ind_type, hfx_ri_init, hfx_ri_release, &
              compare_hfx_sections
 
-   PUBLIC :: get_number_of_hfx_atoms !, get_number_of_hfx_kinds
+   PUBLIC :: get_number_of_hfx_atoms, hfx_sort_block_range_types
 
 #define CACHE_SIZE 1024
 #define BITS_MAX_VAL 6
@@ -121,7 +121,7 @@ MODULE hfx_types
    CHARACTER(len=*), PARAMETER, PRIVATE :: moduleN = 'hfx_types'
 !LOGICAL, PARAMETER, PRIVATE :: global_do_split_basis = .FALSE.
 LOGICAL, PARAMETER, PRIVATE :: global_do_split_basis = .TRUE.
-LOGICAL, PARAMETER, PRIVATE :: sc_debug = .TRUE.
+LOGICAL, PARAMETER, PRIVATE :: sc_debug = .FALSE.
    INTEGER, PARAMETER, PUBLIC                 :: max_atom_block = 32
    INTEGER, PARAMETER, PUBLIC                 :: max_images = 27
    REAL(dp), PARAMETER, PUBLIC                :: log_zero = -1000.0_dp
@@ -852,7 +852,12 @@ END IF
                                  REAL(actual_x_data%load_balance_parameter%nbins*n_threads*para_env%num_pe, KIND=dp)**(0.25_dp))
             END IF
             ! at least 1 atom per block, and avoid overly large blocks
-            actual_x_data%load_balance_parameter%block_size = MIN(max_atom_block, MAX(1, int_val))
+
+            IF (my_do_split_basis) THEN
+               actual_x_data%load_balance_parameter%block_size = 1
+            ELSE
+               actual_x_data%load_balance_parameter%block_size = MIN(max_atom_block, MAX(1, int_val))
+            END IF
 
 !!**************************************************************************************************
 !! **        !! ** This code writes the contraction routines
@@ -2340,6 +2345,58 @@ END IF
       CALL timestop(handle)
 
    END SUBROUTINE hfx_sort_split_basis_types
+
+   SUBROUTINE hfx_sort_block_range_types(blocks, nblocks, set_inds_sorted, split_particle_set)! set_inds_sorted)
+      TYPE(hfx_block_range_type), CONTIGUOUS, DIMENSION(:), &
+                                            POINTER      :: blocks
+      INTEGER, INTENT(in) :: nblocks
+      INTEGER,  DIMENSION(:), INTENT(in)                 :: set_inds_sorted
+      TYPE(particle_type),              &
+         DIMENSION(:), POINTER, INTENT(in)               :: split_particle_set
+
+
+      CHARACTER(LEN=*), PARAMETER :: routineN = 'hfx_sort_block_range_types'
+
+      INTEGER :: handle, iatom, iblock, ikind, iset, nset
+      INTEGER(kind=int_8), ALLOCATABLE, DIMENSION(:)     :: arr
+      INTEGER, ALLOCATABLE, DIMENSION(:)     :: ind, set_inds_sorted_inverted
+      TYPE(hfx_block_range_type), CONTIGUOUS, DIMENSION(:), &
+                                            POINTER      :: blocks_sorted
+
+      CALL timeset(routineN, handle)
+
+      CPASSERT(nblocks == SIZE(blocks))
+      ALLOCATE (blocks_sorted(nblocks))
+      ALLOCATE (ind(nblocks))
+      ALLOCATE (arr(nblocks))
+
+      nset = SIZE(set_inds_sorted)
+      CPASSERT(MAXVAL(set_inds_sorted) == nset)
+      ALLOCATE (set_inds_sorted_inverted(nset))
+      DO iset = 1,nset
+         set_inds_sorted_inverted(set_inds_sorted(iset)) = iset
+      END DO
+
+      DO iblock = 1,nblocks
+         iatom  = blocks(iblock)%istart
+         ikind = split_particle_set(iatom)%atomic_kind%kind_number
+         arr(iblock) = (set_inds_sorted_inverted(ikind)-1)*nblocks + iblock
+      END DO
+
+      CALL sort(arr, nblocks, ind)
+
+      DO iblock = 1,nblocks
+         blocks_sorted(iblock) = blocks(ind(iblock))
+      END DO
+
+      DEALLOCATE (arr, ind, set_inds_sorted_inverted)
+      DEALLOCATE(blocks)
+
+      blocks => blocks_sorted
+
+      CALL timestop(handle)
+
+   END SUBROUTINE hfx_sort_block_range_types
 
 ! **************************************************************************************************
 !> \brief ...

@@ -188,7 +188,7 @@ IF (sc_debug .AND. mepos == source) THEN
    OPEN(blk, file="get_split_full_density.dat", action="WRITE", status="NEW", form="FORMATTED")
    WRITE(blk, '(1I20)') number_of_p_entries
    DO i = 1, number_of_p_entries
-      WRITE(blk, '(I10,F25.20)') i, full_density(i)
+      WRITE(blk, '(I10,1X,F25.10)') i, full_density(i)
    END DO
    CLOSE(blk)
 END IF
@@ -771,7 +771,7 @@ IF (sc_debug .AND. mepos == source) THEN
    OPEN(blk, file="get_split_full_density.dat", action="WRITE", status="NEW", form="FORMATTED")
    WRITE(blk, '(1I20)') number_of_p_entries
    DO i = 1, number_of_p_entries
-      WRITE(blk, '(I10,F25.20)') i, full_density(i)
+      WRITE(blk, '(I10,1X,F25.10)') i, full_density(i)
    END DO
    CLOSE(blk)
 END IF
@@ -881,8 +881,10 @@ END IF
                                  sparse_block(pa1, pb1) = sendbuffer(i)*myd_fac + sparse_block(pa1, pb1)
                               ELSE
                                  !IF (iatom == jatom .AND. iset < jset) THEN
-                                 !   sparse_block(pa1, pb1) = sendbuffer(i)*my_fac*0.5_dp + sparse_block(pa1, pb1)
-                                 !   sparse_block(pb1, pa1) = sendbuffer(i)*my_fac*0.5_dp + sparse_block(pb1, pa1)
+                                 !   !sparse_block(pa1, pb1) = sendbuffer(i)*my_fac*0.5_dp + sparse_block(pa1, pb1)
+                                 !   !sparse_block(pb1, pa1) = sendbuffer(i)*my_fac*0.5_dp + sparse_block(pb1, pa1)
+                                 !   sparse_block(pa1, pb1) = sendbuffer(i)*my_fac + sparse_block(pa1, pb1)
+                                 !   sparse_block(pb1, pa1) = sendbuffer(i)*my_fac + sparse_block(pb1, pa1)
                                  !ELSE
                                     sparse_block(pa1, pb1) = sendbuffer(i)*my_fac + sparse_block(pa1, pb1)
                                  !END IF
@@ -922,7 +924,7 @@ END IF
       INTEGER, DIMENSION(:, :), INTENT(OUT)              :: is_assoc_atomic_block
       INTEGER, INTENT(OUT)                               :: number_of_p_entries
       TYPE(mp_para_env_type), POINTER                    :: para_env
-      INTEGER, DIMENSION(:, :), POINTER                  :: atomic_block_offset
+      INTEGER, DIMENSION(:, :), POINTER                  :: atomic_block_offset !!! up to 2^31 real numbers (16 GB pmat)
       INTEGER, DIMENSION(:, :, :, :), POINTER            :: set_offset
       INTEGER, DIMENSION(:), POINTER                     :: block_offset
       TYPE(hfx_2D_map), DIMENSION(:), POINTER            :: map_atoms_to_cpus
@@ -930,10 +932,11 @@ END IF
       CHARACTER(LEN=*), PARAMETER :: routineN = 'get_split_atomic_block_maps'
 
       INTEGER :: blk, handle, iatom, ibuf, icpu, ikind, ilist, iset, itask, jatom, jkind, jset, &
-         natom, ncpu, nseta, nsetb, number_of_p_blocks, offset, offset_iatom, offset_jatom, tmp(2)
+         natom, ncpu, nseta, nsetb, number_of_p_blocks, offset, offset_iatom, offset_jatom, offset_block, tmp(2)
       !INTEGER :: nsgfa_total, nsgfb_total
       INTEGER, ALLOCATABLE, DIMENSION(:)                 :: buffer_in, buffer_out, counter, rcount, &
                                                             rdispl
+      INTEGER, ALLOCATABLE, DIMENSION(:,:)               :: map_ibuf_to_atomic_block
       INTEGER, DIMENSION(:), POINTER                     :: iatom_list, jatom_list!, nsgfa, nsgfb
       REAL(KIND=dp), DIMENSION(:, :), POINTER            :: sparse_block
       TYPE(dbcsr_iterator_type)                          :: iter
@@ -980,13 +983,15 @@ END IF
       ! send this info around, so we can construct is_assoc_atomic_block
       ! pack all data in buffers and use allgatherv
       !
-      ALLOCATE (buffer_in(3*number_of_p_blocks))
-      ALLOCATE (buffer_out(3*number_of_p_blocks*para_env%num_pe))
+      ALLOCATE (buffer_in(4*number_of_p_blocks))
+      ALLOCATE (buffer_out(4*number_of_p_blocks*para_env%num_pe))
       ALLOCATE (rcount(para_env%num_pe), rdispl(para_env%num_pe))
+      ALLOCATE (map_ibuf_to_atomic_block(SIZE(is_assoc_atomic_block,1), SIZE(is_assoc_atomic_block,2)))
 
       buffer_in = 0
       ibuf = 0
 
+      offset = 0
       CALL dbcsr_iterator_start(iter, matrix, shared=.FALSE.)
       DO WHILE (dbcsr_iterator_blocks_left(iter))
          CALL dbcsr_iterator_next_block(iter, iatom, jatom, sparse_block, blk)
@@ -1002,10 +1007,16 @@ END IF
                   buffer_in(ibuf + 1) = offset_iatom + iset
                   buffer_in(ibuf + 2) = offset_jatom + jset
                   buffer_in(ibuf + 3) = para_env%mepos + 1
-                  ibuf = ibuf + 3
+                  buffer_in(ibuf + 4) = offset
+                  ibuf = ibuf + 4
+
+                  ikind = kind_of(offset_iatom + iset)
+                  jkind = kind_of(offset_jatom + jset)
+                  offset = offset + basis_parameter(ikind)%nsgf_total*basis_parameter(jkind)%nsgf_total
                END IF
             END DO
          END DO
+
       END DO
       CALL dbcsr_iterator_stop(iter)
 
@@ -1016,7 +1027,7 @@ END IF
       END DO
       CALL para_env%allgatherv(buffer_in, buffer_out, rcount, rdispl)
 
-      DO ibuf = 0, number_of_p_blocks*para_env%num_pe*3 - 3, 3
+      DO ibuf = 0, number_of_p_blocks*para_env%num_pe*4 - 4, 4
          itask = buffer_out(ibuf + 3)
          ! buffer_out can be 0 if buffer_in contained less elements than the max number of atom pairs
          ! is_assoc_atomic_block is a map for atom pairs to a processor (assumes symmetry, i,j on the ame as j,i)
@@ -1025,6 +1036,8 @@ END IF
             jatom = buffer_out(ibuf + 2)
             is_assoc_atomic_block(iatom, jatom) = itask
             is_assoc_atomic_block(jatom, iatom) = itask
+            map_ibuf_to_atomic_block(iatom, jatom) = ibuf/4
+            map_ibuf_to_atomic_block(jatom, iatom) = ibuf/4
          END IF
       END DO
 
@@ -1075,34 +1088,45 @@ END IF
          block_offset(icpu) = offset
          DO ilist = 1, SIZE(iatom_list)
             iatom = iatom_list(ilist)
+            jatom = jatom_list(ilist)
+            offset_block = buffer_out(4*map_ibuf_to_atomic_block(iatom, jatom)+4)
+            atomic_block_offset(iatom, jatom) = offset + offset_block
+            atomic_block_offset(jatom, iatom) = offset + offset_block
+         END DO
+         DO ilist = 1, SIZE(iatom_list)
+            iatom = iatom_list(ilist)
             ikind = kind_of(iatom)
             jatom = jatom_list(ilist)
             jkind = kind_of(jatom)
-            atomic_block_offset(iatom, jatom) = offset
-            atomic_block_offset(jatom, iatom) = offset
             offset = offset + basis_parameter(ikind)%nsgf_total*basis_parameter(jkind)%nsgf_total
          END DO
       END DO
       block_offset(ncpu + 1) = offset
       set_offset = 1 ! in case of a split basis set, nseta == 1 .and. nsetb == 1
 
-!      set_offset = 0
-!      DO ikind = 1, nkind
-!         nseta = basis_parameter(ikind)%nset ! always ==1
-!         nsgfa => basis_parameter(ikind)%nsgf
-!         DO jkind = 1, nkind
-!            nsetb = basis_parameter(jkind)%nset ! always ==1
-!            nsgfb => basis_parameter(jkind)%nsgf
-!            offset = 1
-!            DO iset = 1, nseta
-!               DO jset = 1, nsetb
-!                  set_offset(jset, iset, jkind, ikind) = offset
-!                  offset = offset + nsgfa(iset)*nsgfb(jset)
-!               END DO
-!            END DO
+! original code (INCORRECT)
+!      ncpu = para_env%num_pe
+!      offset = 1
+!      atomic_block_offset = 0
+!      block_offset = 0
+!      DO icpu = 1, ncpu
+!         iatom_list => map_atoms_to_cpus(icpu)%iatom_list
+!         jatom_list => map_atoms_to_cpus(icpu)%jatom_list
+!         block_offset(icpu) = offset
+!         DO ilist = 1, SIZE(iatom_list)
+!            iatom = iatom_list(ilist)
+!            ikind = kind_of(iatom)
+!            jatom = jatom_list(ilist)
+!            jkind = kind_of(jatom)
+!            atomic_block_offset(iatom, jatom) = offset
+!            atomic_block_offset(jatom, iatom) = offset
+!            offset = offset + basis_parameter(ikind)%nsgf_total*basis_parameter(jkind)%nsgf_total
 !         END DO
 !      END DO
+!      block_offset(ncpu + 1) = offset
+!      set_offset = 1 ! in case of a split basis set, nseta == 1 .and. nsetb == 1
 
+      DEALLOCATE (map_ibuf_to_atomic_block)
       CALL timestop(handle)
 
    END SUBROUTINE get_split_atomic_block_maps
