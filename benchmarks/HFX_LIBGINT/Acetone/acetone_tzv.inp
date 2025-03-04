@@ -1,0 +1,116 @@
+&GLOBAL
+  PROJECT acetone_tzv
+  RUN_TYPE energy
+  EXTENDED_FFT_LENGTHS .true.
+  PRINT_LEVEL medium
+&END GLOBAL
+
+&FORCE_EVAL
+  METHOD QS
+
+  &DFT
+    BASIS_SET_FILE_NAME BASIS_MOLOPT
+    #BASIS_SET_FILE_NAME BASIS_ADMM
+    POTENTIAL_FILE_NAME POTENTIAL
+    #UKS .true.
+
+    &MGRID
+      CUTOFF     450
+      REL_CUTOFF 60
+    &END MGRID
+
+    &QS
+      METHOD gpw
+      EPS_DEFAULT 1e-15
+      EPS_PGF_ORB 1e-12
+    &END QS
+
+    &SCF
+      MAX_SCF   1      # 20
+      EPS_SCF   1e-8
+      SCF_GUESS atomic
+      IGNORE_CONVERGENCE_FAILURE .true.
+    &END SCF
+
+    #&AUXILIARY_DENSITY_MATRIX_METHOD
+    #  METHOD basis_projection
+    #  ADMM_PURIFICATION_METHOD none
+    #  EXCH_CORRECTION_FUNC pbex
+    #&END
+
+    &POISSON
+       PERIODIC xyz
+    &END POISSON
+
+    &XC
+      &XC_FUNCTIONAL
+        &PBE
+          SCALE_X 0.75                 
+          SCALE_C 1.0
+        &END PBE
+      &END XC_FUNCTIONAL
+
+      &HF
+        &HF_INFO on
+        &END HF_INFO
+
+        &SCREENING
+          EPS_SCHWARZ 1.0E-10
+          #SCREEN_ON_INITIAL_P Y
+        &END
+
+        &MEMORY
+          #MAX_MEMORY 0
+          MAX_MEMORY 14000
+        &END
+
+        #&INTERACTION_POTENTIAL
+        #  POTENTIAL_TYPE TRUNCATED
+        #  CUTOFF_RADIUS 6.0
+        #  T_C_G_DATA t_c_g.dat
+        #&END
+
+        #HFX_LIBRARY libint
+        HFX_LIBRARY libGint
+        #HFX_LIBRARY both
+        FRACTION 0.25
+
+        #TREAT_LSD_IN_CORE .true.
+      &END HF
+    &END XC
+  &END DFT
+
+  &SUBSYS
+    &CELL
+      ABC 25.0 25.0 25.0
+      PERIODIC xyz
+    &END CELL
+
+    &COORD
+  C        12.5002208682       13.7762110454       11.8612390441
+  C        12.4858585335       12.4781892578       12.6458881628
+  C        12.4953141758       11.1961794125       11.8352763171
+  O        12.4667580255       12.4664250385       13.8674238679
+  H        12.6247483517       14.6261841394       12.5416022963
+  H        12.3721072625       10.3307739392       12.4961304874
+  H        11.5515445132       13.8865265336       11.3110562234
+  H        13.3024418254       13.7727615586       11.1071791297
+  H        11.7002524125       11.2070183537       11.0735017661
+  H        13.4499508300       11.1077433050       11.2916618702
+    &END COORD
+
+    &KIND O
+       BASIS_SET TZVP-MOLOPT-GTH
+       POTENTIAL GTH-PBE-q6
+    &END KIND
+    &KIND C
+       BASIS_SET TZVP-MOLOPT-GTH
+       POTENTIAL GTH-PBE-q4
+    &END KIND
+    &KIND H
+       BASIS_SET TZVP-MOLOPT-GTH
+       POTENTIAL GTH-PBE-q1
+    &END KIND
+  &END SUBSYS
+&END FORCE_EVAL
+

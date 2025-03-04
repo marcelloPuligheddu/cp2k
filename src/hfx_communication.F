@@ -880,14 +880,12 @@ END IF
                               IF (iatom == jatom .AND. pa1 == pb1) THEN
                                  sparse_block(pa1, pb1) = sendbuffer(i)*myd_fac + sparse_block(pa1, pb1)
                               ELSE
-                                 !IF (iatom == jatom .AND. iset < jset) THEN
-                                 !   !sparse_block(pa1, pb1) = sendbuffer(i)*my_fac*0.5_dp + sparse_block(pa1, pb1)
-                                 !   !sparse_block(pb1, pa1) = sendbuffer(i)*my_fac*0.5_dp + sparse_block(pb1, pa1)
-                                 !   sparse_block(pa1, pb1) = sendbuffer(i)*my_fac + sparse_block(pa1, pb1)
-                                 !   sparse_block(pb1, pa1) = sendbuffer(i)*my_fac + sparse_block(pb1, pa1)
-                                 !ELSE
+                                 IF (iatom == jatom .AND. iset < jset) THEN
                                     sparse_block(pa1, pb1) = sendbuffer(i)*my_fac + sparse_block(pa1, pb1)
-                                 !END IF
+                                    sparse_block(pb1, pa1) = sendbuffer(i)*my_fac + sparse_block(pb1, pa1)
+                                 ELSE
+                                    sparse_block(pa1, pb1) = sendbuffer(i)*my_fac + sparse_block(pa1, pb1)
+                                 END IF
                               END IF
                            END DO
                         END DO
