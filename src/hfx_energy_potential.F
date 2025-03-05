@@ -117,7 +117,14 @@ MODULE hfx_energy_potential
    PUBLIC ::  integrate_four_center, coulomb4
 
    CHARACTER(len=*), PARAMETER, PRIVATE :: moduleN = 'hfx_energy_potential'
+! +++ split basis set
 LOGICAL, PARAMETER, PRIVATE :: sc_debug = .FALSE.
+LOGICAL, PARAMETER, PRIVATE :: use_libint_or_libgint = .TRUE.
+! low angular momentum integrals
+!    LOG10(nco(la)*nco(lb)*nco(lc)*nco(ld)) <= log10_ncgf_prod
+! are computed on CPUs
+REAL(kind=dp), PARAMETER, PRIVATE :: log10_ncgf_prod = LOG10(3.0_dp)
+! --- split basis set
 !***
 
 CONTAINS
@@ -215,7 +222,7 @@ CONTAINS
                   spherical_estimate, symm_fac
       REAL(dp), ALLOCATABLE, DIMENSION(:) :: ee_buffer1, ee_buffer2, ee_primitives_tmp, ee_work, &
                                              ee_work2, kac_buf, kad_buf, kbc_buf, kbd_buf, pac_buf, pad_buf, pbc_buf, pbd_buf, &
-                                             primitive_integrals
+                                             primitive_integrals, log10_nco
       REAL(dp), DIMENSION(:), POINTER                    :: p_work
       REAL(dp), DIMENSION(:, :), POINTER :: full_density_alpha, full_density_beta, full_ks_alpha, &
                                             full_ks_beta, max_contraction, ptr_p_1, ptr_p_2, ptr_p_3, ptr_p_4, shm_pmax_atom, &
@@ -444,7 +451,7 @@ CONTAINS
 !$OMP         ene_x_bb_diag,act_atomic_block_offset,act_set_offset,j,handle_dist_ks,tmp_i8,tmp_i4,dft_control,&
 !$OMP         etmp,nkimages,img,bin,eps_scaling_str,eps_schwarz_min_str, &
 !$OMP         i,inla,nla,gcc,first_set_of_atom,max_abs_delta_KS, screened, &
-!$OMP         iatom_set,jatom_set,katom_set,latom_set,use_only_alpha_spin,nsgfl1_a,nsgfl1_b,nsgfl1_c,nsgfl1_d)
+!$OMP         iatom_set,jatom_set,katom_set,latom_set,use_only_alpha_spin,nsgfl1_a,nsgfl1_b,nsgfl1_c,nsgfl1_d,log10_nco)
 
       ln_10 = LOG(10.0_dp)
       i_thread = 0
@@ -531,6 +538,13 @@ CONTAINS
          use_libGint = .true.
       end if
 
+      IF (actual_x_data%do_split_basis .AND. use_libint_or_libgint) THEN
+         ALLOCATE(log10_nco(LBOUND(nco,1):UBOUND(nco,1)))
+         log10_nco(:) = LOG10(REAL(nco(:), kind=dp))
+
+         use_libint = .true.
+         use_libGint = .true.
+      END IF
 
       max_am = basis_info%max_am
 
@@ -1017,7 +1031,7 @@ END IF
             !                                   actual_x_data%set_inds_sorted, actual_x_data%split_particle_set)
             !END IF
          END IF
-IF (sc_debug) THEN
+IF (sc_debug .AND. .FALSE.) THEN
   WRITE(6,'(A)') "ORDERED SPLIT BLOCKS"
 DO img = 1,SIZE(actual_x_data%blocks)
   WRITE(6,'(3(A,I5),A,I20)') "iblock = ", img, " istart = ", actual_x_data%blocks(img)%istart, &
@@ -1622,6 +1636,13 @@ END IF
                      END IF
                   END IF
 
+                  IF (actual_x_data%do_split_basis .AND. use_libint_or_libgint) THEN
+                     use_libint = (log10_nco(la_max(1)) + log10_nco(lb_max(1)) + &
+                                  log10_nco(lc_max(1)) + log10_nco(ld_max(1)) <= log10_ncgf_prod)
+                     !use_libGint = .NOT. use_libint
+                     use_libGint = .FALSE.
+                  END IF
+
                   DO i_set_list_ij = i_set_list_ij_start, i_set_list_ij_stop
                      iset = set_list_ij(i_set_list_ij)%pair(1)
                      jset = set_list_ij(i_set_list_ij)%pair(2)
@@ -1990,6 +2011,28 @@ END IF
 !$OMP END MASTER
       END DO !bin
 
+      if_use_libint_or_libgint: IF (actual_x_data%do_split_basis .AND. use_libint_or_libgint) THEN
+         NULLIFY(full_ks_alpha_from_gpu, full_ks_beta_from_gpu)
+         allocate (full_ks_alpha_from_gpu, Mold=full_ks_alpha)
+         !$OMP BARRIER
+         if (use_only_alpha_spin) then
+            call libGint_get_fock_matrix(full_ks_alpha_from_gpu)
+         else
+            allocate (full_ks_beta_from_gpu, Mold=full_ks_beta)
+            !$OMP BARRIER
+            call libGint_get_fock_matrix(full_ks_alpha_from_gpu, full_ks_beta_from_gpu)
+         end if
+
+         IF (ASSOCIATED(full_ks_alpha_from_gpu)) THEN
+            full_ks_alpha = full_ks_alpha + full_ks_alpha_from_gpu
+            DEALLOCATE (full_ks_alpha_from_gpu)
+         END IF
+         IF (ASSOCIATED(full_ks_beta_from_gpu)) THEN
+            full_ks_beta = full_ks_beta + full_ks_beta_from_gpu
+            DEALLOCATE (full_ks_beta_from_gpu)
+         END IF
+      ELSE
+
       !!!
       ! IF running both libint and libGint, uses the values from libint to check libGint values
       if (use_libGint .and. use_libint) then
@@ -2057,6 +2100,7 @@ END IF
             call libGint_get_fock_matrix(full_ks_alpha, full_ks_beta)
          end if
       end if
+      END IF if_use_libint_or_libgint
 
 !$OMP MASTER
       logger => cp_get_default_logger()
@@ -2472,6 +2516,9 @@ END IF
 !$OMP END CRITICAL(hfxenergy_out_critical)
 !$OMP BARRIER
       !! Clean up
+      IF (actual_x_data%do_split_basis .AND. use_libint_or_libgint) THEN
+         IF (ALLOCATED(log10_nco)) DEALLOCATE(log10_nco)
+      END IF
       DEALLOCATE (last_sgf_global)
 !$OMP MASTER
       DEALLOCATE (full_density_alpha)

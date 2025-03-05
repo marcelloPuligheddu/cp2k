@@ -1138,7 +1138,6 @@ END IF
          CALL hfx_print_info(actual_x_data, hfx_section, irep)
       END DO
 
-#if 1
 ! SC DEBUG
 IF (sc_debug) THEN
       IF (my_do_split_basis .AND. para_env%mepos == para_env%source) THEN
@@ -1197,7 +1196,6 @@ IF (sc_debug) THEN
 !CPABORT("hfx_split_basis_type")
 END IF
 ! END DEBUG
-#endif
 
       CALL timestop(handle)
 
@@ -2051,7 +2049,6 @@ END IF
             sgfl_offset = 0
             DO l = hfx_basis(ikind)%lmin(iset), hfx_basis(ikind)%lmax(iset)
                nsgfl = hfx_basis(ikind)%nsgfl(l, iset) ! number of shell with the particular angular momentum
-WRITE(6,*) 'ikind, iset, l, nsgfl = ', ikind, iset, l, nsgfl
                IF (nsgfl > 0) THEN
                   nblocks = nblocks + 1
 
