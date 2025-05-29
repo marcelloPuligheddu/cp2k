@@ -1,0 +1,27 @@
+
+module load fftw/3.3.10 fftw_mpi/3.3.10 gcc/base openmpi/5.0.7-ucc1.3.0-ucx1.18.0
+
+./install_cp2k_toolchain.sh -j 8 \
+ --enable-hip --gpu-ver=Mi250\
+ --libint-lmax=4 \
+ --with-cmake=system \
+ --with-ninja=system \
+ --with-openblas=install\
+ --with-scalapack=install\
+ --with-fftw=system \
+ --with-elpa=no \
+ --with-sirius=no \
+ --with-libvdwxc=no \
+ --with-hdf5=no \
+ --with-spfft=no \
+ --with-spla=no \
+ --with-cosma=no \
+ --with-libvori=no \
+ --with-dftd4=no \
+ --with-pugixml=no \
+ --with-spglib=no \
+ --with-libxsmm=no \
+ --with-libGint=install \
+
+# --with-libGint=install \
+
