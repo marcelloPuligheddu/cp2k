@@ -851,9 +851,9 @@ if [ "${with_dftd4}" = "__INSTALL__" ]; then
   [ "${with_ninja}" = "__DONTUSE__" ] && with_ninja="__INSTALL__"
 fi
 
-#libGint installation requires cuda enabled
-if [ "${with_libGint}" != "__DONTUSE__" ] && [ ${enable_cuda} != "__TRUE__" ]; then
-  report_error "libGint (at the moment) requires the use of cuda. Add --enable-cuda"
+#libGint installation requires cuda or hip enabled
+if [ "${with_libGint}" != "__DONTUSE__" ] && [ ${enable_cuda} != "__TRUE__" ] && [ ${enable_hip} != "__TRUE__" ]; then
+  report_error "libGint requires the use of cuda or hip. Add --enable-cuda or --enable-hip"
   exit 1
 fi
 
