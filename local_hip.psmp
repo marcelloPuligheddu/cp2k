@@ -1,0 +1,27 @@
+CC          = /opt/rocmplus-6.4.0/openmpi-5.0.7-ucc-1.3.0-ucx-1.18.0/bin/mpicc
+CXX         = /opt/rocmplus-6.4.0/openmpi-5.0.7-ucc-1.3.0-ucx-1.18.0/bin/mpic++
+AR          = ar -r
+FC          = /opt/rocmplus-6.4.0/openmpi-5.0.7-ucc-1.3.0-ucx-1.18.0/bin/mpifort
+#LD=hipcc
+LD          = /opt/rocmplus-6.4.0/openmpi-5.0.7-ucc-1.3.0-ucx-1.18.0/bin/mpifort
+#
+DFLAGS      =  -D__parallel -D__MPI_F08 -D__FFTW3  -D__LIBINT -D__LIBXC -D__LIBGRPP -D__DBCSR -D__LIBGINT -D__HIP_PLATFORM_AMD__ -D__OFFLOAD_HIP -D__NO_OFFLOAD_GRID -D__NO_OFFLOAD_PW
+#
+WFLAGS      = -Werror=aliasing -Werror=ampersand -Werror=c-binding-type -Werror=intrinsic-shadow -Werror=intrinsics-std -Werror=line-truncation -Werror=tabs -Werror=target-lifetime -Werror=underflow -Werror=unused-but-set-variable -Werror=unused-variable -Werror=unused-dummy-argument -Werror=unused-parameter -Werror=unused-label -Werror=conversion -Werror=zerotrip -Wno-maybe-uninitialized -Wuninitialized -Wuse-without-only 
+#
+#FCDEBFLAGS  = -fbacktrace -ffree-form -fimplicit-none -std=f2008 
+FCDEBFLAGS  = -fbacktrace -std=f2008 
+CFLAGS      = -fno-omit-frame-pointer -fopenmp -g -march=native -mtune=native  -O3 -funroll-loops $(PROFOPT)  -I/opt/rocmplus-6.4.0/openmpi-5.0.7-ucc-1.3.0-ucx-1.18.0/include  -I'/home/aac/shared/teams/dcgpu_training/epcc/marcellop/fork_cp2k/tools/toolchain/install/openblas-0.3.28/include'  -I'/home/aac/shared/teams/dcgpu_training/epcc/marcellop/fork_cp2k/tools/toolchain/install/libint-v2.6.0-cp2k-lmax-4/include' -I'/home/aac/shared/teams/dcgpu_training/epcc/marcellop/fork_cp2k/tools/toolchain/install/libxc-7.0.0/include' -I'/home/aac/shared/teams/dcgpu_training/epcc/marcellop/fork_cp2k/tools/toolchain/install/libgrpp-main-20231225/include'  -std=c11 -Wall -Wextra -Werror -Wno-vla-parameter -Wno-deprecated-declarations $(DFLAGS) -I/opt/rocm-6.4.0/include
+CXXFLAGS    = -O2 -fPIC -fno-omit-frame-pointer -fopenmp -g -mtune=native --std=c++14 $(DFLAGS) -Wno-deprecated-declarations -fopenmp -Wall -Wextra -Werror -I/opt/rocm-6.4.0/include
+FCFLAGS     = -fno-omit-frame-pointer -fopenmp -g -march=native -mtune=native  -O3 -funroll-loops $(PROFOPT) -I/home/aac/shared/teams/dcgpu_training/epcc/marcellop/fork_cp2k/tools/toolchain/install/libGint-EXP/include -I/opt/rocmplus-6.4.0/openmpi-5.0.7-ucc-1.3.0-ucx-1.18.0/include  -I'/home/aac/shared/teams/dcgpu_training/epcc/marcellop/fork_cp2k/tools/toolchain/install/openblas-0.3.28/include'  -I'/home/aac/shared/teams/dcgpu_training/epcc/marcellop/fork_cp2k/tools/toolchain/install/libint-v2.6.0-cp2k-lmax-4/include' -I'/home/aac/shared/teams/dcgpu_training/epcc/marcellop/fork_cp2k/tools/toolchain/install/libxc-7.0.0/include' -I'/home/aac/shared/teams/dcgpu_training/epcc/marcellop/fork_cp2k/tools/toolchain/install/libgrpp-main-20231225/include' -I'/home/aac/shared/teams/dcgpu_training/epcc/marcellop/cp2k/tools/toolchain/install/dbcsr-2.8.0/include' -I'/opt/fftw_mpi-v3.3.10/include' $(FCDEBFLAGS) $(WFLAGS) $(DFLAGS)
+#
+LDFLAGS     =  $(FCFLAGS)  -L/opt/rocmplus-6.4.0/openmpi-5.0.7-ucc-1.3.0-ucx-1.18.0/lib -Wl,-rpath -Wl,/opt/rocmplus-6.4.0/openmpi-5.0.7-ucc-1.3.0-ucx-1.18.0/lib -Wl,--enable-new-dtags   -L'/home/aac/shared/teams/dcgpu_training/epcc/marcellop/fork_cp2k/tools/toolchain/install/openblas-0.3.28/lib' -Wl,-rpath,'/home/aac/shared/teams/dcgpu_training/epcc/marcellop/fork_cp2k/tools/toolchain/install/openblas-0.3.28/lib'  -L'/opt/fftw-v3.3.10/lib' -Wl,-rpath,'/opt/fftw-v3.3.10/lib' -L'/home/aac/shared/teams/dcgpu_training/epcc/marcellop/fork_cp2k/tools/toolchain/install/libint-v2.6.0-cp2k-lmax-4/lib' -L'/home/aac/shared/teams/dcgpu_training/epcc/marcellop/fork_cp2k/tools/toolchain/install/libxc-7.0.0/lib' -Wl,-rpath,'/home/aac/shared/teams/dcgpu_training/epcc/marcellop/fork_cp2k/tools/toolchain/install/libxc-7.0.0/lib' -L'/home/aac/shared/teams/dcgpu_training/epcc/marcellop/fork_cp2k/tools/toolchain/install/libgrpp-main-20231225/lib' -Wl,-rpath,'/home/aac/shared/teams/dcgpu_training/epcc/marcellop/fork_cp2k/tools/toolchain/install/libgrpp-main-20231225/lib'  -L'/home/aac/shared/teams/dcgpu_training/epcc/marcellop/fork_cp2k/tools/toolchain/install/scalapack-2.2.1/lib' -Wl,-rpath,'/home/aac/shared/teams/dcgpu_training/epcc/marcellop/fork_cp2k/tools/toolchain/install/scalapack-2.2.1/lib' -L'/opt/rocm-6.4.0/lib' -Wl,-rpath,'/opt/rocm-6.4.0/lib' -L'/opt/fftw_mpi-v3.3.10/lib' -L/home/aac/shared/teams/dcgpu_training/epcc/marcellop/fork_cp2k/tools/toolchain/install/libGint-EXP/lib
+LDFLAGS_C   = 
+LIBS        = -lscalapack -llibgrpp -lxcf03 -lxc -lint2 -lcp2kGint -lfftw3_mpi -lfftw3 -lfftw3_omp   -lmpi  -l:libopenblas.a -lstdc++ -lamdhip64 -lhipfft -lhipblas -lrocblas  -lamdhip64 -lrocm-core
+#
+GPUVER        = Mi250
+OFFLOAD_CC    = /opt/rocm-6.4.0/bin/hipcc
+OFFLOAD_FLAGS = -fPIE -D__HIP_PLATFORM_AMD__ -g --offload-arch=gfx942 -munsafe-fp-atomics -O3 --std=c++11 -Wall -Wextra -Werror $(DFLAGS) -I/opt/rocm-6.4.0/include
+OFFLOAD_TARGET = hip
+#
+FYPPFLAGS   = -n --line-marker-format=gfortran5
