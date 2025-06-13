@@ -34,7 +34,7 @@
     &END SCF
     &XC
       &HF
-        HFX_LIBRARY libint
+        HFX_LIBRARY both
         &INTERACTION_POTENTIAL
           CUTOFF_RADIUS 4 
           POTENTIAL_TYPE TRUNCATED

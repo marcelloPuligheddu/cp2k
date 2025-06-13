@@ -41,8 +41,8 @@ case "$with_libGint" in
     rm -rf libGint-${libGint_ver}
     #      cp -r /work4/scd/scarf1152/libGint libGint-${libGint_ver}
     #     OR
-
-    git clone --depth=1 https://github.com/marcelloPuligheddu/libGint.git libGint-${libGint_ver}
+    # TODO change to main / cuda / hip from config flags
+    git clone --depth=1 --single-branch --branch hip https://github.com/marcelloPuligheddu/libGint.git libGint-${libGint_ver}
     cd libGint-${libGint_ver}
 
     make -j $(get_nprocs) > make.log 2>&1 || tail -n ${LOG_LINES} make.log
@@ -96,12 +96,12 @@ EOF
   fi
   cat << EOF >> "${BUILDDIR}/setup_libGint"
 export LIBGINT_VER="${libGint_ver}"
-export LIBGINT_CFLAGS="IF_CUDA(-I${pkg_install_dir}/include ${LIBGINT_CFLAGS}|)"
-export LIBGINT_LDFLAGS="IF_CUDA(${LIBGINT_LDFLAGS}|)"
-export CP_DFLAGS="\${CP_DFLAGS} IF_CUDA(-D__LIBGINT|)"
-export CP_CFLAGS="\${CP_CFLAGS} IF_CUDA(${LIBGINT_CFLAGS}|)"
-export CP_LDFLAGS="\${CP_LDFLAGS} IF_CUDA(${LIBGINT_LDFLAGS}|)"
-export CP_LIBS=" IF_CUDA(${LIBGINT_LIBS}|) \${CP_LIBS}"
+export LIBGINT_CFLAGS="-I${pkg_install_dir}/include ${LIBGINT_CFLAGS}"
+export LIBGINT_LDFLAGS="${LIBGINT_LDFLAGS}"
+export CP_DFLAGS="\${CP_DFLAGS} -D__LIBGINT"
+export CP_CFLAGS="\${CP_CFLAGS} ${LIBGINT_CFLAGS}"
+export CP_LDFLAGS="\${CP_LDFLAGS} ${LIBGINT_LDFLAGS}"
+export CP_LIBS=" ${LIBGINT_LIBS} \${CP_LIBS}"
 EOF
   cat "${BUILDDIR}/setup_libGint" >> $SETUPFILE
 fi

@@ -20,7 +20,7 @@
       WF_INTERPOLATION PS
     &END QS
     &SCF
-      MAX_SCF 4
+      MAX_SCF 1
       IGNORE_CONVERGENCE_FAILURE
       SCF_GUESS ATOMIC
       &OT ON
@@ -35,7 +35,7 @@
     &END SCF
     &XC
       &HF
-        HFX_LIBRARY both #libint
+        HFX_LIBRARY libint
         &INTERACTION_POTENTIAL
           CUTOFF_RADIUS 3
           POTENTIAL_TYPE TRUNCATED
@@ -43,7 +43,7 @@
         &END INTERACTION_POTENTIAL
         &MEMORY
           EPS_STORAGE_SCALING 0.1
-          MAX_MEMORY 20000
+          MAX_MEMORY 2000
         &END MEMORY
         &SCREENING
           EPS_SCHWARZ 1.0E-9

@@ -1,29 +1,34 @@
 
 ## Folder File MPI OMP ##
 tests=(
-# "H;H1.inp;1;1"
-# "H;H2.inp;1;1"
-# "H;H3.inp;1;1"
-# "H2O;H2O-HFX-1.inp;1;1"
+ "H;H1.inp;1;1"
+ "H;H2.inp;1;1"
+ "H;H3.inp;1;1"
+ "H2O;H2O-HFX-1.inp;1;1"
 # "H2O;H2O-HFX-1.inp;1;2"
-# "H2O;H2O-HFX-1.inp;2;1"
+ "H2O;H2O-HFX-1.inp;2;1"
  "H2O;H2O-HFX-6.inp;1;1"
- "H2O;H2O-HFX-6.inp;2;2"
+# "H2O;H2O-HFX-6.inp;2;2"
  "Cyanide;CN.inp;1;1"
- "Cyanide;CN.inp;2;2"
- "Silicon;silicon8.inp;2;2" 
+# "Cyanide;CN.inp;2;2"
+ "Silicon;silicon8.inp;1;1" 
+# "Silicon;silicon8.inp;2;2" 
  "KMnF3;KMnF3.inp;4;1"
- "Silicon;silicon8.inp;4;4" 
- "H2O_PBE;water_pbe0_from_pbe.inp;4;4"
+ "Silicon;silicon8.inp;4;1" 
+# "Silicon;silicon8.inp;4;4" 
+# "H2O_PBE;water_pbe0_from_pbe.inp;4;1"
+# "H2O_PBE;water_pbe0_from_pbe.inp;4;4"
+ "MgO;MgO_pbe0_energy_smaller.inp;4;1"
 # "MgO;MgO_pbe0_energy_smaller.inp;4;4"
  "Ag2;SilverDimer.inp;4;1"
- "Ethybenzene;Ethybenzene.inp;4;4"
+ "Ethybenzene;Ethybenzene.inp;4;1"
+# "Ethybenzene;Ethybenzene.inp;4;4"
 )
 
 echo $tests
 
 #TODO: read from command line
-EXE=../../../exe/local_cuda/cp2k.psmp
+EXE=../../../exe/local_hip/cp2k.psmp
 TOL=0.0001
 
 

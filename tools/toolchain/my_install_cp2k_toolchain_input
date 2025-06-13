@@ -1,11 +1,13 @@
-./install_cp2k_toolchain.sh -j 16 \
- --enable-cuda --gpu-ver=V100\
+
+module load fftw/3.3.10 fftw_mpi/3.3.10 gcc/base openmpi/5.0.7-ucc1.3.0-ucx1.18.0
+
+./install_cp2k_toolchain.sh -j 8 \
+ --enable-hip --gpu-ver=Mi250\
  --libint-lmax=4 \
- --with-libGint=install \
  --with-cmake=system \
  --with-ninja=system \
- --with-openblas=system\
- --with-scalapack=system\
+ --with-openblas=install\
+ --with-scalapack=install\
  --with-fftw=system \
  --with-elpa=no \
  --with-sirius=no \
@@ -17,5 +19,9 @@
  --with-libvori=no \
  --with-dftd4=no \
  --with-pugixml=no \
-#
-# --with-libGint=/work4/scd/scarf1152/cp2k/cp2k/exts/libGint \
+ --with-spglib=no \
+ --with-libxsmm=no \
+ --with-libGint=install \
+
+# --with-libGint=install \
+
