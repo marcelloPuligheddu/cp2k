@@ -53,6 +53,7 @@
 !>      Nov 2008, 2009 Joost VandeVondele and Manuel Guidon
 !>      May 2019 A. Bussy: Added a get_maxl_init function to get current status of nderiv_init and
 !>                moved the file to common (made it accessible from aobasis, same place as gamma.F).
+!>      Oct 2025 M. Puligheddu: Added public qualifier to C0 to simplify reuse
 ! **************************************************************************************************
 MODULE t_c_g0
    USE kinds,                           ONLY: dp
