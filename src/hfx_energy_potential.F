@@ -9,6 +9,7 @@
 !> \brief Routines to calculate HFX energy and potential
 !> \par History
 !>      11.2006 created [Manuel Guidon]
+!>      10.2025 added libGint interface [M Puligheddu]
 !> \author Manuel Guidon
 ! **************************************************************************************************
 MODULE hfx_energy_potential
@@ -66,6 +67,7 @@ MODULE hfx_energy_potential
       hfx_pgf_list, hfx_pgf_product_list, hfx_potential_type, hfx_reset_memory_usage_counter, &
       hfx_screen_coeff_type, hfx_screening_type, hfx_task_list_type, hfx_type, init_t_c_g0_lmax, &
       log_zero, pair_list_type, pair_set_list_type
+
    USE input_constants, ONLY: do_potential_mix_cl_trunc, &
                               do_potential_truncated, &
                               do_potential_TShPSC, &
@@ -97,12 +99,11 @@ MODULE hfx_energy_potential
    USE util, ONLY: sort
    use, intrinsic :: iso_c_binding, only: c_ptr
 
-   !!!!!!!!!!!!!!!!!!!!!!!
+!  libGint related modules
    use cp2k_info, only : cp2k_flags
    use offload_api, only: offload_get_chosen_device, offload_set_chosen_device, offload_activate_chosen_device
    use libGint_wrapper, only: cp_libGint_init, libGint_update_env, libGint_set_density, libGint_coulomb4, &
                               libGint_update_fock_matrix, libGint_get_fock_matrix
-   !!!!!!!!!!!!!!!!!!!!!!!
 
 !$ USE OMP_LIB, ONLY: omp_get_max_threads, omp_get_thread_num, omp_get_num_threads
 
@@ -264,7 +265,6 @@ CONTAINS
       logical :: screened
       real(dp) :: max_abs_delta_KS
       integer :: iatom_set, jatom_set, katom_set, latom_set, shared_dev
-!      integer :: handle_c4g, handle_ufg
       logical :: use_libint, use_libgint, use_only_alpha_spin
       logical :: cp2k_was_compiled_with_cuda_offload, cp2k_was_compiled_with_libint
       logical :: cp2k_was_compiled_with_libGint
@@ -488,6 +488,7 @@ CONTAINS
       neris_tmp = 0_int_8
       max_val_memory = 1_int_8
 
+! Set the integral engine
 !$OMP MASTER
       IF (para_env%is_source() .and. my_geo_change ) THEN
          cp2k_was_compiled_with_cuda_offload = ( index( cp2k_flags(), "offload_cuda") .ne. 0 )
@@ -499,6 +500,7 @@ CONTAINS
             WRITE(iw,*) " HFX | You are computing the HFX on CPU on cp2k compiled with cuda support"
             WRITE(iw,*) " HFX | Consider switching to HFX on GPU using the command"
             WRITE(iw,*) " HFX | 'HFX_LIBRARY libGint' in the HF section of the input file"
+            WRITE(iw,*) " HFX | and set 'HFX_MEMORY' appropriately"
          end if
       end if
 !$OMP END MASTER
@@ -516,7 +518,6 @@ CONTAINS
          use_libint = .true.
          use_libGint = .true.
       end if
-
 
       max_am = basis_info%max_am
 
@@ -940,11 +941,11 @@ CONTAINS
       ! use_only_alpha_spin = .not. use_alpha_beta_spin = treat_lsd_in_core .or. .not. nspins == 2
       use_only_alpha_spin = treat_lsd_in_core .or. .not. nspins == 2
 
-      ! Set up the gpu enviroment
+      ! Set up the gpu enviroment for libGint
       if (use_libGint) then
          !
          ! APPARENTELY only the master thread has received a call to offload_set_chosen_device
-         ! BUT we need all omp threads with th same mpi process to be on the same physical device.
+         ! BUT we need all omp threads with the same mpi process to be assigned to the same physical device.
          ! so they can share GPU memory for the density matrix P (full_density_alpha and full_density_beta)
          !         and the Kohm-Sham matrix (full_ks_alpha and full_ks_beta)
          !$omp master
@@ -961,7 +962,7 @@ CONTAINS
          call libGint_update_env(fac, memory_parameter, do_periodic, cell, actual_x_data, &
                                  nneighbors, max_pgf, natom, kind_of, particle_set, basis_parameter)
 
-         ! Every cycle
+         ! Every cycle, comunicate the updated density to libGint
          if (use_only_alpha_spin) then
             call libGint_set_density(full_density_alpha)
          else
@@ -1007,6 +1008,11 @@ CONTAINS
       !! Furthermore, the indices iatom, jatom, katom, latom have to be set to istart, jstart, kstart and
       !! lstart only the first time the loop is executed. All subsequent loops have to start with one or
       !! iatom and katom respectively. Therefore, we use flags like first_j_loop etc.
+
+      !! LibGint follows the same patter, distributing integrals over mpi and openmp with a shared-over-mpi
+      !! density and fock matrix. The main differences are that the fock matrix is not in a valid state 
+      !! until after the libGint_get_fock_matrix has returned -in approximately a thousand lines-,
+      !! and the integrals are not saved in memory, but recomputed each cycle
 
       do_dynamic_load_balancing = .TRUE.
 
