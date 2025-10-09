@@ -450,6 +450,63 @@ SUBROUTINE libGint_get_fock_matrix_AB(full_ks_alpha_from_gpu, full_ks_beta_from_
 #endif
    END SUBROUTINE libGint_coulomb4
 
+! **************************************************************************************************
+!> \brief The previous coulomb_4 function assigned an integral between primitive gaussian. 
+!>        Now we assign the nsgfa(iset)*b*c*d gcc integrals form this set,
+!>        along with the Pac Pad Pbc Pbd density to the Kbd Kbc Kad Kac Fock matrix
+!> 
+!> \param[in] symm_fac          simmetry factor from iatom=jatom and the like
+!> \param[in] iatom             index of atom A
+!> \param[in] jatom             index of atom B
+!> \param[in] katom             index of atom C
+!> \param[in] latom             index of atom D
+!> \param[in] iset              index of set for atom A
+!> \param[in] jset              index of set for atom B
+!> \param[in] kset              index of set for atom C
+!> \param[in] lset              index of set for atom D
+!> \param[in] atomic_offset_ac  global offset for the pair of A and C atom in the density ( and Fock) matrix
+!> \param[in] atomic_offset_ad  global offset for the pair of A and D atom in the density ( and Fock) matrix
+!> \param[in] atomic_offset_bc  global offset for the pair of B and C atom in the density ( and Fock) matrix
+!> \param[in] atomic_offset_bd  global offset for the pair of B and D atom in the density ( and Fock) matrix
+!> \param[in] offset_ac_set     matrix of sub_offset for sets in atomic_offset_ac
+!> \param[in] offset_ad_set     matrix of sub_offset for sets in atomic_offset_ad
+!> \param[in] offset_bc_set     matrix of sub_offset for sets in atomic_offset_bc
+!> \param[in] offset_bd_set     matrix of sub_offset for sets in atomic_offset_bd
+!> \param[in] nsgfa             total number of (spherical, contracted) integrals for iset. 
+!>                              Used as leading dimension of the AC, AD sublock, depending on transposition
+!> \param[in] nsgfb             total number of (spherical, contracted) integrals for jset. 
+!>                              Used as leading dimension of the BC, BD sublock, depending on transposition
+!> \param[in] nsgfc             total number of (spherical, contracted) integrals for kset. 
+!>                              Used as leading dimension of the AC, BC sublock, depending on transposition
+!> \param[in] nsgfd             total number of (spherical, contracted) integrals for lset. 
+!>                              Used as leading dimension of the AD, BD sublock, depending on transposition
+!> \param[in] la_min            minumum angular moment in set iset of atom A
+!> \param[in] la_max            maximum angular moment in set iset of atom A
+!> \param[in] lb_min            minumum angular moment in set iset of atom B
+!> \param[in] lb_max            maximum angular moment in set iset of atom B
+!> \param[in] lc_min            minumum angular moment in set iset of atom C
+!> \param[in] lc_max            maximum angular moment in set iset of atom C
+!> \param[in] ld_min            minumum angular moment in set iset of atom D
+!> \param[in] ld_max            maximum angular moment in set iset of atom D
+!> \param[in] nsgfl_a           matrix with the number of linear combinations of primitive gaussians 
+!>                              for each angular moment for each set in atom A. We only read iset
+!> \param[in] nsgfl_b           matrix with the number of linear combinations of primitive gaussians 
+!>                              for each angular moment for each set in atom B. We only read jset
+!> \param[in] nsgfl_c           matrix with the number of linear combinations of primitive gaussians
+!>                              for each angular moment for each set in atom C. We only read kset
+!> \param[in] nsgfl_d           matrix with the number of linear combinations of primitive gaussians
+!>                              for each angular moment for each set in atom D. We only read lset
+!> \note
+!>  The atomic_offset_xy, offset_xy_set matrices provide set offsets which are combined with per-L and
+!>    per linear combination offsets to produce the final indices into the dense (but block-sparse)
+!>    density and Fock matrices
+!>  - The routine assumes Fortran column major order and contiguous storage for the per set
+!>    density subblocks as described in the code comments.
+!>  - The code computes transposition flags to only use the lower part of P and K
+!> 
+!> 
+! **************************************************************************************************
+
    SUBROUTINE libGint_update_fock_matrix( &
          symm_fac, &
          iatom, jatom, katom, latom, &
