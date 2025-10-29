@@ -13,6 +13,7 @@
 !>      10.2008 Teodoro Laino [tlaino] - University of Zurich
 !>              Cleaned this file of all arrays of strings. Here must be kept
 !>              only integer/real global constants
+!>      102025  M Puligheddu : added an enum for hfx_library
 ! **************************************************************************************************
 MODULE input_constants
 

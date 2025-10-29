@@ -62,7 +62,10 @@ MODULE libGint_wrapper
    END INTERFACE
 
 CONTAINS
-
+! **************************************************************************************************
+!> \brief Sets libGint internal enviroment, must be called at least once before libGint can be used
+!> \param actual_x_data[in]    pointer to hfx_data
+! **************************************************************************************************
    SUBROUTINE cp_libGint_init(actual_x_data)
       implicit none
       TYPE(hfx_type), POINTER :: actual_x_data
@@ -76,7 +79,7 @@ CONTAINS
          CASE (do_potential_coulomb)
          EXIT libGint_select_potential
          ! truncated coulomb needs the C0 coefficients. We do not read or compute them,
-         ! they must be already saved in C0
+         ! they must be already saved in C0 from the t[runcated]_c[oulomb]_g0 module
          CASE (do_potential_truncated)
          CALL libgint_set_Potential_Truncated(libGint_handle, &
                                               actual_x_data%potential_parameter%cutoff_radius, &
@@ -92,7 +95,28 @@ CONTAINS
       CPABORT("This CP2K executable has not been linked against the required library libGint.")
 #endif
    END SUBROUTINE cp_libGint_init
-
+! **************************************************************************************************
+!> \brief Initialize and update the libGint computational environment. Must be called at least once
+!>        after geo_change and before libGint can be used.
+!>
+!> This routine sets up data required by the libGint integral engine, including
+!> Hartree–Fock scaling factors, memory limits, periodic cell information, and
+!> per-atom/basis-set data. It also allocates CPU-side buffers (`bra` and `ket`)
+!> used for storing screened Gaussian primitive pairs.
+!>
+!> \param[in]  fac              Fraction of exact exchange
+!> \param[in]  memory_parameter Pointer to memory configuration
+!> \param[in]  do_periodic      Logical flag: whether to consider pbc
+!> \param[in]  cell             primitive simulation cell 
+!> \param[in]  actual_x_data    HF exchange data
+!> \param[in]  nneighbors       Lattice points
+!> \param[in]  max_pgf          Maximum number of primitive Gaussians per shel
+!> \param[in]  natom            Number of atoms in the system
+!> \param[in]  kind_of          Array mapping atom indices to atomic kinds
+!> \param[in]  particle_set     particle set, we extract the positions
+!> \param[in]  basis_parameter  gaussian basis set parameters
+!>
+! **************************************************************************************************
    SUBROUTINE libGint_update_env(fac, memory_parameter, do_periodic, cell, actual_x_data, nneighbors, max_pgf, &
                                  natom, kind_of, particle_set, basis_parameter)
 
@@ -121,8 +145,9 @@ CONTAINS
 
       ! Set the multiplicative factor fac (the fraction of exact exchange times the spin factor) for libGint
       CALL libGint_set_hf_fac(libGint_handle, fac)
-      !
+      ! Comunicate max gpu mem per mpi
       CALL libGint_set_max_mem(libGint_handle, memory_parameter%max_memory)
+
       ! Info about periodic cells and neighbouring cells
       do_pbc = do_periodic
       ALLOCATE (cell_r(3, nneighbors))
@@ -186,6 +211,11 @@ CONTAINS
 #endif
    END SUBROUTINE libGint_update_env
 
+! **************************************************************************************************
+!> \brief communicates the density to libGint, no spin case
+!>
+!> \param[in]  full_density_alpha       full density matrix array
+! **************************************************************************************************
    SUBROUTINE libGint_set_density_A(full_density_alpha)
       implicit none
       REAL(dp), DIMENSION(:, :), POINTER :: full_density_alpha
@@ -197,6 +227,12 @@ CONTAINS
 #endif
    END SUBROUTINE libGint_set_density_A
 
+! **************************************************************************************************
+!> \brief communicates the density to libGint, spin case
+!>
+!> \param[in]  full_density_alpha       full density matrix array on the alpha channel
+!> \param[in]  full_density_beta        full density matrix array on the beta  channel
+! **************************************************************************************************
    SUBROUTINE libGint_set_density_AB(full_density_alpha, full_density_beta)
       implicit none
       REAL(dp), DIMENSION(:, :), POINTER :: full_density_alpha, full_density_beta
@@ -209,6 +245,13 @@ CONTAINS
 #endif
    END SUBROUTINE libGint_set_density_AB
 
+! **************************************************************************************************
+!> \brief requests the Fock matrix ( hf_fraction * D @@ I ) from libGint. When this function
+!>        returns, full_ks_alpha_from_gpu will contain the fock matrix for this MPI rank.
+!>
+!> \param[out]  full_ks_alpha_from_gpu     location, already allocated, for the Fock matrix
+!> \note assumes full_ks_alpha_from_gpu is already allocated with enough memory
+! **************************************************************************************************
    SUBROUTINE libGint_get_fock_matrix_A(full_ks_alpha_from_gpu)
       implicit none
       REAL(dp), DIMENSION(:, :), POINTER :: full_ks_alpha_from_gpu
@@ -220,7 +263,15 @@ CONTAINS
 #endif
    END SUBROUTINE libGint_get_fock_matrix_A
 
-   SUBROUTINE libGint_get_fock_matrix_AB(full_ks_alpha_from_gpu, full_ks_beta_from_gpu)
+! **************************************************************************************************
+!> \brief requests the Fock matrices from libGint for both channels. When this function
+!>        returns, full_ks_alpha_from_gpu and beta will contain the fock matrix for this MPI rank.
+!>
+!> \param[out]  full_ks_alpha_from_gpu     location, already allocated, for the Fock matrix alpha
+!> \param[out]  full_ks_beta_from_gpu      location, already allocated, for the Fock matrix beta
+!> \note assumes full_ks_alpha_from_gpu and full_ks_beta_from_gpu are already allocated
+! **************************************************************************************************
+SUBROUTINE libGint_get_fock_matrix_AB(full_ks_alpha_from_gpu, full_ks_beta_from_gpu)
       implicit none
       REAL(dp), DIMENSION(:, :), POINTER :: full_ks_alpha_from_gpu, full_ks_beta_from_gpu
 #if(__LIBGINT)
@@ -232,7 +283,41 @@ CONTAINS
 #endif
    END SUBROUTINE libGint_get_fock_matrix_AB
 
+! **************************************************************************************************
 !> \brief Assign two-electron integrals of a quartet/shell to libGint
+!> 
+!> First we build a list of ab primitives and cd primitives using build_pair_list_pbc_pgf
+!> These lists will contain (before screening) n_cell * npgf * npgf. 
+!> We loop over both and send ab(g) | cd(h) to libgint, which will loop internally over n
+!>
+!> \param[in]  iatom     index of atom I / A
+!> \param[in]  jatom     index of atom J / B
+!> \param[in]  katom     index of atom K / C
+!> \param[in]  latom     index of atom L / D
+!> \param[in]  iset      index of the set for atom iatom we are adding
+!> \param[in]  jset      index of the set for atom jatom we are adding
+!> \param[in]  kset      index of the set for atom katom we are adding
+!> \param[in]  lset      index of the set for atom latom we are adding
+!> \param[in]  ra        position of atom iatom
+!> \param[in]  rb        position of atom jatom
+!> \param[in]  rc        position of atom katom
+!> \param[in]  rd        position of atom latom
+!> \param[in]  npgfa     number of gaussians in set iset of atom iatom
+!> \param[in]  npgfb     number of gaussians in set jset of atom jatom
+!> \param[in]  npgfc     number of gaussians in set kset of atom katom
+!> \param[in]  npgfd     number of gaussians in set lset of atom latom
+!> \param[in]  potential_parameter  information about the potential
+!> \param[in]  screen1              screening information for AB pair
+!> \param[in]  screen2              screening information for CD pair
+!> \param[in]  log10_pmax           density screening factor
+!> \param[in]  log10_eps_schwartz   screening tolerance
+!> \param[in]  pgf1                 screening information for each AB pair primitive
+!> \param[in]  pgf2                 screening information for each CD pair primitive
+!> \param[in]  neighbor_cells       array with lattice vectors
+!> \param[in]  cell                 information about the simulation box
+!> \param[in]  do_periodic          flag for pbc
+!> \param[out] screened             whether the whole quartet was screened out
+! **************************************************************************************************
    SUBROUTINE libGint_coulomb4(iatom, jatom, katom, latom, iset, jset, kset, lset, &
                                ra, rb, rc, rd, npgfa, npgfb, npgfc, npgfd, &
                                potential_parameter, &
@@ -364,6 +449,63 @@ CONTAINS
       CPABORT("This CP2K executable has not been linked against the required library libGint.")
 #endif
    END SUBROUTINE libGint_coulomb4
+
+! **************************************************************************************************
+!> \brief The previous coulomb_4 function assigned an integral between primitive gaussian. 
+!>        Now we assign the nsgfa(iset)*b*c*d gcc integrals form this set,
+!>        along with the Pac Pad Pbc Pbd density to the Kbd Kbc Kad Kac Fock matrix
+!> 
+!> \param[in] symm_fac          simmetry factor from iatom=jatom and the like
+!> \param[in] iatom             index of atom A
+!> \param[in] jatom             index of atom B
+!> \param[in] katom             index of atom C
+!> \param[in] latom             index of atom D
+!> \param[in] iset              index of set for atom A
+!> \param[in] jset              index of set for atom B
+!> \param[in] kset              index of set for atom C
+!> \param[in] lset              index of set for atom D
+!> \param[in] atomic_offset_ac  global offset for the pair of A and C atom in the density ( and Fock) matrix
+!> \param[in] atomic_offset_ad  global offset for the pair of A and D atom in the density ( and Fock) matrix
+!> \param[in] atomic_offset_bc  global offset for the pair of B and C atom in the density ( and Fock) matrix
+!> \param[in] atomic_offset_bd  global offset for the pair of B and D atom in the density ( and Fock) matrix
+!> \param[in] offset_ac_set     matrix of sub_offset for sets in atomic_offset_ac
+!> \param[in] offset_ad_set     matrix of sub_offset for sets in atomic_offset_ad
+!> \param[in] offset_bc_set     matrix of sub_offset for sets in atomic_offset_bc
+!> \param[in] offset_bd_set     matrix of sub_offset for sets in atomic_offset_bd
+!> \param[in] nsgfa             total number of (spherical, contracted) integrals for iset. 
+!>                              Used as leading dimension of the AC, AD sublock, depending on transposition
+!> \param[in] nsgfb             total number of (spherical, contracted) integrals for jset. 
+!>                              Used as leading dimension of the BC, BD sublock, depending on transposition
+!> \param[in] nsgfc             total number of (spherical, contracted) integrals for kset. 
+!>                              Used as leading dimension of the AC, BC sublock, depending on transposition
+!> \param[in] nsgfd             total number of (spherical, contracted) integrals for lset. 
+!>                              Used as leading dimension of the AD, BD sublock, depending on transposition
+!> \param[in] la_min            minumum angular moment in set iset of atom A
+!> \param[in] la_max            maximum angular moment in set iset of atom A
+!> \param[in] lb_min            minumum angular moment in set iset of atom B
+!> \param[in] lb_max            maximum angular moment in set iset of atom B
+!> \param[in] lc_min            minumum angular moment in set iset of atom C
+!> \param[in] lc_max            maximum angular moment in set iset of atom C
+!> \param[in] ld_min            minumum angular moment in set iset of atom D
+!> \param[in] ld_max            maximum angular moment in set iset of atom D
+!> \param[in] nsgfl_a           matrix with the number of linear combinations of primitive gaussians 
+!>                              for each angular moment for each set in atom A. We only read iset
+!> \param[in] nsgfl_b           matrix with the number of linear combinations of primitive gaussians 
+!>                              for each angular moment for each set in atom B. We only read jset
+!> \param[in] nsgfl_c           matrix with the number of linear combinations of primitive gaussians
+!>                              for each angular moment for each set in atom C. We only read kset
+!> \param[in] nsgfl_d           matrix with the number of linear combinations of primitive gaussians
+!>                              for each angular moment for each set in atom D. We only read lset
+!> \note
+!>  The atomic_offset_xy, offset_xy_set matrices provide set offsets which are combined with per-L and
+!>    per linear combination offsets to produce the final indices into the dense (but block-sparse)
+!>    density and Fock matrices
+!>  - The routine assumes Fortran column major order and contiguous storage for the per set
+!>    density subblocks as described in the code comments.
+!>  - The code computes transposition flags to only use the lower part of P and K
+!> 
+!> 
+! **************************************************************************************************
 
    SUBROUTINE libGint_update_fock_matrix( &
          symm_fac, &
