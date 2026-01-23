@@ -10,7 +10,7 @@
 !> \par History
 !>      04.2008 created [Manuel Guidon]
 !>      05.2019 Moved erfc_cutoff to common/mathlib (A. Bussy)
-!>       10.2025 Added gcc from basis_parameter and hfx_library option
+!>      10.2025 Added gcc from basis_parameter and hfx_library option
 !> \author Manuel Guidon
 ! **************************************************************************************************
 MODULE hfx_types
