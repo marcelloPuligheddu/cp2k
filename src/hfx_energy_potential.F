@@ -945,7 +945,7 @@ CONTAINS
       !!!
       ! use_alpha_beta_spin = (.not. treat_lsd_in_core) .and. nspins == 2
       ! use_only_alpha_spin = .not. use_alpha_beta_spin = treat_lsd_in_core .or. .not. nspins == 2
-      use_only_alpha_spin = treat_lsd_in_core .or. .not. nspins == 2
+      use_only_alpha_spin = treat_lsd_in_core .or. .not. my_nspins == 2
 
       ! Set up the gpu enviroment for libGint
       if (use_libGint) then
