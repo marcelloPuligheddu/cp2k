@@ -817,7 +817,7 @@ if(CP2K_USE_LIBINT2)
 endif()
 
 if(CP2K_USE_LIBGINT)
-  find_package(libGint REQUIRED)
+  find_package(LibGint REQUIRED)
 endif()
 
 
