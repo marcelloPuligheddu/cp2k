@@ -1764,6 +1764,7 @@ target_link_libraries(
     $<$<BOOL:${CP2K_USE_MIMIC}>:CP2K::MIMIC::mclf>
     $<$<BOOL:${CP2K_USE_MIMIC}>:CP2K::MIMIC::mcl>
     $<$<BOOL:${CP2K_USE_LIBINT2}>:cp2k::Libint2::int2>
+    $<$<BOOL:${CP2K_USE_LIBGINT}>:cp2k::libGint::libGint>
     $<$<BOOL:${CP2K_USE_LIBFCI}>:cp2k::libfci::fci>
     $<$<BOOL:${CP2K_USE_COSMA}>:cp2k::cosma>
     $<$<BOOL:${CP2K_USE_DLAF}>:${CP2K_DLAF_FORTRAN_TARGET}>
@@ -1827,6 +1828,7 @@ target_compile_definitions(
     $<$<BOOL:${CP2K_USE_GREENX}>:__GREENX>
     $<$<OR:$<BOOL:${CP2K_USE_FFTW3_}>,$<BOOL:${CP2K_USE_FFTW3_MKL_}>>:__FFTW3>
     $<$<BOOL:${CP2K_USE_LIBINT2}>:__LIBINT>
+    $<$<BOOL:${CP2K_USE_LIBGINT}>:__LIBGINT>
     $<$<BOOL:${CP2K_USE_LIBFCI}>:__LIBFCI>
     $<$<BOOL:${CP2K_USE_LIBTORCH}>:__LIBTORCH>
     $<$<BOOL:${CP2K_USE_COSMA}>:__COSMA>
