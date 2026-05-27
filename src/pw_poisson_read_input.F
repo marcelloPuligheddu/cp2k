@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2025 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2026 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -110,21 +110,21 @@ CONTAINS
 
       SELECT CASE (periodic)
       CASE (use_perd_x)
-         params%periodic = (/1, 0, 0/)
+         params%periodic = [1, 0, 0]
       CASE (use_perd_y)
-         params%periodic = (/0, 1, 0/)
+         params%periodic = [0, 1, 0]
       CASE (use_perd_z)
-         params%periodic = (/0, 0, 1/)
+         params%periodic = [0, 0, 1]
       CASE (use_perd_xy)
-         params%periodic = (/1, 1, 0/)
+         params%periodic = [1, 1, 0]
       CASE (use_perd_xz)
-         params%periodic = (/1, 0, 1/)
+         params%periodic = [1, 0, 1]
       CASE (use_perd_yz)
-         params%periodic = (/0, 1, 1/)
+         params%periodic = [0, 1, 1]
       CASE (use_perd_xyz)
-         params%periodic = (/1, 1, 1/)
+         params%periodic = [1, 1, 1]
       CASE (use_perd_none)
-         params%periodic = (/0, 0, 0/)
+         params%periodic = [0, 0, 0]
       CASE DEFAULT
          CPABORT("")
       END SELECT
@@ -147,16 +147,29 @@ CONTAINS
 
       SELECT CASE (periodic)
       CASE (use_perd_none)
+         params%periodic = [0, 0, 0]
          params%wavelet_geocode = "F"
          params%wavelet_method = WAVELET0D
+      CASE (use_perd_xy)
+         params%periodic = [1, 1, 0]
+         params%wavelet_geocode = "S"
+         params%wavelet_method = WAVELET2D
+         params%wavelet_special_dimension = 3
       CASE (use_perd_xz)
+         params%periodic = [1, 0, 1]
          params%wavelet_geocode = "S"
          params%wavelet_method = WAVELET2D
          params%wavelet_special_dimension = 2
+      CASE (use_perd_yz)
+         params%periodic = [0, 1, 1]
+         params%wavelet_geocode = "S"
+         params%wavelet_method = WAVELET2D
+         params%wavelet_special_dimension = 1
       CASE (use_perd_xyz)
+         params%periodic = [1, 1, 1]
          params%wavelet_geocode = "P"
          params%wavelet_method = WAVELET3D
-      CASE (use_perd_x, use_perd_y, use_perd_z, use_perd_xy, use_perd_yz)
+      CASE (use_perd_x, use_perd_y, use_perd_z)
          CPABORT("Poisson solver for this periodicity not yet implemented")
       CASE DEFAULT
          CPABORT("")
@@ -243,7 +256,7 @@ CONTAINS
       CALL section_vals_get(aa_cuboidal_section, explicit=aa_cuboidal_explicit, n_repetition=n_aac_rep)
       CALL section_vals_get(xaa_annular_section, explicit=xaa_annular_explicit, n_repetition=n_xaaa_rep)
 
-      IF (params%solver .EQ. pw_poisson_implicit) THEN
+      IF (params%solver == pw_poisson_implicit) THEN
 
          IF (aa_cuboidal_explicit) THEN
             params%dielectric_params%n_aa_cuboidal = n_aac_rep
@@ -340,7 +353,7 @@ CONTAINS
       CALL section_vals_get(aa_cylindrical_section, explicit=aa_cylindrical_explicit, n_repetition=n_aacyl_rep)
       CALL section_vals_get(aa_cuboidal_section, explicit=aa_cuboidal_explicit, n_repetition=n_aac_rep)
 
-      IF (params%solver .EQ. pw_poisson_implicit) THEN
+      IF (params%solver == pw_poisson_implicit) THEN
 
          IF (aa_planar_explicit) THEN
             params%dbc_params%n_aa_planar = n_aap_rep

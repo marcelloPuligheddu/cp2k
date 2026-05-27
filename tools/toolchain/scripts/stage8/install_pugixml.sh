@@ -6,8 +6,8 @@
 [ "${BASH_SOURCE[0]}" ] && SCRIPT_NAME="${BASH_SOURCE[0]}" || SCRIPT_NAME=$0
 SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_NAME")/.." && pwd -P)"
 
-pugixml_ver="1.14"
-pugixml_sha256="2f10e276870c64b1db6809050a75e11a897a8d7456c4be5c6b2e35a11168a015"
+pugixml_ver="1.15"
+pugixml_sha256="655ade57fa703fb421c2eb9a0113b5064bddb145d415dd1f88c79353d90d511a"
 source "${SCRIPT_DIR}"/common_vars.sh
 source "${SCRIPT_DIR}"/tool_kit.sh
 source "${SCRIPT_DIR}"/signal_trap.sh
@@ -27,12 +27,7 @@ case "${with_pugixml}" in
     if verify_checksums "${install_lock_file}"; then
       echo "pugixml-${pugixml_ver} is already installed, skipping it."
     else
-      if [ -f pugixml-${pugixml_ver}.tar.gz ]; then
-        echo "pugixml-${pugixml_ver}.tar.gz is found"
-      else
-        download_pkg_from_cp2k_org "${pugixml_sha256}" "pugixml-${pugixml_ver}.tar.gz"
-
-      fi
+      retrieve_package "${pugixml_sha256}" "pugixml-${pugixml_ver}.tar.gz"
       echo "Installing from scratch into ${pkg_install_dir}"
       [ -d pugixml-${pugixml_ver} ] && rm -rf pugixml-${pugixml_ver}
       tar -xzf pugixml-${pugixml_ver}.tar.gz
@@ -43,19 +38,20 @@ case "${with_pugixml}" in
         -DCMAKE_INSTALL_PREFIX="${pkg_install_dir}" \
         -DCMAKE_INSTALL_LIBDIR=lib \
         .. \
-        > cmake.log 2>&1 || tail -n ${LOG_LINES} cmake.log
-      make -j $(get_nprocs) > make.log 2>&1 || tail -n ${LOG_LINES} make.log
-      make -j $(get_nprocs) install > install.log 2>&1 || tail -n ${LOG_LINES} install.log
+        > cmake.log 2>&1 || tail_excerpt cmake.log
+      make -j $(get_nprocs) > make.log 2>&1 || tail_excerpt make.log
+      make -j $(get_nprocs) install > install.log 2>&1 || tail_excerpt install.log
       cd ..
       write_checksums "${install_lock_file}" "${SCRIPT_DIR}/stage8/$(basename ${SCRIPT_NAME})"
     fi
-    PUGIXML_ROOT="${pkg_install_dir}"
+    PUGIXML_CFLAGS="-I'${pkg_install_dir}/include'"
     PUGIXML_LDFLAGS="-L'${pkg_install_dir}/lib' -Wl,-rpath,'${pkg_install_dir}/lib'"
     ;;
   __SYSTEM__)
     echo "==================== Finding pugixml from system paths ===================="
     check_command pkg-config --modversion pugixml
-    add_lib_from_paths PUGIXML_LDFLAGS "libpugixml.*" $LIB_PATHS
+    add_include_from_paths PUGIXML_CFLAGS "pugixml.hpp" ${INCLUDE_PATHS}
+    add_lib_from_paths PUGIXML_LDFLAGS "libpugixml.*" ${LIB_PATHS}
     ;;
   __DONTUSE__)
     # Nothing to do
@@ -63,17 +59,16 @@ case "${with_pugixml}" in
   *)
     echo "==================== Linking pugixml to user paths ===================="
     pkg_install_dir="${with_pugixml}"
-
-    # use the lib64 directory if present (multi-abi distros may link lib/ to lib32/ instead)
+    # Use the lib64 directory if present (multi-abi distros may link lib/ to lib32/ instead)
     PUGIXML_LIBDIR="${pkg_install_dir}/lib"
     [ -d "${pkg_install_dir}/lib64" ] && PUGIXML_LIBDIR="${pkg_install_dir}/lib64"
-
     check_dir "${PUGIXML_LIBDIR}"
-    check_dir "${pkg_install_dir}/include/pugixml"
-    PUGIXML_CFLAGS="-I'${pkg_install_dir}/include/pugixml'"
+    check_dir "${pkg_install_dir}/include"
+    PUGIXML_CFLAGS="-I'${pkg_install_dir}/include'"
     PUGIXML_LDFLAGS="-L'${PUGIXML_LIBDIR}' -Wl,-rpath,'${PUGIXML_LIBDIR}'"
     ;;
 esac
+
 if [ "${with_pugixml}" != "__DONTUSE__" ]; then
   PUGIXML_LIBS="-lpugixml"
   cat << EOF > "${BUILDDIR}/setup_pugixml"
@@ -84,22 +79,20 @@ EOF
 prepend_path LD_LIBRARY_PATH "${pkg_install_dir}/lib"
 prepend_path LD_RUN_PATH "${pkg_install_dir}/lib"
 prepend_path LIBRARY_PATH "${pkg_install_dir}/lib"
-export PUGIXML_LIBS="-lpugixml"
-export PUGIXML_ROOT="${pkg_install_dir}"
+prepend_path CPATH "${pkg_install_dir}/include"
+prepend_path PKG_CONFIG_PATH "${pkg_install_dir}/lib/pkgconfig"
 prepend_path CMAKE_PREFIX_PATH "${pkg_install_dir}"
 EOF
   fi
   cat << EOF >> "${BUILDDIR}/setup_pugixml"
-export PUGIXML_LDFLAGS="${SPLA_LDFLAGS}"
+export PUGIXML_CFLAGS="${PUGIXML_CFLAGS}"
+export PUGIXML_LDFLAGS="${PUGIXML_LDFLAGS}"
 export PUGIXML_LIBRARY="-lpugixml"
-export PUGIXML_ROOT="$pkg_install_dir"
-export PUGIXML_VERSION=${pugixml-ver}
+export CP_CFLAGS="\${CP_CFLAGS} ${PUGIXML_CFLAGS}"
+export CP_LDFLAGS="\${CP_LDFLAGS} ${PUGIXML_LDFLAGS}"
 export CP_LIBS="IF_MPI(${PUGIXML_LIBS}|) \${CP_LIBS}"
 EOF
-  cat << EOF >> "${BUILDDIR}/setup_pugixml"
-export CP_LDFLAGS="\${CP_LDFLAGS} ${PUGIXML_LDFLAGS}"
-EOF
-  cat "${BUILDDIR}/setup_pugixml" >> $SETUPFILE
+  filter_setup "${BUILDDIR}/setup_pugixml" "${SETUPFILE}"
 fi
 
 load "${BUILDDIR}/setup_pugixml"

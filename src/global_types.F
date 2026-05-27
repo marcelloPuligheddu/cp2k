@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2025 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2026 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -67,6 +67,7 @@ MODULE global_types
       INTEGER :: ref_count = 0
       TYPE(rng_stream_type), ALLOCATABLE      :: gaussian_rng_stream
       CHARACTER(LEN=default_string_length)    :: diag_library = "ScaLAPACK"
+      CHARACTER(LEN=default_string_length)    :: cholesky_library = "ScaLAPACK"
       CHARACTER(LEN=default_string_length)    :: default_fft_library = "FFTSG"
       CHARACTER(LEN=default_path_length)      :: fftw_wisdom_file_name = "/etc/fftw/wisdom"
       CHARACTER(LEN=default_string_length)    :: default_dgemm_library = "BLAS"
@@ -79,10 +80,12 @@ MODULE global_types
       INTEGER :: blacs_grid_layout = BLACS_GRID_SQUARE ! will store the user preference for the BLACS grid
       INTEGER :: k_elpa = 1 ! optimized kernel for the ELPA diagonalization library
       INTEGER :: elpa_neigvec_min = 0 ! Minimum number of eigenvectors for ELPA usage
-      LOGICAL :: elpa_qr = .FALSE. ! allow ELPA to use QR during diagonalization
+      LOGICAL :: elpa_qr = .TRUE. ! allow ELPA to use QR during diagonalization
       LOGICAL :: elpa_print = .FALSE. ! if additional information about ELPA diagonalization should be printed
-      LOGICAL :: elpa_qr_unsafe = .FALSE. ! enable potentially unsafe ELPA options
-      INTEGER :: dlaf_neigvec_min = 0 ! Minimum number of eigenvectors for DLAF usage
+      LOGICAL :: elpa_one_stage = .FALSE. ! enable one-stage ELPA solver
+      INTEGER :: dlaf_neigvec_min = 0 ! Minimum number of eigenvectors for DLAF eigensolver usage
+      INTEGER :: dlaf_cholesky_n_min = 0 ! Minimum matrix size for DLAF Cholesky decomposition usage
+      LOGICAL :: direct_generalized_diagonalization = .FALSE. ! use a direct generalized eigensolver
       LOGICAL :: blacs_repeatable = .FALSE. ! will store the user preference for the repeatability of BLACS collectives
       REAL(KIND=dp) :: cp2k_start_time = 0.0_dp
       REAL(KIND=dp) :: cp2k_target_time = HUGE(0.0_dp) ! Maximum run time in seconds

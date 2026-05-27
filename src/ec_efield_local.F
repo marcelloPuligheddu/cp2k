@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2025 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2026 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -90,6 +90,7 @@ CONTAINS
       CALL get_qs_env(qs_env, dft_control=dft_control)
 
       IF (dft_control%apply_efield) THEN
+         CPASSERT(.NOT. ec_env%do_kpoints)
          rpoint = 0.0_dp
          CALL ec_efield_integrals(qs_env, ec_env, rpoint)
          CALL ec_efield_mo_derivatives(qs_env, ec_env, rpoint, calculate_forces)

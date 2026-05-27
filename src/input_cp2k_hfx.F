@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2025 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2026 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -12,28 +12,31 @@
 !> \author Manuel Guidon
 ! **************************************************************************************************
 MODULE input_cp2k_hfx
-   USE bibliography,                    ONLY: Guidon2008,&
-                                              Guidon2009
-   USE cp_output_handling,              ONLY: add_last_numeric,&
-                                              cp_print_key_section_create,&
-                                              high_print_level,&
-                                              medium_print_level
-   USE input_constants,                 ONLY: &
-        do_potential_coulomb, do_potential_gaussian, do_potential_id, do_potential_long, &
-        do_potential_mix_cl, do_potential_mix_cl_trunc, do_potential_mix_lg, do_potential_short, &
-        do_potential_truncated, ehrenfest, gaussian, hfx_library_is_both, hfx_library_is_libGint, &
-        hfx_library_is_libint, hfx_ri_do_2c_cholesky, hfx_ri_do_2c_diag, hfx_ri_do_2c_iter
-   USE input_keyword_types,             ONLY: keyword_create,&
-                                              keyword_release,&
-                                              keyword_type
-   USE input_section_types,             ONLY: section_add_keyword,&
-                                              section_add_subsection,&
-                                              section_create,&
-                                              section_release,&
-                                              section_type
-   USE input_val_types,                 ONLY: real_t
-   USE kinds,                           ONLY: dp
-   USE string_utilities,                ONLY: s2a
+   USE bibliography, ONLY: Guidon2008, &
+                           Guidon2009, &
+                           Lin2016ACE
+   USE cp_output_handling, ONLY: add_last_numeric, &
+                                 cp_print_key_section_create, &
+                                 high_print_level, &
+                                 medium_print_level
+   USE input_constants, ONLY: &
+      do_potential_coulomb, do_potential_gaussian, do_potential_id, do_potential_long, &
+      do_potential_mix_cl, do_potential_mix_cl_trunc, do_potential_mix_lg, do_potential_short, &
+      do_potential_truncated, ehrenfest, gaussian, hfx_ri_do_2c_cholesky, hfx_ri_do_2c_diag, &
+      hfx_ri_do_2c_iter, hfx_library_is_both, hfx_library_is_libGint, &
+      hfx_library_is_libint
+   USE input_keyword_types, ONLY: keyword_create, &
+                                  keyword_release, &
+                                  keyword_type
+   USE input_section_types, ONLY: section_add_keyword, &
+                                  section_add_subsection, &
+                                  section_create, &
+                                  section_release, &
+                                  section_type
+   USE input_val_types, ONLY: real_t
+   USE kinds, ONLY: dp
+   USE string_utilities, ONLY: s2a
+
 #include "./base/base_uses.f90"
 
    IMPLICIT NONE
@@ -60,14 +63,16 @@ CONTAINS
 
       CPASSERT(.NOT. ASSOCIATED(section))
       CALL section_create(section, __LOCATION__, name="HF", &
-                          description="Sets up the Hartree-Fock parameters if requested ", &
-                          n_keywords=6, n_subsections=2, repeats=.TRUE., &
-                          citations=(/Guidon2008, Guidon2009/))
+                          description="Controls Hartree-Fock exchange for hybrid DFT, Hartree-Fock, "// &
+                          "and related post-Hartree-Fock workflows.", &
+                          n_keywords=5, n_subsections=2, repeats=.TRUE., &
+                          citations=[Guidon2008, Guidon2009])
+
 
       NULLIFY (keyword, print_key, subsection)
 
       CALL keyword_create(keyword, __LOCATION__, name="FRACTION", &
-                          description="The fraction of Hartree-Fock to add to the total energy. "// &
+                          description="Fraction of Hartree-Fock exchange to add to the total energy. "// &
                           "1.0 implies standard Hartree-Fock if used with XC_FUNCTIONAL NONE. "// &
                           "NOTE: In a mixed potential calculation this should be set to 1.0, otherwise "// &
                           "all parts are multiplied with this factor. ", &
@@ -145,6 +150,10 @@ CONTAINS
       CALL section_add_subsection(section, subsection)
       CALL section_release(subsection)
 
+      CALL create_hf_ace_section(subsection)
+      CALL section_add_subsection(section, subsection)
+      CALL section_release(subsection)
+
    END SUBROUTINE create_hfx_section
 
 ! **************************************************************************************************
@@ -164,7 +173,7 @@ CONTAINS
       CALL section_create(section, __LOCATION__, name="LOAD_BALANCE", &
                           description="Parameters influencing the load balancing of the HF", &
                           n_keywords=1, n_subsections=0, repeats=.FALSE., &
-                          citations=(/guidon2008/))
+                          citations=[guidon2008])
 
       NULLIFY (keyword)
       CALL keyword_create( &
@@ -230,28 +239,30 @@ CONTAINS
 
       CPASSERT(.NOT. ASSOCIATED(section))
       CALL section_create(section, __LOCATION__, name="INTERACTION_POTENTIAL", &
-                          description="Sets up interaction potential if requested ", &
+                          description="Defines the Coulomb, range-separated, mixed, or truncated interaction "// &
+                          "operator used for Hartree-Fock exchange.", &
                           n_keywords=1, n_subsections=0, repeats=.FALSE., &
-                          citations=(/guidon2008, guidon2009/))
+                          citations=[guidon2008, guidon2009])
 
       NULLIFY (keyword)
       CALL keyword_create( &
          keyword, __LOCATION__, &
          name="POTENTIAL_TYPE", &
-         description="Which interaction potential should be used "// &
-         "(Coulomb, longrange or shortrange).", &
+         description="Selects the interaction potential used for Hartree-Fock exchange. "// &
+         "Periodic hybrid calculations commonly use a short-range, truncated, or mixed potential.", &
          usage="POTENTIAL_TYPE SHORTRANGE", &
          enum_c_vals=s2a("COULOMB", "SHORTRANGE", "LONGRANGE", "MIX_CL", "GAUSSIAN", &
                          "MIX_LG", "IDENTITY", "TRUNCATED", "MIX_CL_TRUNC"), &
-         enum_i_vals=(/do_potential_coulomb, do_potential_short, do_potential_long, &
-                       do_potential_mix_cl, do_potential_gaussian, do_potential_mix_lg, &
-                       do_potential_id, do_potential_truncated, do_potential_mix_cl_trunc/), &
-         enum_desc=s2a("Coulomb potential: 1/r", &
-                       "Shortrange potential: erfc(omega*r)/r", &
-                       "Longrange potential: erf(omega*r)/r", &
-                       "Mix coulomb and longrange potential: 1/r + erf(omega*r)/r", &
-                       "Damped Gaussian potential: exp(-omega^2*r^2)", &
-                       "Mix Gaussian and longrange potential: erf(omega*r)/r + exp(-omega^2*r^2)", &
+         enum_i_vals=[do_potential_coulomb, do_potential_short, do_potential_long, &
+                      do_potential_mix_cl, do_potential_gaussian, do_potential_mix_lg, &
+                      do_potential_id, do_potential_truncated, do_potential_mix_cl_trunc], &
+         enum_desc=s2a("Coulomb potential: $\frac{1}{r}$", &
+                       "Shortrange potential: $\frac{\mathrm{erfc}(\omega \cdot r)}{r}$", &
+                       "Longrange potential: $\frac{\mathrm{erf}(\omega \cdot r)}{r}$", &
+                       "Mix coulomb and longrange potential: $\frac{1}{r} + \frac{\mathrm{erf}(\omega \cdot r)}{r}$", &
+                       "Damped Gaussian potential: $\exp{(-\omega^2 \cdot r^2)}$", &
+                       "Mix Gaussian and longrange potential: "// &
+                       "$\frac{\mathrm{erf}(\omega \cdot r)}{r} + \exp{(-\omega^2 \cdot r^2)}$", &
                        "Overlap", &
                        "Truncated coulomb potential: if (r &lt; R_c) 1/r else 0", &
                        "Truncated Mix coulomb and longrange potential, assumes/requires that the erf has fully decayed at R_c"), &
@@ -263,7 +274,7 @@ CONTAINS
       CALL keyword_create( &
          keyword, __LOCATION__, &
          name="OMEGA", &
-         description="Parameter for short/longrange interaction", &
+         description="Parameter $\omega$ for short/longrange interaction", &
          usage="OMEGA 0.5", &
          default_r_val=0.0_dp)
       CALL section_add_keyword(section, keyword)
@@ -291,8 +302,12 @@ CONTAINS
       CALL keyword_release(keyword)
 
       CALL keyword_create(keyword, __LOCATION__, name="CUTOFF_RADIUS", &
-                          description="Determines cutoff radius (in Angstroms) for the truncated 1/r potential. "// &
-                          "Only valid when doing truncated calculation", &
+                          description="Cutoff radius for the truncated $\frac{1}{r}$ potential or the short-range "// &
+                          "$\frac{\mathrm{erfc}(\omega \cdot r)}{r}$ potential. For truncated Coulomb in a "// &
+                          "periodic cell, choose a radius compatible with the cell dimensions. The default value "// &
+                          "for short-range potentials when this keyword is omitted is solved from "// &
+                          "$\frac{\mathrm{erfc}(\omega \cdot r)}{r} = \epsilon_{\mathrm{schwarz}}$ "// &
+                          "by Newton-Raphson method, with $\epsilon_{\mathrm{schwarz}}$ set by SCREENING/EPS_SCHWARZ", &
                           usage="CUTOFF_RADIUS 10.0", type_of_var=real_t, & ! default_r_val=10.0_dp,&
                           unit_str="angstrom")
       CALL section_add_keyword(section, keyword)
@@ -324,17 +339,16 @@ CONTAINS
 
       CPASSERT(.NOT. ASSOCIATED(section))
       CALL section_create(section, __LOCATION__, name="SCREENING", &
-                          description="Sets up screening parameters if requested ", &
+                          description="Controls screening thresholds for Hartree-Fock exchange integrals.", &
                           n_keywords=1, n_subsections=0, repeats=.FALSE., &
-                          citations=(/guidon2008, guidon2009/))
+                          citations=[guidon2008, guidon2009])
 
       NULLIFY (keyword)
       CALL keyword_create( &
          keyword, __LOCATION__, &
          name="EPS_SCHWARZ", &
-         description="Screens the near field part of the electronic repulsion "// &
-         "integrals using the Schwarz inequality for the given "// &
-         "threshold.", &
+         description="Schwarz inequality threshold for screening near-field electronic repulsion integrals. "// &
+         "Tighter values reduce screening error but increase cost.", &
          usage="EPS_SCHWARZ 1.0E-6", &
          default_r_val=1.0E-10_dp)
       CALL section_add_keyword(section, keyword)
@@ -344,10 +358,9 @@ CONTAINS
       CALL keyword_create( &
          keyword, __LOCATION__, &
          name="EPS_SCHWARZ_FORCES", &
-         description="Screens the near field part of the electronic repulsion "// &
-         "integrals using the Schwarz inequality for the given "// &
-         "threshold. This will be approximately the accuracy of the forces, "// &
-         "and should normally be similar to EPS_SCF. Default value is 100*EPS_SCHWARZ.", &
+         description="Schwarz threshold used for force-related electronic repulsion integrals. "// &
+         "This is approximately the force accuracy and should normally be similar to EPS_SCF. "// &
+         "Default value is 100*EPS_SCHWARZ.", &
          usage="EPS_SCHWARZ_FORCES 1.0E-5", &
          default_r_val=1.0E-6_dp)
       CALL section_add_keyword(section, keyword)
@@ -400,7 +413,7 @@ CONTAINS
       CALL section_create(section, __LOCATION__, name="PERIODIC", &
                           description="Sets up periodic boundary condition parameters if requested ", &
                           n_keywords=1, n_subsections=0, repeats=.FALSE., &
-                          citations=(/guidon2008, guidon2009/))
+                          citations=[guidon2008, guidon2009])
       NULLIFY (keyword)
       CALL keyword_create( &
          keyword, __LOCATION__, &
@@ -430,12 +443,12 @@ CONTAINS
       CALL section_create(section, __LOCATION__, name="MEMORY", &
                           description="Sets up memory parameters for the storage of the ERI's if requested ", &
                           n_keywords=1, n_subsections=0, repeats=.FALSE., &
-                          citations=(/guidon2008/))
+                          citations=[guidon2008])
       NULLIFY (keyword)
       CALL keyword_create( &
          keyword, __LOCATION__, &
          name="EPS_STORAGE_SCALING", &
-         variants=(/"EPS_STORAGE"/), &
+         variants=["EPS_STORAGE"], &
          description="Scaling factor to scale eps_schwarz. Storage threshold for compression "// &
          "will be EPS_SCHWARZ*EPS_STORAGE_SCALING.", &
          usage="EPS_STORAGE 1.0E-2", &
@@ -515,7 +528,7 @@ CONTAINS
 
       CALL keyword_create(keyword, __LOCATION__, name="EPS_FILTER", &
                           description="Filter threshold for DBT tensor contraction.", &
-                          variants=(/"KP_EPS_FILTER"/), &
+                          variants=["KP_EPS_FILTER"], &
                           default_r_val=1.0E-09_dp)
       CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
@@ -544,7 +557,7 @@ CONTAINS
       CALL keyword_create(keyword, __LOCATION__, name="OMEGA", &
                           description="The range parameter for the short range operator (in 1/a0). "// &
                           "Default is OMEGA from INTERACTION_POTENTIAL. ", &
-                          variants=(/"KP_OMEGA"/), &
+                          variants=["KP_OMEGA"], &
                           default_r_val=0.0_dp, &
                           repeats=.FALSE.)
       CALL section_add_keyword(section, keyword)
@@ -553,10 +566,26 @@ CONTAINS
       CALL keyword_create(keyword, __LOCATION__, name="CUTOFF_RADIUS", &
                           description="The cutoff radius (in Angstroms) for the truncated Coulomb operator. "// &
                           "Default is CUTOFF_RADIUS from INTERACTION_POTENTIAL. ", &
-                          variants=(/"KP_CUTOFF_RADIUS"/), &
+                          variants=["KP_CUTOFF_RADIUS"], &
                           default_r_val=0.0_dp, &
                           repeats=.FALSE., &
                           unit_str="angstrom")
+      CALL section_add_keyword(section, keyword)
+      CALL keyword_release(keyword)
+
+      CALL keyword_create(keyword, __LOCATION__, name="SCALE_COULOMB", &
+                          description="Scales Hartree-Fock contribution arising from a coulomb potential. "// &
+                          "Only valid when doing a mixed potential calculation. "// &
+                          "Default is SCALE_COULOMB from INTERACTION_POTENTIAL", &
+                          usage="SCALE_COULOMB 1.0", default_r_val=1.0_dp)
+      CALL section_add_keyword(section, keyword)
+      CALL keyword_release(keyword)
+
+      CALL keyword_create(keyword, __LOCATION__, name="SCALE_LONGRANGE", &
+                          description="Scales Hartree-Fock contribution arising from a longrange potential. "// &
+                          "Only valid when doing a mixed potential calculation. "// &
+                          "Default if SCALE_LONGRANGE from INTERACTION_POTENTIAL", &
+                          usage="SCALE_LONGRANGE 1.0", default_r_val=1.0_dp)
       CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
 
@@ -564,7 +593,7 @@ CONTAINS
                           description="The number of MPI subgroup that work in parallel during the SCF. "// &
                           "The default value is 1. Using N subgroups should speed up the "// &
                           "calculation by a factor ~N, at the cost of N times more memory usage.", &
-                          variants=(/"NGROUPS"/), &
+                          variants=["NGROUPS"], &
                           usage="KP_NGROUPS {int}", &
                           repeats=.FALSE., &
                           default_i_val=1)
@@ -593,10 +622,10 @@ CONTAINS
                           "the tensors can be stacked along the d direction. STCK_SIZE "// &
                           "controls the size of this stack. Larger stacks are more efficient, "// &
                           "but required more memory.", &
-                          variants=(/"STACK_SIZE"/), &
+                          variants=["STACK_SIZE"], &
                           usage="KP_STACK_SIZE {int}", &
                           repeats=.FALSE., &
-                          default_i_val=32)
+                          default_i_val=16)
       CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
 
@@ -618,9 +647,9 @@ CONTAINS
                           "Default is POTENTIAL_TYPE from INTERACTION_POTENTIAL. "// &
                           "The standard "// &
                           "Coulomb operator cannot be used in periodic systems.", &
-                          usage="OPERATOR {string}", &
+                          usage="RI_METRIC {string}", &
                           repeats=.FALSE., &
-                          variants=(/"KP_RI_METRIC"/), &
+                          variants=["KP_RI_METRIC"], &
                           default_i_val=0, &
                           enum_c_vals=s2a("HFX", "COULOMB", "IDENTITY", "TRUNCATED", "SHORTRANGE"), &
                           enum_desc=s2a("Same as HFX operator", &
@@ -628,8 +657,8 @@ CONTAINS
                                         "Overlap", &
                                         "Truncated Coulomb operator: 1/r if (r<R_c), 0 otherwise ", &
                                         "Short range: erfc(omega*r)/r"), &
-                          enum_i_vals=(/0, do_potential_coulomb, do_potential_id, do_potential_truncated, &
-                                        do_potential_short/))
+                          enum_i_vals=[0, do_potential_coulomb, do_potential_id, do_potential_truncated, &
+                                       do_potential_short])
       CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
 
@@ -641,7 +670,7 @@ CONTAINS
                                         "Cholesky: not stable in case of ill-conditioned RI basis", &
                                         "Iterative algorithms: linear scaling "// &
                                         "Hotelling's method for inverse and Newton-Schulz iteration for matrix square root"), &
-                          enum_i_vals=(/hfx_ri_do_2c_diag, hfx_ri_do_2c_cholesky, hfx_ri_do_2c_iter/))
+                          enum_i_vals=[hfx_ri_do_2c_diag, hfx_ri_do_2c_cholesky, hfx_ri_do_2c_iter])
       CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
 
@@ -661,7 +690,7 @@ CONTAINS
       CALL keyword_create( &
          keyword, __LOCATION__, &
          name="CALC_COND_NUM", &
-         variants=(/"CALC_CONDITION_NUMBER"/), &
+         variants=["CALC_CONDITION_NUMBER"], &
          description="Calculate the condition number of integral matrices.", &
          usage="CALC_COND_NUM", &
          default_l_val=.FALSE., &
@@ -684,7 +713,7 @@ CONTAINS
 
       CALL keyword_create(keyword, __LOCATION__, name="EPS_PGF_ORB", &
                           description="Sets precision of the integral tensors.", &
-                          variants=(/"KP_EPS_PGF_ORB"/), &
+                          variants=["KP_EPS_PGF_ORB"], &
                           default_r_val=1.0E-5_dp)
       CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
@@ -699,7 +728,7 @@ CONTAINS
                           description="Flavor of RI: how to contract 3-center integrals", &
                           enum_c_vals=s2a("MO", "RHO"), &
                           enum_desc=s2a("with MO coefficients", "with density matrix"), &
-                          enum_i_vals=(/ri_mo, ri_pmat/), &
+                          enum_i_vals=[ri_mo, ri_pmat], &
                           default_i_val=ri_pmat)
       CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
@@ -736,6 +765,33 @@ CONTAINS
                           description="Section of possible print options in the RI-HFX code.", &
                           n_keywords=0, n_subsections=1, repeats=.FALSE.)
 
+      CALL keyword_create(keyword, __LOCATION__, name="KP_RI_PROGRESS_BAR", &
+                          variants=s2a("PROGRESS_BAR", "PROGRESS", "KP_PROGRESS", "KP_PROGRESS_BAR"), &
+                          description="Whether a progress bar for individual SCF steps should be printed. "// &
+                          "In RI-HFXk, an expensive triple loop runs over periodic images and "// &
+                          "atomic pairs. This printing option tracks the progress of this loop "// &
+                          "in real time. Note that some work also takes place before the loop "// &
+                          "starts, and the time spent doing it depends on the value of "// &
+                          "KP_STACK_SIZE (larger = faster, but more memory used).", &
+                          default_l_val=.FALSE., lone_keyword_l_val=.TRUE.)
+      CALL section_add_keyword(subsection, keyword)
+      CALL keyword_release(keyword)
+
+      !TODO: add a incentive to restart from GGA calculation? Test that it improves things
+      CALL keyword_create(keyword, __LOCATION__, name="KP_RI_MEMORY_ESTIMATE", &
+                          variants=s2a("MEMORY_ESTIMATE"), &
+                          description="Calculate and print a rough upper bound estimate of the memory "// &
+                          "required to run a RI-HFXk ENERGY calculation. Note that a fair "// &
+                          "amount of computing must take place before this estimate can be "// &
+                          "produced. If the calculation runs out of memory beforehand, "// &
+                          "use more resources, or change the value of memory related keywords "// &
+                          "(e.g. KP_NGROUPS, interaction potential parameters, KP_STACK_SIZE). "// &
+                          "The estimate is more accurate when restarting from a (GGA) wavefunction. "// &
+                          "Calculations involving forces will require more memory than this estimate.", &
+                          default_l_val=.FALSE., lone_keyword_l_val=.TRUE.)
+      CALL section_add_keyword(subsection, keyword)
+      CALL keyword_release(keyword)
+
       CALL cp_print_key_section_create(print_key, __LOCATION__, "RI_INFO", &
                                        description="Controls the printing of DBCSR tensor log in RI HFX.", &
                                        print_level=high_print_level, add_last=add_last_numeric, filename="__STD_OUT__")
@@ -752,8 +808,26 @@ CONTAINS
       CALL keyword_create(keyword, __LOCATION__, name="MULTIPLY_BY_RI_2C_INTEGRALS", &
                           variants=s2a("MULT_BY_RI", "MULT_BY_S", "MULT_BY_RI_INTS"), &
                           description="Whether the RI density coefficients to be printed should "// &
-                          "be pre-multiplied by the RI_METRIC 2c-integrals: (r|s)*C_s.", &
+                          "be pre-multiplied by the RI_METRIC 2c-integrals: (r|s)*C_s. "// &
+                          "Not compatible with the SKIP_RI_METRIC keyword.", &
                           default_l_val=.FALSE., lone_keyword_l_val=.TRUE.)
+      CALL section_add_keyword(print_key, keyword)
+      CALL keyword_release(keyword)
+
+      CALL keyword_create(keyword, __LOCATION__, name="SKIP_RI_METRIC", &
+                          variants=s2a("SKIP_INVERSE", "SKIP_2C_INTS", "SKIP_2C_INTEGRALS"), &
+                          description="Skip the calculation, inversion, and contraction of the 2-center RI "// &
+                          "metric integrals. The printed coefficients are only the contraction of the "// &
+                          "density matrix with the 3-center integrals, i.e. c_r = sum_pq P_pq (pq|r) "// &
+                          "Allows for memory savings when printing the RI density coefficients.", &
+                          default_l_val=.FALSE., lone_keyword_l_val=.TRUE.)
+      CALL section_add_keyword(print_key, keyword)
+      CALL keyword_release(keyword)
+
+      CALL keyword_create(keyword, __LOCATION__, name="FILE_FORMAT", &
+                          description="Format of file containing density fitting coefficients: "// &
+                          "BASIC(default)-original format; EXTENDED-format with basis set info.", &
+                          default_c_val="BASIC")
       CALL section_add_keyword(print_key, keyword)
       CALL keyword_release(keyword)
 
@@ -771,6 +845,56 @@ CONTAINS
       CALL section_add_subsection(section, subsection)
       CALL section_release(subsection)
 
-   END SUBROUTINE
+   END SUBROUTINE create_hf_ri_section
+
+   ! ACE Keyword section
+
+   SUBROUTINE create_hf_ace_section(section)
+      TYPE(section_type), POINTER :: section
+
+      TYPE(keyword_type), POINTER :: keyword
+
+      CPASSERT(.NOT. ASSOCIATED(section))
+      CALL section_create(section, __LOCATION__, &
+                          name="ACE", &
+                          description="Parameters for the Adaptively Compressed Exchange (ACE) "// &
+                          "operator. ACE replaces the full exchange matrix with a "// &
+                          "low-rank projector K_ACE = -W*W^T after an initial "// &
+                          "full HFX build, reducing cost of subsequent SCF steps. "// &
+                          "NOTE: ACE requires diagonalization-based SCF. "// &
+                          "It is incompatible with orbital transformation (OT) methods "// &
+                          "because OT does not construct MO coefficients.", &
+                          n_keywords=2, &
+                          n_subsections=0, &
+                          repeats=.FALSE., &
+                          citations=[Lin2016ACE])
+
+      NULLIFY (keyword)
+
+      ! --- ACTIVE ---
+      CALL keyword_create(keyword, __LOCATION__, &
+                          name="ACTIVE", &
+                          description="Enable the ACE approximation for HFX. "// &
+                          "When .TRUE., the exchange matrix is replaced by "// &
+                          "the ACE projector after the first full build.", &
+                          usage="ACTIVE .TRUE.", &
+                          default_l_val=.FALSE., &
+                          lone_keyword_l_val=.TRUE.)
+      CALL section_add_keyword(section, keyword)
+      CALL keyword_release(keyword)
+
+      ! --- REBUILD_FREQUENCY ---
+      CALL keyword_create(keyword, __LOCATION__, &
+                          name="REBUILD_FREQUENCY", &
+                          description="Rebuild the ACE projectors W every N SCF steps. "// &
+                          "N=1 means rebuild every step (identical to full HFX, "// &
+                          "use for testing only). N=10-20 is typical for production. "// &
+                          "Projectors are always rebuilt when the structure changes.", &
+                          usage="REBUILD_FREQUENCY 20", &
+                          default_i_val=20)
+      CALL section_add_keyword(section, keyword)
+      CALL keyword_release(keyword)
+
+   END SUBROUTINE create_hf_ace_section
 
 END MODULE input_cp2k_hfx

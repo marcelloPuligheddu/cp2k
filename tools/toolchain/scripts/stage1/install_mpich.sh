@@ -6,8 +6,8 @@
 [ "${BASH_SOURCE[0]}" ] && SCRIPT_NAME="${BASH_SOURCE[0]}" || SCRIPT_NAME=$0
 SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_NAME")/.." && pwd -P)"
 
-mpich_ver="4.2.3"
-mpich_sha256="7a019180c51d1738ad9c5d8d452314de65e828ee240bcb2d1f80de9a65be88a8"
+mpich_ver="5.0.1"
+mpich_sha256="8c1832a13ddacf071685069f5fadfd1f2877a29e1a628652892c65211b1f3327"
 mpich_pkg="mpich-${mpich_ver}.tar.gz"
 
 source "${SCRIPT_DIR}"/common_vars.sh
@@ -19,9 +19,6 @@ source "${INSTALLDIR}"/toolchain.env
 [ ${MPI_MODE} != "mpich" ] && exit 0
 [ -f "${BUILDDIR}/setup_mpich" ] && rm "${BUILDDIR}/setup_mpich"
 
-MPICH_CFLAGS=""
-MPICH_LDFLAGS=""
-MPICH_LIBS=""
 ! [ -d "${BUILDDIR}" ] && mkdir -p "${BUILDDIR}"
 cd "${BUILDDIR}"
 
@@ -33,11 +30,7 @@ case "${with_mpich}" in
     if verify_checksums "${install_lock_file}"; then
       echo "mpich-${mpich_ver} is already installed, skipping it."
     else
-      if [ -f ${mpich_pkg} ]; then
-        echo "${mpich_pkg} is found"
-      else
-        download_pkg_from_cp2k_org "${mpich_sha256}" "${mpich_pkg}"
-      fi
+      retrieve_package "${mpich_sha256}" "${mpich_pkg}"
       echo "Installing from scratch into ${pkg_install_dir} for MPICH device ${MPICH_DEVICE}"
       [ -d mpich-${mpich_ver} ] && rm -rf mpich-${mpich_ver}
       tar -xzf ${mpich_pkg}
@@ -45,23 +38,25 @@ case "${with_mpich}" in
       unset F90
       unset F90FLAGS
 
-      # workaround for compilation with GCC >= 10, until properly fixed:
-      #   https://github.com/pmodels/mpich/issues/4300
-      if ("${FC}" --version | grep -q 'GNU'); then
-        compat_flag=$(allowed_gfortran_flags "-fallow-argument-mismatch")
+      if [ "${TARGET_CPU}" = "native" ] && [ -f /proc/cpuinfo ]; then
+        if [ -n "$(grep "avx512f" /proc/cpuinfo)" ]; then
+          FAST_OPTION="--enable-fast=avx512f"
+        elif [ -n "$(grep "avx" /proc/cpuinfo)" ]; then
+          FAST_OPTION="--enable-fast=avx"
+        fi
       fi
+
       ./configure \
         --prefix="${pkg_install_dir}" \
         --libdir="${pkg_install_dir}/lib" \
-        MPICC="" \
-        FFLAGS="${FCFLAGS} ${compat_flag}" \
-        FCFLAGS="${FCFLAGS} ${compat_flag}" \
-        --without-x --without-slurm \
-        --enable-gl=no \
         --with-device=${MPICH_DEVICE} \
-        > configure.log 2>&1 || tail -n ${LOG_LINES} configure.log
-      make -j $(get_nprocs) > make.log 2>&1 || tail -n ${LOG_LINES} make.log
-      make install > install.log 2>&1 || tail -n ${LOG_LINES} install.log
+        --without-slurm \
+        ${FAST_OPTION} \
+        FFLAGS="${FCFLAGS}" \
+        FCFLAGS="${FCFLAGS}" \
+        > configure.log 2>&1 || tail_excerpt configure.log
+      make -j $(get_nprocs) > make.log 2>&1 || tail_excerpt make.log
+      make install > install.log 2>&1 || tail_excerpt install.log
       cd ..
       write_checksums "${install_lock_file}" "${SCRIPT_DIR}/stage1/$(basename ${SCRIPT_NAME})"
     fi
@@ -136,6 +131,11 @@ export MPI_CFLAGS="${MPICH_CFLAGS}"
 export MPI_LDFLAGS="${MPICH_LDFLAGS}"
 export MPI_LIBS="${MPICH_LIBS}"
 export CP_DFLAGS="\${CP_DFLAGS} IF_MPI(-D__parallel|)"
+# For proper mpi_f08 support, we need at least GCC version 9 (asynchronous keyword)
+# Other compilers should work
+  if ! [ "\$(gfortran -dumpversion | cut -d. -f1)" -lt 9 ]; then
+    export CP_DFLAGS="\${CP_DFLAGS} IF_MPI(-D__MPI_F08|)"
+  fi
 export CP_CFLAGS="\${CP_CFLAGS} IF_MPI(${MPICH_CFLAGS}|)"
 export CP_LDFLAGS="\${CP_LDFLAGS} IF_MPI(${MPICH_LDFLAGS}|)"
 export CP_LIBS="\${CP_LIBS} IF_MPI(${MPICH_LIBS}|)"
@@ -149,9 +149,10 @@ append_path LD_LIBRARY_PATH "${pkg_install_dir}/lib"
 append_path LD_RUN_PATH "${pkg_install_dir}/lib"
 append_path LIBRARY_PATH "${pkg_install_dir}/lib"
 append_path CPATH "${pkg_install_dir}/include"
+prepend_path PKG_CONFIG_PATH "${pkg_install_dir}/lib/pkgconfig"
 EOF
   fi
-  cat "${BUILDDIR}/setup_mpich" >> ${SETUPFILE}
+  filter_setup "${BUILDDIR}/setup_mpich" "${SETUPFILE}"
 fi
 
 # Update leak suppression file

@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2025 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2026 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -83,7 +83,7 @@ MODULE qs_scf
         cdft2ot, history_guess, ot2cdft, ot_precond_full_all, ot_precond_full_single, &
         ot_precond_full_single_inverse, ot_precond_none, ot_precond_s_inverse, &
         outer_scf_becke_constraint, outer_scf_hirshfeld_constraint, outer_scf_optimizer_broyden, &
-        outer_scf_optimizer_newton_ls
+        outer_scf_optimizer_newton_ls, tblite_scc_mixer_tblite
    USE input_section_types,             ONLY: section_vals_get_subs_vals,&
                                               section_vals_type
    USE kinds,                           ONLY: default_path_length,&
@@ -110,6 +110,7 @@ MODULE qs_scf
                                               print_inverse_jacobian,&
                                               restart_inverse_jacobian
    USE qs_cdft_types,                   ONLY: cdft_control_type
+   USE qs_charge_mixing,                ONLY: charge_mixing_scc_error
    USE qs_charges_types,                ONLY: qs_charges_type
    USE qs_density_matrices,             ONLY: calculate_density_matrix
    USE qs_density_mixing_types,         ONLY: gspace_mixing_nr
@@ -123,8 +124,10 @@ MODULE qs_scf
                                               set_qs_env
    USE qs_integrate_potential,          ONLY: integrate_v_rspace
    USE qs_kind_types,                   ONLY: qs_kind_type
-   USE qs_ks_methods,                   ONLY: qs_ks_update_qs_env
-   USE qs_ks_types,                     ONLY: qs_ks_did_change,&
+   USE qs_ks_methods,                   ONLY: evaluate_core_matrix_traces,&
+                                              qs_ks_update_qs_env
+   USE qs_ks_types,                     ONLY: get_ks_env,&
+                                              qs_ks_did_change,&
                                               qs_ks_env_type
    USE qs_mo_io,                        ONLY: write_mo_set_to_restart
    USE qs_mo_methods,                   ONLY: make_basis_simple,&
@@ -171,6 +174,10 @@ MODULE qs_scf
    USE scf_control_types,               ONLY: scf_control_type
    USE smeagol_interface,               ONLY: run_smeagol_bulktrans,&
                                               run_smeagol_emtrans
+   USE tblite_interface,                ONLY: tb_get_energy,&
+                                              tb_native_scc_mixer_active,&
+                                              tb_scf_mixer_error,&
+                                              tb_update_charges
 #include "./base/base_uses.f90"
 
    IMPLICIT NONE
@@ -234,7 +241,7 @@ CONTAINS
             CALL qs_scf_env_initialize(qs_env, scf_env)
          END IF
 
-         IF ((scf_control%density_guess .EQ. history_guess) .AND. (first_step_flag)) THEN
+         IF ((scf_control%density_guess == history_guess) .AND. (first_step_flag)) THEN
             max_scf_tmp = scf_control%max_scf
             scf_control%max_scf = 1
             outer_scf_loop = scf_control%outer_scf%have_scf
@@ -267,7 +274,7 @@ CONTAINS
             ! Update a counter and check if the Jacobian should be deallocated
             IF (ASSOCIATED(scf_env%outer_scf%inv_jacobian)) THEN
                scf_control%outer_scf%cdft_opt_control%ijacobian(2) = scf_control%outer_scf%cdft_opt_control%ijacobian(2) + 1
-               IF (scf_control%outer_scf%cdft_opt_control%ijacobian(2) .GE. &
+               IF (scf_control%outer_scf%cdft_opt_control%ijacobian(2) >= &
                    scf_control%outer_scf%cdft_opt_control%jacobian_freq(2) .AND. &
                    scf_control%outer_scf%cdft_opt_control%jacobian_freq(2) > 0) &
                   scf_env%outer_scf%deallocate_jacobian = .TRUE.
@@ -275,7 +282,7 @@ CONTAINS
          END IF
          !   *** add the converged wavefunction to the wavefunction history
          IF ((ASSOCIATED(qs_env%wf_history)) .AND. &
-             ((scf_control%density_guess .NE. history_guess) .OR. &
+             ((scf_control%density_guess /= history_guess) .OR. &
               (.NOT. first_step_flag))) THEN
             IF (.NOT. dft_control%qs_control%cdft) THEN
                CALL wfi_update(qs_env%wf_history, qs_env=qs_env, dt=1.0_dp)
@@ -288,7 +295,7 @@ CONTAINS
                   CALL wfi_update(qs_env%wf_history, qs_env=qs_env, dt=1.0_dp)
                END IF
             END IF
-         ELSE IF ((scf_control%density_guess .EQ. history_guess) .AND. &
+         ELSE IF ((scf_control%density_guess == history_guess) .AND. &
                   (first_step_flag)) THEN
             scf_control%max_scf = max_scf_tmp
             scf_control%outer_scf%have_scf = outer_scf_loop
@@ -353,13 +360,15 @@ CONTAINS
       INTEGER                                            :: ext_master_id, handle, handle2, i_tmp, &
                                                             ic, ispin, iter_count, output_unit, &
                                                             scf_energy_message_tag, total_steps
-      LOGICAL :: diis_step, do_kpoints, energy_only, exit_inner_loop, exit_outer_loop, &
-         inner_loop_converged, just_energy, outer_loop_converged
+      LOGICAL :: density_full_step, diis_step, do_kpoints, energy_only, exit_inner_loop, &
+         exit_outer_loop, inner_loop_converged, internal_tblite_density_full_step, &
+         internal_tblite_mixer, just_energy, outer_loop_converged, tblite_native_mixer
       REAL(KIND=dp)                                      :: t1, t2
       REAL(KIND=dp), DIMENSION(3)                        :: res_val_3
       TYPE(atomic_kind_type), DIMENSION(:), POINTER      :: atomic_kind_set
       TYPE(cp_logger_type), POINTER                      :: logger
       TYPE(cp_result_type), POINTER                      :: results
+      TYPE(dbcsr_p_type), DIMENSION(:), POINTER          :: matrix_ks
       TYPE(dbcsr_p_type), DIMENSION(:, :), POINTER       :: rho_ao_kp
       TYPE(dft_control_type), POINTER                    :: dft_control
       TYPE(energy_correction_type), POINTER              :: ec_env
@@ -405,6 +414,17 @@ CONTAINS
                       results=results, &
                       pw_env=pw_env, &
                       para_env=para_env)
+      tblite_native_mixer = dft_control%qs_control%xtb_control%do_tblite .AND. &
+                            scf_env%method /= ot_method_nr .AND. &
+                            tb_native_scc_mixer_active(dft_control)
+      internal_tblite_mixer = (dft_control%qs_control%dftb .AND. &
+                               dft_control%qs_control%dftb_control%tblite_scc_mixer == tblite_scc_mixer_tblite) .OR. &
+                              (dft_control%qs_control%xtb .AND. &
+                               .NOT. dft_control%qs_control%xtb_control%do_tblite .AND. &
+                               dft_control%qs_control%xtb_control%tblite_scc_mixer == tblite_scc_mixer_tblite)
+      internal_tblite_density_full_step = dft_control%qs_control%xtb .AND. &
+                                          .NOT. dft_control%qs_control%xtb_control%do_tblite .AND. &
+                                          dft_control%qs_control%xtb_control%tblite_scc_mixer == tblite_scc_mixer_tblite
 
       CALL qs_rho_get(rho, rho_ao_kp=rho_ao_kp)
 
@@ -417,7 +437,7 @@ CONTAINS
       IF (output_unit > 0) WRITE (UNIT=output_unit, FMT="(/,/,T2,A)") &
          "SCF WAVEFUNCTION OPTIMIZATION"
 
-! when switch_surf_dip is switched on, indicate storing mos from the last converged step
+      ! when switch_surf_dip is switched on, indicate storing mos from the last converged step
       IF (dft_control%switch_surf_dip) THEN
          CALL get_qs_env(qs_env, mos_last_converged=mos_last_converged)
          DO ispin = 1, dft_control%nspins
@@ -441,8 +461,8 @@ CONTAINS
       IF (test_for_result(results, description=description)) THEN
          CALL get_results(results, description=description, &
                           values=res_val_3, n_entries=i_tmp)
-         CPASSERT(i_tmp .EQ. 3)
-         IF (ALL(res_val_3(:) .LE. 0.0)) &
+         CPASSERT(i_tmp == 3)
+         IF (ALL(res_val_3(:) <= 0.0)) &
             CALL cp_abort(__LOCATION__, &
                           " Trying to access result ("//TRIM(description)// &
                           ") which is not correctly stored.")
@@ -466,7 +486,7 @@ CONTAINS
          CALL qs_scf_set_loop_flags(scf_env, diis_step, &
                                     energy_only, just_energy, exit_inner_loop)
 
-! decide whether to switch off dipole correction for convergence purposes
+         ! decide whether to switch off dipole correction for convergence purposes
          dft_control%surf_dip_correct_switch = dft_control%correct_surf_dip
          IF ((dft_control%correct_surf_dip) .AND. (scf_control%outer_scf%have_scf) .AND. &
              (scf_env%outer_scf%iter_count > FLOOR(scf_control%outer_scf%max_scf/2.0_dp))) THEN
@@ -476,11 +496,12 @@ CONTAINS
                   "SURFACE DIPOLE CORRECTION switched off"
             END IF
          END IF
+
          scf_loop: DO
 
             CALL timeset(routineN//"_inner_loop", handle2)
 
-            scf_env%iter_count = scf_env%iter_count + 1
+            IF (.NOT. just_energy) scf_env%iter_count = scf_env%iter_count + 1
             iter_count = iter_count + 1
             CALL cp_iterate(logger%iter_info, last=.FALSE., iter_nr=iter_count)
 
@@ -497,16 +518,61 @@ CONTAINS
 
             IF (do_kpoints) THEN
                ! kpoints
-               CALL qs_scf_new_mos_kp(qs_env, scf_env, scf_control, diis_step)
+               IF (dft_control%hairy_probes .EQV. .TRUE.) THEN
+                  scf_control%smear%do_smear = .FALSE.
+                  CALL qs_scf_new_mos_kp(qs_env, scf_env, scf_control, diis_step, dft_control%probe)
+               ELSE
+                  CALL qs_scf_new_mos_kp(qs_env, scf_env, scf_control, diis_step)
+               END IF
             ELSE
                ! Gamma points only
-               CALL qs_scf_new_mos(qs_env, scf_env, scf_control, scf_section, diis_step, energy_only)
+               IF (dft_control%hairy_probes .EQV. .TRUE.) THEN
+                  scf_control%smear%do_smear = .FALSE.
+                  CALL qs_scf_new_mos(qs_env, scf_env, scf_control, scf_section, diis_step, energy_only, &
+                                      dft_control%probe)
+               ELSE
+                  CALL qs_scf_new_mos(qs_env, scf_env, scf_control, scf_section, diis_step, energy_only)
+               END IF
             END IF
 
             ! Print requested MO information (can be computationally expensive with OT)
             CALL qs_scf_write_mos(qs_env, scf_env, final_mos=.FALSE.)
 
-            CALL qs_scf_density_mixing(scf_env, rho, para_env, diis_step)
+            IF (dft_control%qs_control%xtb_control%do_tblite) THEN
+               IF (scf_env%method == ot_method_nr) THEN
+                  CALL tb_update_charges(qs_env, dft_control, qs_env%tb_tblite, .FALSE., .TRUE.)
+                  CALL evaluate_core_matrix_traces(qs_env)
+               ELSE
+                  CPASSERT(scf_env%mixing_method > 0)
+                  CALL tb_update_charges(qs_env, dft_control, qs_env%tb_tblite, .FALSE., .FALSE.)
+                  CALL evaluate_core_matrix_traces(qs_env, rho_ao_ext=scf_env%p_mix_new)
+               END IF
+               CALL tb_get_energy(qs_env, qs_env%tb_tblite, energy)
+            END IF
+
+            density_full_step = diis_step .OR. tblite_native_mixer .OR. internal_tblite_density_full_step
+            CALL qs_scf_density_mixing(scf_env, rho, para_env, density_full_step)
+            IF (dft_control%qs_control%xtb_control%do_tblite) THEN
+               scf_env%iter_delta = MAX(scf_env%iter_delta, &
+                                        tb_scf_mixer_error(dft_control, qs_env%tb_tblite, &
+                                                           scf_control%eps_scf))
+            END IF
+            IF (dft_control%qs_control%dftb .OR. &
+                (dft_control%qs_control%xtb .AND. .NOT. dft_control%qs_control%xtb_control%do_tblite)) THEN
+               scf_env%iter_delta = MAX(scf_env%iter_delta, &
+                                        charge_mixing_scc_error(scf_env%mixing_store, scf_control%eps_scf))
+            END IF
+            IF (tblite_native_mixer) THEN
+               scf_env%iter_param = dft_control%qs_control%xtb_control%tblite_mixer_damping
+               scf_env%iter_method = "TBLite/Diag"
+            ELSEIF (internal_tblite_mixer) THEN
+               scf_env%iter_method = "TBLite/Diag"
+               IF (dft_control%qs_control%dftb) THEN
+                  scf_env%iter_param = dft_control%qs_control%dftb_control%tblite_mixer_damping
+               ELSE
+                  scf_env%iter_param = dft_control%qs_control%xtb_control%tblite_mixer_damping
+               END IF
+            END IF
 
             t2 = m_walltime()
 
@@ -515,18 +581,18 @@ CONTAINS
             IF (.NOT. just_energy) energy%tot_old = energy%total
 
             ! check for external communicator and if the intermediate energy should be sent
-            IF (scf_energy_message_tag .GT. 0) THEN
+            IF (scf_energy_message_tag > 0) THEN
                CALL external_comm%send(energy%total, ext_master_id, scf_energy_message_tag)
             END IF
 
-            CALL qs_scf_check_inner_exit(qs_env, scf_env, scf_control, should_stop, exit_inner_loop, &
-                                         inner_loop_converged, output_unit)
+            CALL qs_scf_check_inner_exit(qs_env, scf_env, scf_control, should_stop, just_energy, &
+                                         exit_inner_loop, inner_loop_converged, output_unit)
 
             ! In case we decide to exit we perform few more check to see if this one
             ! is really the last SCF step
             IF (exit_inner_loop) THEN
 
-               CALL qs_scf_inner_finalize(scf_env, qs_env, diis_step, output_unit)
+               CALL qs_scf_inner_finalize(scf_env, qs_env, density_full_step, output_unit)
 
                CALL qs_scf_check_outer_exit(qs_env, scf_env, scf_control, should_stop, &
                                             outer_loop_converged, exit_outer_loop)
@@ -539,8 +605,16 @@ CONTAINS
             IF (do_kpoints) THEN
                CALL write_kpoints_restart(rho_ao_kp, kpoints, scf_env, dft_section, particle_set, qs_kind_set)
             ELSE
-               ! Write Wavefunction restart file
-               CALL write_mo_set_to_restart(mos, particle_set, dft_section=dft_section, qs_kind_set=qs_kind_set)
+               ! Write wavefunction restart file
+               IF (scf_env%method == ot_method_nr) THEN
+                  ! With OT: provide the Kohn-Sham matrix for the calculation of the MO eigenvalues
+                  CALL get_ks_env(ks_env=ks_env, matrix_ks=matrix_ks)
+                  CALL write_mo_set_to_restart(mos, particle_set, dft_section=dft_section, qs_kind_set=qs_kind_set, &
+                                               matrix_ks=matrix_ks)
+               ELSE
+                  CALL write_mo_set_to_restart(mos, particle_set, dft_section=dft_section, qs_kind_set=qs_kind_set)
+               END IF
+
             END IF
 
             ! Exit if we have finished with the SCF inner loop
@@ -576,7 +650,7 @@ CONTAINS
          CALL qs_scf_outer_loop_info(output_unit, scf_control, scf_env, &
                                      energy, total_steps, should_stop, outer_loop_converged)
 
-!  save mos to converged mos if outer_loop_converged and surf_dip_correct_switch is true
+         ! Save MOs to converged MOs if outer_loop_converged and surf_dip_correct_switch is true
          IF (exit_outer_loop) THEN
             IF ((dft_control%switch_surf_dip) .AND. (outer_loop_converged) .AND. &
                 (dft_control%surf_dip_correct_switch)) THEN
@@ -689,15 +763,27 @@ CONTAINS
       ! this just guarantees that all mo_occupations match the eigenvalues, if smear
       DO ispin = 1, dft_control%nspins
          ! do not reset mo_occupations if the maximum overlap method is in use
-         IF (.NOT. scf_control%diagonalization%mom) &
-            CALL set_mo_occupation(mo_set=mos(ispin), &
-                                   smear=scf_control%smear)
+         IF (.NOT. scf_control%diagonalization%mom) THEN
+            !if the hair probes section is present, this sends hairy_probes to set_mo_occupation subroutine
+            !and switches off the standard smearing
+            IF (dft_control%hairy_probes .EQV. .TRUE.) THEN
+               IF (scf_env%outer_scf%iter_count > 0) THEN
+                  scf_control%smear%do_smear = .FALSE.
+                  CALL set_mo_occupation(mo_set=mos(ispin), &
+                                         smear=scf_control%smear, &
+                                         probe=dft_control%probe)
+               END IF
+            ELSE
+               CALL set_mo_occupation(mo_set=mos(ispin), &
+                                      smear=scf_control%smear)
+            END IF
+         END IF
       END DO
 
       SELECT CASE (scf_env%method)
       CASE DEFAULT
 
-         CPABORT("unknown scf method method:"//cp_to_string(scf_env%method))
+         CPABORT("Unknown SCF method <"//TRIM(cp_to_string(scf_env%method))//"> found. Check the code!")
 
       CASE (filter_matrix_diag_method_nr)
 
@@ -793,7 +879,20 @@ CONTAINS
             ALLOCATE (scf_env%qs_ot_env(number_of_OT_envs))
 
             ! XXX Joost XXX should disentangle reading input from this part
+            IF (scf_env%outer_scf%iter_count > 0) THEN
+               IF (scf_env%iter_delta < scf_control%eps_diis) THEN
+                  scf_env%qs_ot_env(1)%settings%ot_state = 1
+               END IF
+            END IF
+            !
             CALL ot_scf_read_input(scf_env%qs_ot_env, scf_section)
+            !
+            IF (scf_env%outer_scf%iter_count > 0) THEN
+               IF (scf_env%qs_ot_env(1)%settings%ot_state == 1) THEN
+                  scf_control%max_scf = MAX(scf_env%qs_ot_env(1)%settings%max_scf_diis, &
+                                            scf_control%max_scf)
+               END IF
+            END IF
 
             ! keep a note that we are restricted
             IF (dft_control%restricted) THEN
@@ -909,17 +1008,38 @@ CONTAINS
       ! Release SCF work storage
       CALL cp_fm_release(scf_env%scf_work1)
 
+      IF (ASSOCIATED(scf_env%scf_work1_red)) THEN
+         CALL cp_fm_release(scf_env%scf_work1_red)
+      END IF
       IF (ASSOCIATED(scf_env%scf_work2)) THEN
          CALL cp_fm_release(scf_env%scf_work2)
          DEALLOCATE (scf_env%scf_work2)
+         NULLIFY (scf_env%scf_work2)
+      END IF
+      IF (ASSOCIATED(scf_env%scf_work2_red)) THEN
+         CALL cp_fm_release(scf_env%scf_work2_red)
+         DEALLOCATE (scf_env%scf_work2_red)
+         NULLIFY (scf_env%scf_work2_red)
       END IF
       IF (ASSOCIATED(scf_env%ortho)) THEN
          CALL cp_fm_release(scf_env%ortho)
          DEALLOCATE (scf_env%ortho)
+         NULLIFY (scf_env%ortho)
+      END IF
+      IF (ASSOCIATED(scf_env%ortho_red)) THEN
+         CALL cp_fm_release(scf_env%ortho_red)
+         DEALLOCATE (scf_env%ortho_red)
+         NULLIFY (scf_env%ortho_red)
       END IF
       IF (ASSOCIATED(scf_env%ortho_m1)) THEN
          CALL cp_fm_release(scf_env%ortho_m1)
          DEALLOCATE (scf_env%ortho_m1)
+         NULLIFY (scf_env%ortho_m1)
+      END IF
+      IF (ASSOCIATED(scf_env%ortho_m1_red)) THEN
+         CALL cp_fm_release(scf_env%ortho_m1_red)
+         DEALLOCATE (scf_env%ortho_m1_red)
+         NULLIFY (scf_env%ortho_m1_red)
       END IF
 
       IF (ASSOCIATED(scf_env%ortho_dbcsr)) THEN
@@ -1063,8 +1183,8 @@ CONTAINS
                 .AND. cdft_control%total_steps /= 1) &
                cdft_control%nreused = cdft_control%nreused - 1
             ! SCF converged in less than precond_freq steps
-            IF (scf_env%outer_scf%iter_count == 1 .AND. scf_env%iter_count .LE. cdft_control%precond_freq .AND. &
-                cdft_control%total_steps /= 1 .AND. cdft_control%nreused .LT. cdft_control%max_reuse) THEN
+            IF (scf_env%outer_scf%iter_count == 1 .AND. scf_env%iter_count <= cdft_control%precond_freq .AND. &
+                cdft_control%total_steps /= 1 .AND. cdft_control%nreused < cdft_control%max_reuse) THEN
                reuse_precond = .TRUE.
                cdft_control%nreused = cdft_control%nreused + 1
             ELSE
@@ -1075,10 +1195,10 @@ CONTAINS
          ! Update history purging counters
          IF (first_iteration .AND. cdft_control%purge_history) THEN
             cdft_control%istep = cdft_control%istep + 1
-            IF (scf_env%outer_scf%iter_count .GT. 1) THEN
+            IF (scf_env%outer_scf%iter_count > 1) THEN
                cdft_control%nbad_conv = cdft_control%nbad_conv + 1
-               IF (cdft_control%nbad_conv .GE. cdft_control%purge_freq .AND. &
-                   cdft_control%istep .GE. cdft_control%purge_offset) THEN
+               IF (cdft_control%nbad_conv >= cdft_control%purge_freq .AND. &
+                   cdft_control%istep >= cdft_control%purge_offset) THEN
                   cdft_control%nbad_conv = 0
                   cdft_control%istep = 0
                   cdft_control%should_purge = .TRUE.
@@ -1587,12 +1707,12 @@ CONTAINS
                IF (continue_ls .AND. .NOT. ALLOCATED(positive_sign)) THEN
                   ALLOCATE (positive_sign(nvar))
                   DO ispin = 1, nvar
-                     positive_sign(ispin) = scf_env%outer_scf%gradient(ispin, iter_count + 1) .GE. 0.0_dp
+                     positive_sign(ispin) = scf_env%outer_scf%gradient(ispin, iter_count + 1) >= 0.0_dp
                   END DO
                END IF
                ! Check if the L2 norm of the gradient decreased
                inv_jacobian => scf_env%outer_scf%inv_jacobian
-               IF (dnrm2(nvar, scf_env%outer_scf%gradient(:, iter_count + 1), 1) .LT. &
+               IF (dnrm2(nvar, scf_env%outer_scf%gradient(:, iter_count + 1), 1) < &
                    dnrm2(nvar, scf_env%outer_scf%gradient(:, iter_count), 1)) THEN
                   ! Optimal step size found
                   IF (.NOT. continue_ls) THEN
@@ -1602,7 +1722,7 @@ CONTAINS
                      ! if max number of steps is not exceeded
                      IF (found_solution) THEN
                         ! Check if the norm also decreased w.r.t. to previously found solution
-                        IF (dnrm2(nvar, scf_env%outer_scf%gradient(:, iter_count + 1), 1) .GT. norm_ls) THEN
+                        IF (dnrm2(nvar, scf_env%outer_scf%gradient(:, iter_count + 1), 1) > norm_ls) THEN
                            ! Norm increased => accept previous solution and exit
                            continue_ls_exit = .TRUE.
                         END IF
@@ -1618,7 +1738,7 @@ CONTAINS
                         sign_changed = .TRUE.
                         DO ispin = 1, nvar
                            sign_changed = sign_changed .AND. (positive_sign(ispin) .NEQV. &
-                                                              scf_env%outer_scf%gradient(ispin, iter_count + 1) .GE. 0.0_dp)
+                                                              scf_env%outer_scf%gradient(ispin, iter_count + 1) >= 0.0_dp)
                         END DO
                         IF (.NOT. ALLOCATED(mos_ls)) THEN
                            ALLOCATE (mos_ls(nspins))
@@ -1634,7 +1754,7 @@ CONTAINS
                         ! Exit on last iteration
                         IF (i == max_linesearch) continue_ls_exit = .TRUE.
                         ! Exit if constraint target is satisfied to requested tolerance
-                        IF (SQRT(MAXVAL(scf_env%outer_scf%gradient(:, scf_env%outer_scf%iter_count + 1)**2)) .LT. &
+                        IF (SQRT(MAXVAL(scf_env%outer_scf%gradient(:, scf_env%outer_scf%iter_count + 1)**2)) < &
                             scf_control%outer_scf%eps_scf) &
                            continue_ls_exit = .TRUE.
                         ! Exit if line search jumped over the optimal step length

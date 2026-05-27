@@ -133,9 +133,8 @@ input file is displayed below:
 
     &XC
       &XC_FUNCTIONAL
-         &LIBXC
-            FUNCTIONAL HYB_GGA_XC_BHandHLYP
-         &END LIBXC
+         &HYB_GGA_XC_BHandHLYP
+         &END
       &END XC_FUNCTIONAL
       &HF
          FRACTION 0.5                    ! BHandHLYP functional requires 50% exact exchange
@@ -159,9 +158,8 @@ input file is displayed below:
          RI_REGION 2.0                   ! Include RI basis elements from atoms within a 2.0 Ang
                                          ! sphere radius around the excited atom for the density projection
          &XC_FUNCTIONAL
-            &LIBXC
-               FUNCTIONAL HYB_GGA_XC_BHandHLYP
-            &END LIBXC
+            &HYB_GGA_XC_BHandHLYP
+            &END
          &END XC_FUNCTIONAL
          &EXACT_EXCHANGE
             FRACTION 0.5                 ! Definition of the functional for the TDDFT kernel
@@ -437,9 +435,8 @@ This example covers L-edge spectroscopy with the addition of spin-orbit coupling
 
     &XC
       &XC_FUNCTIONAL
-         &LIBXC
-            FUNCTIONAL HYB_GGA_XC_B3LYP
-         &END LIBXC
+         &HYB_GGA_XC_B3LYP
+         &END
       &END XC_FUNCTIONAL
       &HF
          FRACTION 0.2
@@ -465,9 +462,8 @@ This example covers L-edge spectroscopy with the addition of spin-orbit coupling
       &KERNEL
          RI_REGION 5.0              ! To get the best possible density projection
       &XC_FUNCTIONAL
-         &LIBXC
-            FUNCTIONAL HYB_GGA_XC_B3LYP
-         &END LIBXC
+         &HYB_GGA_XC_B3LYP
+         &END
       &END XC_FUNCTIONAL
          &EXACT_EXCHANGE
             FRACTION 0.2
@@ -547,7 +543,7 @@ for 2px, 2py and 2pz. To avoid cancelling contributions, the sum of the absolute
 Hybrid functionals with high fraction of Hartree-Fock exchange are know to perform well for core
 spectroscopy. PBEh($\alpha=0.45$) and BHandHLYP have had success with this particular
 implementation. In periodic boundary conditions, the truncated Coulomb operator should be used (with
-truncation radius \< half cell parameter).
+truncation radius < half cell parameter).
 
 For appropriate description of core states, all-electron basis sets should be used for the excited
 atom(s). MOLOPT basis sets and pseudopotentials can be used on all other atoms. There exist core

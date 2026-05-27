@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2025 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2026 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -22,10 +22,12 @@ MODULE libint_wrapper
 ! maximum angular momentum to be supported in CP2K-LIBINT interface
    #:set libint_max_am_supported = 8
 
-   USE ISO_C_BINDING, ONLY: C_F_POINTER, &
+   USE ISO_C_BINDING, ONLY: C_ASSOCIATED, &
+                            C_F_POINTER, &
                             C_F_PROCPOINTER, &
                             C_NULL_PTR, &
                             C_FUNPTR
+   USE cp_log_handling, ONLY: cp_to_string
    USE kinds, ONLY: dp
 #if(__LIBINT)
    USE libint_f, ONLY: &
@@ -74,7 +76,7 @@ MODULE libint_wrapper
 #else
       INTEGER :: unused = -1
 #endif
-   END TYPE
+   END TYPE cp_libint_t
 
 CONTAINS
 
@@ -118,7 +120,7 @@ CONTAINS
 
       #:for m_max in range(0, 4*libint_max_am_supported)
 #if 4*LIBINT2_MAX_AM_eri > ${m_max}$ - 1
-         IF (${m_max}$ .LE. m_max) &
+         IF (${m_max}$ <= m_max) &
             libint%prv(1)%f_aB_s___0__s___1___TwoPRep_s___0__s___1___Ab__up_${m_max}$ (1) &
             = F(${m_max}$+1)
 
@@ -144,7 +146,7 @@ CONTAINS
       CPABORT("This CP2K executable has not been linked against the required library libint.")
 #endif
 
-   END SUBROUTINE
+   END SUBROUTINE cp_libint_set_params_eri_screen
 
    SUBROUTINE cp_libint_set_params_eri_deriv(libint, A, B, C, D, P, Q, W, zeta_A, zeta_B, zeta_C, zeta_D, &
                                              ZetaInv, EtaInv, ZetapEtaInv, Rho, m_max, F)
@@ -213,7 +215,7 @@ CONTAINS
 
       #:for m_max in range(0, 4*libint_max_am_supported)
 #if 4*LIBINT2_MAX_AM_eri > ${m_max}$ - 1
-         IF (${m_max}$ .LE. m_max) &
+         IF (${m_max}$ <= m_max) &
             libint%prv(1)%f_aB_s___0__s___1___TwoPRep_s___0__s___1___Ab__up_${m_max}$ (1) & ! ERROR: __LIBINT_MAX_AM is too large
             = F(${m_max}$+1)
 #endif
@@ -241,7 +243,7 @@ CONTAINS
       CPABORT("This CP2K executable has not been linked against the required library libint.")
 #endif
 
-   END SUBROUTINE
+   END SUBROUTINE cp_libint_set_params_eri_deriv
 
    SUBROUTINE cp_libint_set_params_eri(libint, A, B, C, D, ZetaInv, EtaInv, ZetapEtaInv, Rho, P, Q, W, m_max, F)
       TYPE(cp_libint_t)                       :: libint
@@ -285,7 +287,7 @@ CONTAINS
       #:for m_max in range(0, 4*libint_max_am_supported)
 #if 4*LIBINT2_MAX_AM_eri > ${m_max}$ - 1
 
-         IF (${m_max}$ .LE. m_max) &
+         IF (${m_max}$ <= m_max) &
             libint%prv(1)%f_aB_s___0__s___1___TwoPRep_s___0__s___1___Ab__up_${m_max}$ (1) & ! ERROR: __LIBINT_MAX_AM is too large
             = F(${m_max}$+1)
 #endif
@@ -309,7 +311,7 @@ CONTAINS
       CPABORT("This CP2K executable has not been linked against the required library libint.")
 #endif
 
-   END SUBROUTINE
+   END SUBROUTINE cp_libint_set_params_eri
 ! **************************************************************************************************
 !> \brief ...
 !> \param n_d ...
@@ -362,9 +364,18 @@ CONTAINS
       INTEGER                                            :: a_mysize(1)
 
 #if(__LIBINT)
+      CHARACTER(LEN=160)                                 :: error_msg
       PROCEDURE(libint2_build), POINTER                  :: pbuild
+      TYPE(C_FUNPTR)                                     :: build_funptr
 
-      CALL C_F_PROCPOINTER(libint2_build_3eri(n_c, n_b, n_a), pbuild)
+      build_funptr = libint2_build_3eri(n_c, n_b, n_a)
+      IF (.NOT. C_ASSOCIATED(build_funptr)) THEN
+         error_msg = "LIBINT has no 3-center ERI kernel for (lc,lb,la)=("// &
+                     TRIM(cp_to_string(n_c))//","//TRIM(cp_to_string(n_b))//","// &
+                     TRIM(cp_to_string(n_a))//")"
+         CALL cp_abort(__LOCATION__, TRIM(error_msg))
+      END IF
+      CALL C_F_PROCPOINTER(build_funptr, pbuild)
       CALL pbuild(lib%prv)
 
       CALL C_F_POINTER(lib%prv(1)%targets(1), p_work, SHAPE=a_mysize)
@@ -496,7 +507,7 @@ CONTAINS
       CPABORT("This CP2K executable has not been linked against the required library libint.")
 #endif
 
-   END SUBROUTINE
+   END SUBROUTINE cp_libint_get_2eris
 
 ! **************************************************************************************************
 !> \brief ...
@@ -560,7 +571,7 @@ CONTAINS
       CPABORT("This CP2K executable has not been linked against the required library libint.")
 #endif
 
-   END FUNCTION
+   END FUNCTION get_ssss_f_val
 
    SUBROUTINE cp_libint_init_eri(lib, max_am)
       TYPE(cp_libint_t)               :: lib
@@ -572,7 +583,7 @@ CONTAINS
       MARK_USED(max_am)
       CPABORT("This CP2K executable has not been linked against the required library libint.")
 #endif
-   END SUBROUTINE
+   END SUBROUTINE cp_libint_init_eri
 
    SUBROUTINE cp_libint_set_contrdepth(lib, contrdepth)
       TYPE(cp_libint_t) :: lib
@@ -590,7 +601,7 @@ CONTAINS
       CPABORT("This CP2K executable has not been linked against the required library libint.")
 #endif
 
-   END SUBROUTINE
+   END SUBROUTINE cp_libint_set_contrdepth
 
    SUBROUTINE cp_libint_init_eri1(lib, max_am)
       TYPE(cp_libint_t)               :: lib
@@ -602,7 +613,7 @@ CONTAINS
       MARK_USED(max_am)
       CPABORT("This CP2K executable has not been linked against the required library libint.")
 #endif
-   END SUBROUTINE
+   END SUBROUTINE cp_libint_init_eri1
 
    SUBROUTINE cp_libint_init_3eri(lib, max_am)
       TYPE(cp_libint_t)               :: lib
@@ -614,7 +625,7 @@ CONTAINS
       MARK_USED(max_am)
       CPABORT("This CP2K executable has not been linked against the required library libint.")
 #endif
-   END SUBROUTINE
+   END SUBROUTINE cp_libint_init_3eri
 
    SUBROUTINE cp_libint_init_3eri1(lib, max_am)
       TYPE(cp_libint_t)               :: lib
@@ -626,7 +637,7 @@ CONTAINS
       MARK_USED(max_am)
       CPABORT("This CP2K executable has not been linked against the required library libint.")
 #endif
-   END SUBROUTINE
+   END SUBROUTINE cp_libint_init_3eri1
 
    SUBROUTINE cp_libint_init_2eri1(lib, max_am)
       TYPE(cp_libint_t)               :: lib
@@ -638,7 +649,7 @@ CONTAINS
       MARK_USED(max_am)
       CPABORT("This CP2K executable has not been linked against the required library libint.")
 #endif
-   END SUBROUTINE
+   END SUBROUTINE cp_libint_init_2eri1
 
    SUBROUTINE cp_libint_init_2eri(lib, max_am)
       TYPE(cp_libint_t)               :: lib
@@ -650,7 +661,7 @@ CONTAINS
       MARK_USED(max_am)
       CPABORT("This CP2K executable has not been linked against the required library libint.")
 #endif
-   END SUBROUTINE
+   END SUBROUTINE cp_libint_init_2eri
 
    SUBROUTINE cp_libint_cleanup_eri(lib)
       TYPE(cp_libint_t)               :: lib
@@ -660,7 +671,7 @@ CONTAINS
       MARK_USED(lib)
       CPABORT("This CP2K executable has not been linked against the required library libint.")
 #endif
-   END SUBROUTINE
+   END SUBROUTINE cp_libint_cleanup_eri
 
    SUBROUTINE cp_libint_cleanup_eri1(lib)
       TYPE(cp_libint_t)               :: lib
@@ -670,7 +681,7 @@ CONTAINS
       MARK_USED(lib)
       CPABORT("This CP2K executable has not been linked against the required library libint.")
 #endif
-   END SUBROUTINE
+   END SUBROUTINE cp_libint_cleanup_eri1
 
    SUBROUTINE cp_libint_cleanup_3eri(lib)
       TYPE(cp_libint_t)               :: lib
@@ -680,7 +691,7 @@ CONTAINS
       MARK_USED(lib)
       CPABORT("This CP2K executable has not been linked against the required library libint.")
 #endif
-   END SUBROUTINE
+   END SUBROUTINE cp_libint_cleanup_3eri
 
    SUBROUTINE cp_libint_cleanup_3eri1(lib)
       TYPE(cp_libint_t)               :: lib
@@ -690,7 +701,7 @@ CONTAINS
       MARK_USED(lib)
       CPABORT("This CP2K executable has not been linked against the required library libint.")
 #endif
-   END SUBROUTINE
+   END SUBROUTINE cp_libint_cleanup_3eri1
 
    SUBROUTINE cp_libint_cleanup_2eri1(lib)
       TYPE(cp_libint_t)               :: lib
@@ -700,7 +711,7 @@ CONTAINS
       MARK_USED(lib)
       CPABORT("This CP2K executable has not been linked against the required library libint.")
 #endif
-   END SUBROUTINE
+   END SUBROUTINE cp_libint_cleanup_2eri1
 
    SUBROUTINE cp_libint_cleanup_2eri(lib)
       TYPE(cp_libint_t)               :: lib
@@ -710,7 +721,7 @@ CONTAINS
       MARK_USED(lib)
       CPABORT("This CP2K executable has not been linked against the required library libint.")
 #endif
-   END SUBROUTINE
+   END SUBROUTINE cp_libint_cleanup_2eri
 
    SUBROUTINE cp_libint_static_init()
 #if(__LIBINT)
@@ -718,7 +729,7 @@ CONTAINS
 #else
       CPABORT("This CP2K executable has not been linked against the required library libint.")
 #endif
-   END SUBROUTINE
+   END SUBROUTINE cp_libint_static_init
 
    SUBROUTINE cp_libint_static_cleanup()
 #if(__LIBINT)
@@ -726,6 +737,6 @@ CONTAINS
 #else
       CPABORT("This CP2K executable has not been linked against the required library libint.")
 #endif
-   END SUBROUTINE
+   END SUBROUTINE cp_libint_static_cleanup
 
 END MODULE libint_wrapper

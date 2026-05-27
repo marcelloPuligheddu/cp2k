@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2025 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2026 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -12,8 +12,10 @@
 MODULE rt_propagation_methods
    USE bibliography,                    ONLY: Kolafa2004,&
                                               Kuhne2007,&
+                                              Schreder2021,&
                                               cite_reference
    USE cell_types,                      ONLY: cell_type
+   USE cp_array_utils,                  ONLY: cp_1d_r_p_type
    USE cp_cfm_basic_linalg,             ONLY: cp_cfm_triangular_multiply
    USE cp_cfm_cholesky,                 ONLY: cp_cfm_cholesky_decompose
    USE cp_cfm_types,                    ONLY: cp_cfm_create,&
@@ -23,12 +25,13 @@ MODULE rt_propagation_methods
                                               rtp_control_type
    USE cp_dbcsr_api,                    ONLY: &
         dbcsr_add, dbcsr_copy, dbcsr_create, dbcsr_deallocate_matrix, dbcsr_desymmetrize, &
-        dbcsr_filter, dbcsr_frobenius_norm, dbcsr_get_block_p, dbcsr_init_p, &
-        dbcsr_iterator_blocks_left, dbcsr_iterator_next_block, dbcsr_iterator_start, &
-        dbcsr_iterator_stop, dbcsr_iterator_type, dbcsr_multiply, dbcsr_p_type, dbcsr_release, &
-        dbcsr_scale, dbcsr_set, dbcsr_transposed, dbcsr_type, dbcsr_type_antisymmetric
+        dbcsr_filter, dbcsr_get_block_p, dbcsr_init_p, dbcsr_iterator_blocks_left, &
+        dbcsr_iterator_next_block, dbcsr_iterator_start, dbcsr_iterator_stop, dbcsr_iterator_type, &
+        dbcsr_multiply, dbcsr_p_type, dbcsr_release, dbcsr_scale, dbcsr_set, dbcsr_transposed, &
+        dbcsr_type, dbcsr_type_antisymmetric
    USE cp_dbcsr_cholesky,               ONLY: cp_dbcsr_cholesky_decompose,&
                                               cp_dbcsr_cholesky_invert
+   USE cp_dbcsr_contrib,                ONLY: dbcsr_frobenius_norm
    USE cp_dbcsr_operations,             ONLY: cp_dbcsr_sm_fm_multiply,&
                                               dbcsr_allocate_matrix_set,&
                                               dbcsr_deallocate_matrix_set
@@ -43,26 +46,46 @@ MODULE rt_propagation_methods
                                               cp_fm_to_fm,&
                                               cp_fm_type
    USE cp_log_handling,                 ONLY: cp_get_default_logger,&
+                                              cp_logger_get_default_io_unit,&
                                               cp_logger_get_default_unit_nr,&
                                               cp_logger_type,&
                                               cp_to_string
+   USE cp_output_handling,              ONLY: cp_p_file,&
+                                              cp_print_key_should_output
    USE efield_utils,                    ONLY: efield_potential_lengh_gauge
    USE input_constants,                 ONLY: do_arnoldi,&
                                               do_bch,&
                                               do_em,&
                                               do_pade,&
                                               do_taylor
+   USE input_section_types,             ONLY: section_vals_get_subs_vals,&
+                                              section_vals_type
    USE iterate_matrix,                  ONLY: matrix_sqrt_Newton_Schulz
    USE kinds,                           ONLY: dp
    USE ls_matrix_exp,                   ONLY: cp_complex_dbcsr_gemm_3
    USE mathlib,                         ONLY: binomial
    USE parallel_gemm_api,               ONLY: parallel_gemm
+   USE particle_list_types,             ONLY: particle_list_type
+   USE pw_env_types,                    ONLY: pw_env_get,&
+                                              pw_env_type
+   USE pw_pool_types,                   ONLY: pw_pool_type
+   USE pw_types,                        ONLY: pw_c1d_gs_type,&
+                                              pw_r3d_rs_type
    USE qs_energy_init,                  ONLY: qs_energies_init
    USE qs_energy_types,                 ONLY: qs_energy_type
    USE qs_environment_types,            ONLY: get_qs_env,&
                                               qs_environment_type
    USE qs_ks_methods,                   ONLY: qs_ks_update_qs_env
    USE qs_ks_types,                     ONLY: set_ks_env
+   USE qs_loc_dipole,                   ONLY: loc_dipole
+   USE qs_loc_states,                   ONLY: get_localization_info
+   USE qs_loc_types,                    ONLY: qs_loc_env_create,&
+                                              qs_loc_env_release,&
+                                              qs_loc_env_type
+   USE qs_loc_utils,                    ONLY: qs_loc_control_init,&
+                                              qs_loc_init
+   USE qs_mo_types,                     ONLY: get_mo_set,&
+                                              mo_set_type
    USE rt_make_propagators,             ONLY: propagate_arnoldi,&
                                               propagate_bch,&
                                               propagate_exp,&
@@ -88,7 +111,8 @@ MODULE rt_propagation_methods
    PUBLIC :: propagation_step, &
              s_matrices_create, &
              calc_sinvH, &
-             put_data_to_history
+             put_data_to_history, &
+             rtp_localize
 
 CONTAINS
 
@@ -305,19 +329,19 @@ CONTAINS
                       matrix_ks=matrix_ks, matrix_ks_im=matrix_ks_im, energy=energy)
       CALL get_rtp(rtp=rtp, exp_H_old=exp_H_old, exp_H_new=exp_H_new)
 
-      IF (rtp_control%sc_check_start .LT. rtp%iter) THEN
+      IF (rtp_control%sc_check_start < rtp%iter) THEN
          rtp%delta_iter_old = rtp%delta_iter
          IF (rtp%linear_scaling) THEN
             CALL rt_convergence_density(rtp, delta_P, rtp%delta_iter)
          ELSE
             CALL rt_convergence(rtp, s_mat(1)%matrix, delta_mos, rtp%delta_iter)
          END IF
-         rtp%converged = (rtp%delta_iter .LT. rtp_control%eps_ener)
+         rtp%converged = (rtp%delta_iter < rtp_control%eps_ener)
          !Apply mixing if scf loop is not converging
 
          !It would be better to redo the current step with mixixng,
          !but currently the decision is made to use mixing from the next step on
-         IF (rtp_control%sc_check_start .LT. rtp%iter + 1) THEN
+         IF (rtp_control%sc_check_start < rtp%iter + 1) THEN
             IF (rtp%delta_iter/rtp%delta_iter_old > 0.9) THEN
                rtp%mixing_factor = MAX(rtp%mixing_factor/2.0_dp, 0.125_dp)
                rtp%mixing = .TRUE.
@@ -510,7 +534,7 @@ CONTAINS
          CALL cp_dbcsr_cholesky_decompose(S_inv, para_env=rtp%ao_ao_fmstruct%para_env, &
                                           blacs_env=rtp%ao_ao_fmstruct%context)
          CALL cp_dbcsr_cholesky_invert(S_inv, para_env=rtp%ao_ao_fmstruct%para_env, &
-                                       blacs_env=rtp%ao_ao_fmstruct%context, upper_to_full=.TRUE.)
+                                       blacs_env=rtp%ao_ao_fmstruct%context, uplo_to_full=.TRUE.)
       END IF
 
       CALL timestop(handle)
@@ -534,7 +558,7 @@ CONTAINS
 
       INTEGER                                            :: col_atom, handle, row_atom
       LOGICAL                                            :: found
-      REAL(dp), DIMENSION(:), POINTER                    :: block_values, block_values2
+      REAL(dp), DIMENSION(:, :), POINTER                 :: block_values, block_values2
       TYPE(dbcsr_iterator_type)                          :: iter
       TYPE(dbcsr_type), POINTER                          :: tmp
 
@@ -638,8 +662,8 @@ CONTAINS
             CALL dbcsr_add(tmp(re)%matrix, P(re)%matrix, 1.0_dp, -1.0_dp)
             CALL dbcsr_add(tmp(im)%matrix, P(im)%matrix, 1.0_dp, -1.0_dp)
             CALL complex_frobenius_norm(frob_norm, tmp(re)%matrix, tmp(im)%matrix)
-            IF (unit_nr .GT. 0) WRITE (unit_nr, '(t3,a,2f16.8)') "Deviation from idempotency: ", frob_norm
-            IF (frob_norm .GT. threshold .AND. max_iter > 0) THEN
+            IF (unit_nr > 0) WRITE (unit_nr, '(t3,a,2f16.8)') "Deviation from idempotency: ", frob_norm
+            IF (frob_norm > threshold .AND. max_iter > 0) THEN
                CALL dbcsr_copy(P(re)%matrix, PSP(re)%matrix)
                CALL dbcsr_copy(P(im)%matrix, PSP(im)%matrix)
                CALL cp_complex_dbcsr_gemm_3("N", "N", -2.0_dp, PS(re)%matrix, PS(im)%matrix, &
@@ -853,5 +877,151 @@ CONTAINS
       END IF
 
    END SUBROUTINE put_data_to_history
+
+! **************************************************************************************************
+!> \brief Computes Maximally localised Wannier functions and print properties according to
+!>        FORCE_EVAL%DFT%LOCALIZE, adapted from qs_scf_post_gpw::scf_post_calculation_gpw
+!> \param qs_env QuickStep environment
+!> \param rtp Real time propagation environment
+!> \par History 03/2020 created [LS]
+!> \author Lukas Schreder
+! **************************************************************************************************
+   SUBROUTINE rtp_localize(qs_env, rtp)
+
+      TYPE(qs_environment_type), INTENT(IN), POINTER     :: qs_env
+      TYPE(rt_prop_type), INTENT(IN), POINTER            :: rtp
+
+      CHARACTER(len=*), PARAMETER                        :: routineN = 'rtp_localize'
+
+      INTEGER                                            :: handle, ispin, output_unit
+      INTEGER, DIMENSION(:, :, :), POINTER               :: marked_states
+      LOGICAL                                            :: do_homo, do_mo_cubes, do_wannier_cubes, &
+                                                            p_loc
+      REAL(KIND=dp), DIMENSION(:), POINTER               :: mo_eigenvalues
+      TYPE(cp_1d_r_p_type), DIMENSION(:), POINTER        :: occupied_evals
+      TYPE(cp_fm_type), ALLOCATABLE, DIMENSION(:)        :: mo_localized, occupied_orbs
+      TYPE(cp_fm_type), DIMENSION(:), POINTER            :: mo_coeff
+      TYPE(cp_logger_type), POINTER                      :: logger
+      TYPE(dft_control_type), POINTER                    :: dft_control
+      TYPE(mo_set_type), DIMENSION(:), POINTER           :: mos
+      TYPE(particle_list_type), POINTER                  :: particles
+      TYPE(pw_c1d_gs_type)                               :: wf_g
+      TYPE(pw_env_type), POINTER                         :: pw_env
+      TYPE(pw_pool_type), POINTER                        :: auxbas_pw_pool
+      TYPE(pw_r3d_rs_type)                               :: wf_r
+      TYPE(qs_loc_env_type), POINTER                     :: qs_loc_env
+      TYPE(section_vals_type), POINTER                   :: dft_section, input, loc_print_section, &
+                                                            loc_section, print_key
+
+      CALL timeset(routineN, handle)
+
+      ! Localization of propagated orbitals requires MO coefficients
+      IF (rtp%linear_scaling) THEN
+         CALL timestop(handle)
+         RETURN
+      END IF
+
+      CALL cite_reference(Schreder2021)
+
+      NULLIFY (auxbas_pw_pool, dft_control, dft_section, input, loc_print_section, &
+               loc_section, logger, marked_states, mo_coeff, mo_eigenvalues, mos, &
+               occupied_evals, particles, print_key, pw_env, qs_loc_env)
+
+      logger => cp_get_default_logger()
+      output_unit = cp_logger_get_default_io_unit(logger)
+
+      IF (output_unit > 0) THEN
+         WRITE (unit=output_unit, fmt="(A)") "LOCALIZE| Localizing propagated orbitals"
+      END IF
+
+      ! get section properties
+      CALL get_qs_env(qs_env, dft_control=dft_control, input=input, pw_env=pw_env)
+      ! get propagated MO coeffs
+      CALL get_rtp(rtp, mos_new=mo_coeff)
+      dft_section => section_vals_get_subs_vals(input, "DFT")
+      loc_section => section_vals_get_subs_vals(dft_section, "LOCALIZE")
+      loc_print_section => section_vals_get_subs_vals(loc_section, "PRINT")
+
+      ! what properties to print out
+      print_key => section_vals_get_subs_vals(loc_print_section, "MOLECULAR_DIPOLES")
+      p_loc = BTEST(cp_print_key_should_output(logger%iter_info, print_key), cp_p_file)
+
+      print_key => section_vals_get_subs_vals(loc_print_section, "TOTAL_DIPOLE")
+      p_loc = p_loc &
+              .OR. BTEST(cp_print_key_should_output(logger%iter_info, print_key), cp_p_file)
+      print_key => section_vals_get_subs_vals(loc_print_section, "WANNIER_CENTERS")
+      p_loc = p_loc &
+              .OR. BTEST(cp_print_key_should_output(logger%iter_info, print_key), cp_p_file)
+      print_key => section_vals_get_subs_vals(loc_print_section, "WANNIER_SPREADS")
+      p_loc = p_loc &
+              .OR. BTEST(cp_print_key_should_output(logger%iter_info, print_key), cp_p_file)
+      print_key => section_vals_get_subs_vals(loc_print_section, "WANNIER_CUBES")
+      p_loc = p_loc &
+              .OR. BTEST(cp_print_key_should_output(logger%iter_info, print_key), cp_p_file)
+      print_key => section_vals_get_subs_vals(loc_print_section, "MOLECULAR_STATES")
+      p_loc = p_loc &
+              .OR. BTEST(cp_print_key_should_output(logger%iter_info, print_key), cp_p_file)
+      print_key => section_vals_get_subs_vals(loc_print_section, "MOLECULAR_MOMENTS")
+      p_loc = p_loc &
+              .OR. BTEST(cp_print_key_should_output(logger%iter_info, print_key), cp_p_file)
+      print_key => section_vals_get_subs_vals(loc_print_section, "LOCALIZED_MOMENTS")
+      p_loc = p_loc &
+              .OR. BTEST(cp_print_key_should_output(logger%iter_info, print_key), cp_p_file)
+      print_key => section_vals_get_subs_vals(loc_print_section, "WANNIER_STATES")
+      p_loc = p_loc &
+              .OR. BTEST(cp_print_key_should_output(logger%iter_info, print_key), cp_p_file)
+
+      do_wannier_cubes = BTEST(cp_print_key_should_output(logger%iter_info, loc_print_section, &
+                                                          "WANNIER_CUBES"), cp_p_file)
+
+      CALL pw_env_get(pw_env, auxbas_pw_pool=auxbas_pw_pool)
+      CALL auxbas_pw_pool%create_pw(wf_r)
+      CALL auxbas_pw_pool%create_pw(wf_g)
+
+      IF (p_loc) THEN
+         ALLOCATE (occupied_evals(dft_control%nspins))
+         ALLOCATE (occupied_orbs(SIZE(mo_coeff)))
+         ALLOCATE (mo_localized(SIZE(mo_coeff)))
+         CALL get_qs_env(qs_env, mos=mos)
+         CALL get_rtp(rtp, mos_new=mo_coeff)
+         DO ispin = 1, SIZE(mo_coeff)
+            occupied_orbs(ispin) = mo_coeff(ispin)
+            CALL cp_fm_create(mo_localized(ispin), mo_coeff(ispin)%matrix_struct)
+            CALL cp_fm_to_fm(mo_coeff(ispin), mo_localized(ispin))
+         END DO
+
+         DO ispin = 1, dft_control%nspins
+            CALL get_mo_set(mos(ispin), eigenvalues=mo_eigenvalues)
+            occupied_evals(ispin)%array => mo_eigenvalues
+         END DO
+
+         do_homo = .TRUE.
+         ALLOCATE (qs_loc_env)
+         CALL qs_loc_env_create(qs_loc_env)
+         CALL qs_loc_control_init(qs_loc_env, loc_section, do_homo=do_homo)
+         CALL qs_loc_init(qs_env, qs_loc_env, loc_section, mo_localized, do_homo, do_mo_cubes)
+         CALL get_localization_info(qs_env, qs_loc_env, loc_section, mo_localized, wf_r, wf_g, &
+                                    particles, occupied_orbs, occupied_evals, marked_states)
+         CALL loc_dipole(input, dft_control, qs_loc_env, logger, qs_env)
+
+         DO ispin = 1, SIZE(mo_localized)
+            CALL cp_fm_release(mo_localized(ispin))
+         END DO
+         DEALLOCATE (mo_localized)
+         DEALLOCATE (occupied_orbs)
+         DEALLOCATE (occupied_evals)
+         CALL qs_loc_env_release(qs_loc_env)
+         DEALLOCATE (qs_loc_env)
+         IF (ASSOCIATED(marked_states)) THEN
+            DEALLOCATE (marked_states)
+         END IF
+      END IF
+
+      CALL auxbas_pw_pool%give_back_pw(wf_r)
+      CALL auxbas_pw_pool%give_back_pw(wf_g)
+
+      CALL timestop(handle)
+
+   END SUBROUTINE rtp_localize
 
 END MODULE rt_propagation_methods

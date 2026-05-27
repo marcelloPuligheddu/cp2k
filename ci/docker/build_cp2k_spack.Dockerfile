@@ -1,0 +1,66 @@
+# Dockerfile for CP2K continuous integration (CI) runs
+#
+# A stand-alone build in this folder can be performed with:
+# podman build --build-arg DEPS_IMAGE=<image id> --shm-size=1g -f build_cp2k_spack.Dockerfile ../../
+#
+# Author: Matthias Krack (MK)
+#
+
+ARG BASE_IMAGE=${BASE_IMAGE:-ubuntu:24.04}
+ARG DEPS_IMAGE=${DEPS_IMAGE:-}
+
+###### Stage 2: Build CP2K ######
+
+FROM "${DEPS_IMAGE}" AS build_cp2k
+
+# Setup CUDA environment
+ENV CUDA_HOME=/usr/local/cuda
+ENV LD_LIBRARY_PATH="${CUDA_HOME}/lib64:${LD_LIBRARY_PATH}"
+
+# Retrieve the number of available CPU cores
+ARG NUM_PROCS
+ENV NUM_PROCS=${NUM_PROCS:-32}
+
+ARG FEATURE_FLAGS
+ENV FEATURE_FLAGS=${FEATURE_FLAGS:-}
+
+# Update CP2K files
+WORKDIR /opt/cp2k
+RUN rm -rf benchmarks cmake data src tests tools
+COPY . .
+
+# Build CP2K
+RUN ./make_cp2k.sh -cray -cv ${CP2K_VERSION} -uc no -j${NUM_PROCS} ${FEATURE_FLAGS}
+
+###### Stage 3: Install CP2K ######
+
+FROM "${BASE_IMAGE}" AS install_cp2k
+
+RUN apt-get update -qq && apt-get install -qq --no-install-recommends \
+    g++ gcc gfortran \
+    python3 \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /opt/cp2k
+
+# Install CP2K dependencies built with spack
+COPY --from=build_cp2k /opt/cp2k/spack/spack/opt/spack ./spack/spack/opt/spack
+
+# Install CP2K
+COPY --from=build_cp2k /opt/cp2k/install ./install
+
+# Install CP2K regression tests
+COPY --from=build_cp2k /opt/cp2k/tests ./tests
+COPY --from=build_cp2k /opt/cp2k/src/grid/sample_tasks ./src/grid/sample_tasks
+
+# Install CP2K/Quickstep CI benchmarks
+COPY --from=build_cp2k /opt/cp2k/benchmarks/CI ./benchmarks/CI
+
+# Do not rely only on LD_LIBRARY_PATH because it is fragile
+COPY --from=build_cp2k /etc/ld.so.conf.d/cp2k.conf /etc/ld.so.conf.d/cp2k.conf
+RUN ldconfig
+
+# Create entrypoint and finalise container build
+WORKDIR /mnt
+ENTRYPOINT ["/opt/cp2k/install/bin/launch"]
+CMD ["cp2k", "--help", "--version"]

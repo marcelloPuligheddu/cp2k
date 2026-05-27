@@ -14,16 +14,13 @@ source "${INSTALLDIR}"/toolchain.env
 
 [ -f "${BUILDDIR}/setup_acml" ] && rm "${BUILDDIR}/setup_acml"
 
-ACML_CFLAGS=''
-ACML_LDFLAGS=''
-ACML_LIBS=''
 ! [ -d "${BUILDDIR}" ] && mkdir -p "${BUILDDIR}"
 cd "${BUILDDIR}"
 
 case "$with_acml" in
   __INSTALL__)
     echo "==================== Installing ACML ===================="
-    report_error $LINENO "To install ACML you should either contact your system administrator or go to https://developer.amd.com/tools-and-sdks/archive/amd-core-math-library-acml/acml-downloads-resources/ and download the correct version for your system."
+    report_error $LINENO "__INSTALL__ is not supported; please manually install ACML"
     exit 1
     ;;
   __SYSTEM__)
@@ -51,7 +48,7 @@ prepend_path LD_RUN_PATH "$pkg_install_dir/lib"
 prepend_path LIBRARY_PATH "$pkg_install_dir/lib"
 prepend_path CPATH "$pkg_install_dir/include"
 EOF
-    cat "${BUILDDIR}/setup_acml" >> $SETUPFILE
+    filter_setup "${BUILDDIR}/setup_acml" "${SETUPFILE}"
   fi
   cat << EOF >> "${BUILDDIR}/setup_acml"
 export ACML_CFLAGS="${ACML_CFLAGS}"

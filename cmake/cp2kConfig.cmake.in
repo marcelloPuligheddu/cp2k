@@ -1,6 +1,6 @@
 #!-------------------------------------------------------------------------------------------------!
 #!   CP2K: A general program to perform molecular dynamics simulations                             !
-#!   Copyright 2000-2025 CP2K developers group <https://cp2k.org>                                  !
+#!   Copyright 2000-2026 CP2K developers group <https://cp2k.org>                                  !
 #!                                                                                                 !
 #!   SPDX-License-Identifier: GPL-2.0-or-later                                                     !
 #!-------------------------------------------------------------------------------------------------!
@@ -12,7 +12,7 @@ if(NOT TARGET cp2k::cp2k)
   set(CMAKE_MODULE_PATH "${CMAKE_CURRENT_LIST_DIR}/modules"
                         ${CMAKE_MODULE_PATH})
 
-  # store CXX compiler id. Used in MKL package.
+  # Store CXX compiler id used in MKL package
   set(CP2K_CXX_COMPILER_ID @CMAKE_CXX_COMPILER_ID@)
   if(NOT ${CMAKE_CXX_COMPILER_ID})
     set(CMAKE_CXX_COMPILER_ID ${CP2K_CXX_COMPILER_ID})
@@ -23,106 +23,191 @@ if(NOT TARGET cp2k::cp2k)
   set(CP2K_BLAS_LINK_LIBRARIES @CP2K_BLAS_LINK_LIBRARIES@)
   set(CP2K_LAPACK_LINK_LIBRARIES @CP2K_LAPACK_LINK_LIBRARIES@)
   set(CP2K_SCALAPACK_LINK_LIBRARIES @CP2K_SCALAPACK_LINK_LIBRARIES@)
-  set(CP2K_USE_FFTW3_WITH_MKL @CP2K_USE_FFTW3_WITH_MKL@)
   set(CP2K_CONFIG_PACKAGE ON)
   find_dependency(Lapack REQUIRED)
 
-  # define lapack and blas TARGETS
+  # Define LAPACK and BLAS TARGETS
 
   if(@CP2K_USE_MPI@)
+    set(CP2K_USE_MPI @CP2K_USE_MPI@)
     find_dependency(SCALAPACK REQUIRED)
   endif()
   unset(CP2K_CONFIG_PACKAGE)
 
   set(cp2k_VERSION @cp2k_VERSION@)
 
-  find_dependency(DBCSR 2.5 REQUIRED)
+  find_dependency(DBCSR 2.8 REQUIRED)
 
   if(@CP2K_USE_LIBXSMM@)
+    set(CP2K_USE_LIBXSMM @CP2K_USE_LIBXSMM@)
     find_dependency(LibXSMM REQUIRED)
   endif()
 
   if(@CP2K_USE_HIP@)
-    # Find hip
+    set(CP2K_USE_HIP @CP2K_USE_HIP@)
+    # Find HIP
     find_dependency(hipfft REQUIRED IMPORTED CONFIG)
     find_dependency(hipblas REQUIRED IMPORTED CONFIG)
   endif()
 
   if(@CP2K_USE_CUDA@)
+    set(CP2K_USE_CUDA @CP2K_USE_CUDA@)
     find_dependency(CUDAToolkit REQUIRED)
   endif()
   if(@CP2K_USE_ELPA@)
+    set(CP2K_USE_ELPA @CP2K_USE_ELPA@)
     find_dependency(Elpa REQUIRED)
   endif()
 
   if(@CP2K_USE_DLAF@)
-    find_dependency(DLAF REQUIRED)
+    set(CP2K_USE_DLAF @CP2K_USE_DLAF@)
+    find_dependency(DLAFFortran 0.4.0 REQUIRED)
   endif()
 
   if(@CP2K_USE_LIBXC@)
-    find_dependency(LibXC 7 REQUIRED)
+    set(CP2K_USE_LIBXC @CP2K_USE_LIBXC@)
+    find_dependency(Libxc 7 REQUIRED CONFIG)
+  endif()
+
+  if(@CP2K_USE_GAUXC@)
+    set(CP2K_USE_GAUXC @CP2K_USE_GAUXC@)
+    find_dependency(gauxc REQUIRED CONFIG)
   endif()
 
   if(@CP2K_USE_COSMA@)
+    set(CP2K_USE_COSMA @CP2K_USE_COSMA@)
     find_dependency(cosma REQUIRED)
+    if(NOT TARGET cp2k::cosma)
+      add_library(cp2k::cosma INTERFACE IMPORTED)
+      target_link_libraries(cp2k::cosma INTERFACE cosma::cosma_prefixed_pxgemm
+                                                  cosma::cosma)
+    endif()
   endif()
 
   if(@CP2K_USE_MPI@)
+    set(CP2K_USE_MPI @CP2K_USE_MPI@)
     find_dependency(MPI REQUIRED)
   endif()
 
-  if(@CP2K_USE_FFTW3_@)
+  if(@CP2K_USE_FFTW3@)
+    set(CP2K_USE_FFTW3 @CP2K_USE_FFTW3@)
     find_dependency(Fftw REQUIRED)
   endif()
-  # QUIP
-  if(@CP2K_USE_QUIP@)
-    find_dependency(Quip REQUIRED)
-  endif()
-
-  # libint
 
   if(@CP2K_USE_LIBINT2@)
+    set(CP2K_USE_LIBINT2 @CP2K_USE_LIBINT2@)
     find_dependency(Libint2 REQUIRED)
   endif()
 
-  # spglib
+  if(@CP2K_USE_LIBFCI@)
+    set(CP2K_USE_LIBFCI @CP2K_USE_LIBFCI@)
+    find_dependency(LibFCI REQUIRED)
+  endif()
 
   if(@CP2K_USE_SPGLIB@)
-    find_dependency(LibSPG REQUIRED)
+    set(CP2K_USE_SPGLIB @CP2K_USE_SPGLIB@)
+    find_dependency(Spglib REQUIRED CONFIG)
   endif()
 
   if(@CP2K_USE_SPLA@)
-    find_dependency(SPLA REQUIRED)
+    set(CP2K_USE_SPLA @CP2K_USE_SPLA@)
+    find_dependency(SPLA REQUIRED CONFIG)
   endif()
 
   if(@CP2K_USE_SIRIUS@)
-    find_dependency(sirius REQUIRED)
-  endif()
-
-  if(@CP2K_USE_SUPERLU@)
-    find_dependency(SuperLU REQUIRED)
-  endif()
-
-  if(@CP2K_USE_METIS@)
-    find_dependency(Metis)
-  endif()
-
-  if(@CP2K_USE_PEXSI@)
-    # PEXSI 1.2 uses cmake as build system
-    find_dependency(PEXSI REQUIRED)
+    set(CP2K_USE_SIRIUS @CP2K_USE_SIRIUS@)
+    find_dependency(sirius 7.7.0 REQUIRED)
   endif()
 
   if(@CP2K_USE_PLUMED@)
+    set(CP2K_USE_PLUMED @CP2K_USE_PLUMED@)
     find_dependency(Plumed REQUIRED)
   endif()
 
   if(@CP2K_USE_LIBTORCH@)
+    set(CP2K_USE_LIBTORCH @CP2K_USE_LIBTORCH@)
     find_dependency(Torch REQUIRED)
+  endif()
+
+  if(@CP2K_USE_HDF5@)
+    set(CP2K_USE_HDF5 @CP2K_USE_HDF5@)
+    find_dependency(HDF5 REQUIRED COMPONENTS C Fortran)
+  endif()
+
+  if(@CP2K_USE_DFTD4@)
+    set(CP2K_USE_DFTD4 @CP2K_USE_DFTD4@)
+    find_dependency(dftd4 REQUIRED)
+  endif()
+
+  if(@CP2K_USE_DEEPMD@)
+    set(CP2K_USE_DEEPMD @CP2K_USE_DEEPMD@)
+    find_dependency(DeePMD REQUIRED CONFIG)
+  endif()
+
+  if(@CP2K_USE_PEXSI@)
+    set(CP2K_USE_PEXSI @CP2K_USE_PEXSI@)
+    find_dependency(PEXSI REQUIRED CONFIG)
+  endif()
+
+  if(@CP2K_USE_ACE@)
+    set(CP2K_USE_ACE @CP2K_USE_ACE@)
+    find_dependency(ACE REQUIRED)
+  endif()
+
+  if(@CP2K_USE_LIBSMEAGOL@)
+    set(CP2K_USE_LIBSMEAGOL @CP2K_USE_LIBSMEAGOL@)
+    find_dependency(libsmeagol REQUIRED)
+  endif()
+
+  if(@CP2K_USE_MIMIC@)
+    set(CP2K_USE_MIMIC @CP2K_USE_MIMIC@)
+    find_dependency(MiMiC REQUIRED)
+  endif()
+
+  if(@CP2K_USE_OPENPMD@)
+    set(CP2K_USE_OPENPMD @CP2K_USE_OPENPMD@)
+    find_dependency(openPMD 0.16.1 REQUIRED)
+  endif()
+
+  if(@CP2K_USE_VORI@)
+    set(CP2K_USE_VORI @CP2K_USE_VORI@)
+    find_dependency(LibVORI REQUIRED)
+  endif()
+
+  if(@CP2K_USE_GREENX@)
+    set(CP2K_USE_GREENX @CP2K_USE_GREENX@)
+    find_dependency(greenX REQUIRED CONFIG)
+    if(NOT TARGET cp2k::greenx)
+      add_library(cp2k::greenx INTERFACE IMPORTED)
+      target_link_libraries(cp2k::greenx INTERFACE greenX::GXCommon
+                                                   greenX::LibGXAC
+                                                   greenX::LibGXMiniMax)
+    endif()
+  endif()
+
+  if(@CP2K_USE_TBLITE@)
+    set(CP2K_USE_TBLITE @CP2K_USE_TBLITE@)
+    find_dependency(mctc-lib REQUIRED)
+    find_dependency(toml-f REQUIRED)
+    find_dependency(dftd4 REQUIRED)
+    find_dependency(s-dftd3 REQUIRED)
+    find_dependency(tblite REQUIRED)
+    if(NOT TARGET cp2k::tblite)
+      add_library(cp2k::tblite INTERFACE IMPORTED)
+      target_link_libraries(
+        cp2k::tblite INTERFACE tblite::tblite mctc-lib::mctc-lib dftd4::dftd4
+                               toml-f::toml-f s-dftd3::s-dftd3)
+    endif()
+  endif()
+
+  if(@CP2K_USE_TREXIO@)
+    set(CP2K_USE_TREXIO @CP2K_USE_TREXIO@)
+    find_dependency(TrexIO REQUIRED)
   endif()
 
   include("${CMAKE_CURRENT_LIST_DIR}/cp2kTargets.cmake")
 
-  # Clean-up module path.
+  # Clean-up module path
   list(REMOVE_ITEM CMAKE_MODULE_PATH "${CMAKE_CURRENT_LIST_DIR}/modules")
 
 endif()

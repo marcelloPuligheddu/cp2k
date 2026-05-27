@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2025 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2026 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -133,7 +133,8 @@ CONTAINS
       !
       TYPE(qs_environment_type), POINTER                 :: qs_env
       TYPE(qs_p_env_type)                                :: p_env
-      TYPE(cp_fm_type), DIMENSION(:), INTENT(IN)         :: c0, Av
+      TYPE(cp_fm_type), DIMENSION(:), INTENT(IN)         :: c0
+      TYPE(cp_fm_type), DIMENSION(:), INTENT(INOUT)      :: Av
 
       INTEGER                                            :: ispin, ncol
       TYPE(dft_control_type), POINTER                    :: dft_control
@@ -198,6 +199,7 @@ CONTAINS
       TYPE(pw_r3d_rs_type)                               :: v_hartree_rspace
       TYPE(pw_r3d_rs_type), DIMENSION(:), POINTER        :: rho1_r, rho_r, tau1_r, v_rspace_new, &
                                                             v_xc, v_xc_tau
+      TYPE(pw_r3d_rs_type), POINTER                      :: weights
       TYPE(qs_kpp1_env_type), POINTER                    :: kpp1_env
       TYPE(qs_ks_env_type), POINTER                      :: ks_env
       TYPE(qs_rho_type), POINTER                         :: rho, rho0, rho1, rho1_xc, rho1a, &
@@ -287,8 +289,12 @@ CONTAINS
       DO ispin = 2, nspins
          CALL pw_axpy(rho1_g(ispin), rho1_tot_gspace)
       END DO
-      IF (gapw) &
+      IF (gapw) THEN
          CALL pw_axpy(p_env%local_rho_set%rho0_mpole%rho0_s_gs, rho1_tot_gspace)
+         IF (ASSOCIATED(p_env%local_rho_set%rho0_mpole%rhoz_cneo_s_gs)) THEN
+            CALL pw_axpy(p_env%local_rho_set%rho0_mpole%rhoz_cneo_s_gs, rho1_tot_gspace)
+         END IF
+      END IF
 
       IF (.NOT. (nspins == 1 .AND. lr_triplet)) THEN
          CALL pw_poisson_solve(poisson_env, rho1_tot_gspace, &
@@ -313,12 +319,14 @@ CONTAINS
       NULLIFY (v_xc_tau)
       IF (deriv2_analytic) THEN
          CALL qs_rho_get(rho1a, rho_r=rho1_r, tau_r=tau1_r)
-         CALL qs_fxc_analytic(rho0, rho1_r, tau1_r, xc_section, auxbas_pw_pool, lr_triplet, v_xc, v_xc_tau)
+         CALL get_qs_env(qs_env, xcint_weights=weights)
+         CALL qs_fxc_analytic(rho0, rho1_r, tau1_r, xc_section, weights, auxbas_pw_pool, &
+                              lr_triplet, v_xc, v_xc_tau)
          IF (gapw .OR. gapw_xc) THEN
             CALL get_qs_env(qs_env, rho_atom_set=rho_atom_set)
             rho1_atom_set => p_env%local_rho_set%rho_atom_set
             CALL calculate_xc_2nd_deriv_atom(rho_atom_set, rho1_atom_set, qs_env, xc_section, para_env, &
-                                             do_tddft=.FALSE., do_triplet=lr_triplet)
+                                             do_triplet=lr_triplet)
          END IF
       ELSE
          CALL qs_fxc_fdiff(ks_env, rho0, rho1a, xc_section, 6, lr_triplet, v_xc, v_xc_tau)
@@ -339,12 +347,13 @@ CONTAINS
          IF (admm_env%aux_exch_func /= do_admm_aux_exch_func_none) THEN
             IF (.NOT. ASSOCIATED(kpp1_env%deriv_set_admm)) THEN
                CPASSERT(.NOT. lr_triplet)
+               CALL get_qs_env(qs_env, xcint_weights=weights)
                xc_section_aux => admm_env%xc_section_aux
                CALL get_admm_env(qs_env%admm_env, rho_aux_fit=rho_aux)
                CALL qs_rho_get(rho_aux, rho_r=rho_r)
                ALLOCATE (kpp1_env%deriv_set_admm, kpp1_env%rho_set_admm)
                CALL xc_prep_2nd_deriv(kpp1_env%deriv_set_admm, kpp1_env%rho_set_admm, &
-                                      rho_r, auxbas_pw_pool, &
+                                      rho_r, auxbas_pw_pool, weights, &
                                       xc_section=xc_section_aux)
             END IF
          END IF
@@ -843,6 +852,7 @@ CONTAINS
       TYPE(pw_env_type), POINTER                         :: pw_env
       TYPE(pw_pool_type), POINTER                        :: auxbas_pw_pool
       TYPE(pw_r3d_rs_type), DIMENSION(:), POINTER        :: rho1_aux_r, tau_pw, v_xc, v_xc_tau
+      TYPE(pw_r3d_rs_type), POINTER                      :: weights
       TYPE(rho_atom_type), DIMENSION(:), POINTER         :: rho1_atom_set, rho_atom_set
       TYPE(section_vals_type), POINTER                   :: xc_fun_section, xc_section
       TYPE(task_list_type), POINTER                      :: task_list
@@ -877,6 +887,9 @@ CONTAINS
             CALL get_qs_env(qs_env, admm_env=admm_env)
             gapw = admm_env%do_gapw
 
+            NULLIFY (weights)
+            CALL get_qs_env(qs_env=qs_env, xcint_weights=weights)
+
             CALL qs_rho_get(p_env%rho1_admm, rho_r=rho1_aux_r, rho_g=rho1_aux_g)
             xc_section => admm_env%xc_section_aux
             bo = rho1_aux_r(1)%pw_grid%bounds_local
@@ -895,7 +908,7 @@ CONTAINS
                                    section_get_ival(xc_section, "XC_GRID%XC_SMOOTH_RHO"), &
                                    auxbas_pw_pool)
             CALL xc_calc_2nd_deriv(v_xc, v_xc_tau, p_env%kpp1_env%deriv_set_admm, p_env%kpp1_env%rho_set_admm, &
-                                   rho1_aux_r, rho1_aux_g, tau_pw, auxbas_pw_pool, gapw=.FALSE., &
+                                   rho1_aux_r, rho1_aux_g, tau_pw, auxbas_pw_pool, weights, gapw=.FALSE., &
                                    xc_section=xc_section)
             IF (ASSOCIATED(v_xc_tau)) THEN
                CPABORT("Meta-GGA ADMM functionals not yet supported!")

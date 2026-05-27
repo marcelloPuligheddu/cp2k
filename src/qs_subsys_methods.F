@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2025 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2026 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -15,16 +15,9 @@ MODULE qs_subsys_methods
                                               get_atomic_kind
    USE basis_set_types,                 ONLY: get_gto_basis_set,&
                                               gto_basis_set_type
-   USE cell_methods,                    ONLY: cell_create,&
-                                              read_cell,&
-                                              write_cell
-   USE cell_types,                      ONLY: cell_clone,&
-                                              cell_release,&
-                                              cell_type
    USE cp_subsys_methods,               ONLY: cp_subsys_create
    USE cp_subsys_types,                 ONLY: cp_subsys_get,&
                                               cp_subsys_release,&
-                                              cp_subsys_set,&
                                               cp_subsys_type
    USE external_potential_types,        ONLY: all_potential_type,&
                                               get_potential,&
@@ -37,6 +30,8 @@ MODULE qs_subsys_methods
    USE molecule_kind_types,             ONLY: get_molecule_kind,&
                                               molecule_kind_type,&
                                               set_molecule_kind
+   USE qs_cneo_types,                   ONLY: cneo_potential_type,&
+                                              get_cneo_potential
    USE qs_kind_types,                   ONLY: create_qs_kind_set,&
                                               get_qs_kind,&
                                               init_atom_electronic_state,&
@@ -63,30 +58,26 @@ CONTAINS
 !> \param subsys_section ...
 !> \param use_motion_section ...
 !> \param cp_subsys ...
-!> \param cell ...
-!> \param cell_ref ...
 !> \param elkind ...
 !> \param silent ...
 ! **************************************************************************************************
    SUBROUTINE qs_subsys_create(subsys, para_env, root_section, force_env_section, subsys_section, &
-                               use_motion_section, cp_subsys, cell, cell_ref, elkind, silent)
+                               use_motion_section, cp_subsys, elkind, silent)
       TYPE(qs_subsys_type), INTENT(OUT)                  :: subsys
       TYPE(mp_para_env_type), POINTER                    :: para_env
       TYPE(section_vals_type), OPTIONAL, POINTER         :: root_section
       TYPE(section_vals_type), POINTER                   :: force_env_section, subsys_section
       LOGICAL, INTENT(IN)                                :: use_motion_section
       TYPE(cp_subsys_type), OPTIONAL, POINTER            :: cp_subsys
-      TYPE(cell_type), OPTIONAL, POINTER                 :: cell, cell_ref
       LOGICAL, INTENT(IN), OPTIONAL                      :: elkind, silent
 
-      LOGICAL                                            :: be_silent, use_ref_cell
+      LOGICAL                                            :: be_silent
       TYPE(atomic_kind_type), DIMENSION(:), POINTER      :: atomic_kind_set
-      TYPE(cell_type), POINTER                           :: my_cell, my_cell_ref
       TYPE(cp_subsys_type), POINTER                      :: my_cp_subsys
       TYPE(qs_kind_type), DIMENSION(:), POINTER          :: qs_kind_set
-      TYPE(section_vals_type), POINTER                   :: cell_section, kind_section
+      TYPE(section_vals_type), POINTER                   :: kind_section
 
-      NULLIFY (atomic_kind_set, qs_kind_set, cell_section, kind_section, my_cell, my_cell_ref, my_cp_subsys)
+      NULLIFY (atomic_kind_set, qs_kind_set, kind_section, my_cp_subsys)
 
       be_silent = .FALSE.
       IF (PRESENT(silent)) be_silent = silent
@@ -103,27 +94,6 @@ CONTAINS
          CPABORT("qs_subsys_create: cp_subsys or root_section needed")
       END IF
 
-      ! create cp_subsys%cell
-      !TODO: moved to cp_subsys_create(), needs further disentanglement of cell_ref.
-      use_ref_cell = .FALSE.
-      IF (PRESENT(cell)) THEN
-         my_cell => cell
-         IF (PRESENT(cell_ref)) THEN
-            my_cell_ref => cell_ref
-            use_ref_cell = .TRUE.
-         ELSE
-            CALL cell_create(my_cell_ref)
-            CALL cell_clone(my_cell, my_cell_ref, tag="CELL_REF")
-         END IF
-      ELSE
-         cell_section => section_vals_get_subs_vals(subsys_section, "CELL")
-         CALL read_cell(my_cell, my_cell_ref, use_ref_cell=use_ref_cell, &
-                        cell_section=cell_section, para_env=para_env)
-      END IF
-      CALL cp_subsys_set(my_cp_subsys, cell=my_cell)
-      CALL write_cell(my_cell, subsys_section)
-      CALL write_cell(my_cell_ref, subsys_section)
-
       ! setup qs_kinds
       CALL cp_subsys_get(my_cp_subsys, atomic_kind_set=atomic_kind_set)
       kind_section => section_vals_get_subs_vals(subsys_section, "KIND")
@@ -135,12 +105,10 @@ CONTAINS
 
       CALL qs_subsys_set(subsys, &
                          cp_subsys=my_cp_subsys, &
-                         cell_ref=my_cell_ref, &
-                         use_ref_cell=use_ref_cell, &
+                         cell_ref=my_cp_subsys%cell_ref, &
+                         use_ref_cell=my_cp_subsys%use_ref_cell, &
                          qs_kind_set=qs_kind_set)
 
-      IF (.NOT. PRESENT(cell)) CALL cell_release(my_cell)
-      IF (.NOT. PRESENT(cell_ref)) CALL cell_release(my_cell_ref)
       IF (.NOT. PRESENT(cp_subsys)) CALL cp_subsys_release(my_cp_subsys)
 
    END SUBROUTINE qs_subsys_create
@@ -170,6 +138,7 @@ CONTAINS
       REAL(KIND=dp), DIMENSION(0:lmat, 10, 2)            :: edelta
       TYPE(all_potential_type), POINTER                  :: all_potential
       TYPE(atomic_kind_type), POINTER                    :: atomic_kind
+      TYPE(cneo_potential_type), POINTER                 :: cneo_potential
       TYPE(gth_potential_type), POINTER                  :: gth_potential
       TYPE(gto_basis_set_type), POINTER                  :: orb_basis_set
       TYPE(molecule_kind_type), POINTER                  :: molecule_kind
@@ -201,7 +170,8 @@ CONTAINS
                                 basis_set=orb_basis_set, &
                                 all_potential=all_potential, &
                                 gth_potential=gth_potential, &
-                                sgp_potential=sgp_potential)
+                                sgp_potential=sgp_potential, &
+                                cneo_potential=cneo_potential)
 
                ! Obtain the electronic state of the atom
                ! The same state is used to calculate the ATOMIC GUESS
@@ -237,6 +207,9 @@ CONTAINS
                ELSE IF (ASSOCIATED(sgp_potential)) THEN
                   CALL get_potential(potential=sgp_potential, zeff=zeff, &
                                      zeff_correction=zeff_correction)
+               ELSE IF (ASSOCIATED(cneo_potential)) THEN
+                  CALL get_cneo_potential(potential=cneo_potential, zeff=zeff)
+                  zeff_correction = 0.0_dp
                ELSE
                   zeff = 0.0_dp
                   zeff_correction = 0.0_dp

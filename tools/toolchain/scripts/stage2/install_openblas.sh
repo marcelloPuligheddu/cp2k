@@ -6,8 +6,8 @@
 [ "${BASH_SOURCE[0]}" ] && SCRIPT_NAME="${BASH_SOURCE[0]}" || SCRIPT_NAME=$0
 SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_NAME")/.." && pwd -P)"
 
-openblas_ver="0.3.28" # Keep in sync with get_openblas_arch.sh
-openblas_sha256="f1003466ad074e9b0c8d421a204121100b0751c96fc6fcf3d1456bd12f8a00a1"
+openblas_ver="0.3.33" # Keep in sync with get_openblas_arch.sh
+openblas_sha256="6761af1d9f5d353ab4f0b7497be2643313b36c8f31caec0144bfef198e71e6ab"
 openblas_pkg="OpenBLAS-${openblas_ver}.tar.gz"
 
 source "${SCRIPT_DIR}"/common_vars.sh
@@ -18,10 +18,6 @@ source "${INSTALLDIR}"/toolchain.env
 
 [ -f "${BUILDDIR}/setup_openblas" ] && rm "${BUILDDIR}/setup_openblas"
 
-OPENBLAS_CFLAGS=""
-OPENBLAS_LDFLAGS=""
-OPENBLAS_LIBS=""
-OPENBLAS_ROOT=""
 ! [ -d "${BUILDDIR}" ] && mkdir -p "${BUILDDIR}"
 cd "${BUILDDIR}"
 
@@ -33,12 +29,7 @@ case "${with_openblas}" in
     if verify_checksums "${install_lock_file}"; then
       echo "openblas-${openblas_ver} is already installed, skipping it."
     else
-      if [ -f ${openblas_pkg} ]; then
-        echo "${openblas_pkg} is found"
-      else
-        download_pkg_from_cp2k_org "${openblas_sha256}" "${openblas_pkg}"
-      fi
-
+      retrieve_package "${openblas_sha256}" "${openblas_pkg}"
       echo "Installing from scratch into ${pkg_install_dir}"
       [ -d OpenBLAS-${openblas_ver} ] && rm -rf OpenBLAS-${openblas_ver}
       tar -zxf ${openblas_pkg}
@@ -74,7 +65,7 @@ case "${with_openblas}" in
           FC="${FC}" \
           PREFIX="${pkg_install_dir}" \
           > make.${OPENBLAS_LIBCORE}.log 2>&1; then
-          tail -n ${LOG_LINES} make.${OPENBLAS_LIBCORE}.log
+          tail_excerpt make.${OPENBLAS_LIBCORE}.log
           BUILD_DYNAMIC=1
         fi
       fi
@@ -89,14 +80,14 @@ case "${with_openblas}" in
           CC="${CC}" \
           FC="${FC}" \
           PREFIX="${pkg_install_dir}" \
-          > make.log 2>&1 || tail -n ${LOG_LINES} make.log
+          > make.log 2>&1 || tail_excerpt make.log
       fi
-      make MAKE_NB_JOBS=0 PREFIX="${pkg_install_dir}" install > install.log 2>&1 || tail -n ${LOG_LINES} install.log
+      make MAKE_NB_JOBS=0 PREFIX="${pkg_install_dir}" install > install.log 2>&1 || tail_excerpt install.log
       cd ..
       write_checksums "${install_lock_file}" "${SCRIPT_DIR}/stage2/$(basename ${SCRIPT_NAME})"
     fi
-    OPENBLAS_CFLAGS="-I'${pkg_install_dir}/include'"
-    OPENBLAS_LDFLAGS="-L'${pkg_install_dir}/lib' -Wl,-rpath,'${pkg_install_dir}/lib'"
+    OPENBLAS_CFLAGS="-I${pkg_install_dir}/include"
+    OPENBLAS_LDFLAGS="-L${pkg_install_dir}/lib -Wl,-rpath,${pkg_install_dir}/lib"
     OPENBLAS_ROOT="${pkg_install_dir}"
     # Prefer static library if available
     if [ -f "${pkg_install_dir}/lib/libopenblas.a" ]; then
@@ -106,20 +97,27 @@ case "${with_openblas}" in
     fi
     ;;
   __SYSTEM__)
-    echo "==================== Finding LAPACK from system paths ===================="
+    echo "==================== Finding OpenBLAS from system paths ===================="
     # assume that system openblas is threaded
     check_lib -lopenblas "OpenBLAS"
-    OPENBLAS_LIBS="-lopenblas"
     # detect separate omp builds
     check_lib -lopenblas_openmp 2> /dev/null && OPENBLAS_LIBS="-lopenblas_openmp"
     check_lib -lopenblas_omp 2> /dev/null && OPENBLAS_LIBS="-lopenblas_omp"
+    pkg_install_dir="$(dirname $(dirname $(find_in_paths "libopenblas.*" $LIB_PATHS)))"
+    # Deal with the condition that libopenblas is installed in "/usr/lib/x86_64-linux-gnu"
+    if [[ "${pkg_install_dir}" == "/usr/lib"* ]]; then
+      pkg_install_dir="/usr"
+    else
+      INCLUDE_PATHS=${INCLUDE_PATHS}:"$pkg_install_dir/include"
+    fi
     add_include_from_paths OPENBLAS_CFLAGS "openblas_config.h" $INCLUDE_PATHS
     add_lib_from_paths OPENBLAS_LDFLAGS "libopenblas.*" $LIB_PATHS
+    OPENBLAS_LIBS="-lopenblas"
     ;;
   __DONTUSE__) ;;
 
   *)
-    echo "==================== Linking LAPACK to user paths ===================="
+    echo "==================== Linking OpenBLAS to user paths ===================="
     pkg_install_dir="$with_openblas"
     check_dir "${pkg_install_dir}/include"
     check_dir "${pkg_install_dir}/lib"
@@ -139,10 +137,7 @@ if [ "$with_openblas" != "__DONTUSE__" ]; then
 prepend_path LD_LIBRARY_PATH "$pkg_install_dir/lib"
 prepend_path LD_RUN_PATH "$pkg_install_dir/lib"
 prepend_path LIBRARY_PATH "$pkg_install_dir/lib"
-prepend_path PKG_CONFIG_PATH "$pkg_install_dir/lib/pkgconfig"
-prepend_path CMAKE_PREFIX_PATH "$pkg_install_dir"
 prepend_path CPATH "$pkg_install_dir/include"
-export OPENBLAS_ROOT=${pkg_install_dir}
 EOF
   fi
   cat << EOF >> "${BUILDDIR}/setup_openblas"
@@ -157,7 +152,7 @@ export MATH_LIBS="\${MATH_LIBS} ${OPENBLAS_LIBS}"
 prepend_path PKG_CONFIG_PATH "${pkg_install_dir}/lib/pkgconfig"
 prepend_path CMAKE_PREFIX_PATH "${pkg_install_dir}"
 EOF
-  cat "${BUILDDIR}/setup_openblas" >> $SETUPFILE
+  filter_setup "${BUILDDIR}/setup_openblas" "${SETUPFILE}"
 fi
 
 load "${BUILDDIR}/setup_openblas"

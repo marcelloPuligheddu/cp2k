@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2025 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2026 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -85,7 +85,7 @@ MODULE basis_set_types
                                                     m => NULL(), ncgf_set => NULL(), &
                                                     npgf => NULL(), nsgf_set => NULL(), nshell => NULL()
       REAL(KIND=dp), DIMENSION(:, :), POINTER    :: cphi => NULL(), pgf_radius => NULL(), sphi => NULL(), &
-                                                    scon => NULL(), zet => NULL()
+                                                    scon => NULL(), zet => NULL(), ccon => NULL()
       INTEGER, DIMENSION(:, :), POINTER          :: first_cgf => NULL(), first_sgf => NULL(), l => NULL(), &
                                                     last_cgf => NULL(), last_sgf => NULL(), n => NULL()
       REAL(KIND=dp), DIMENSION(:, :, :), POINTER :: gcc => NULL()
@@ -127,6 +127,7 @@ MODULE basis_set_types
              set_gto_basis_set, &
              sort_gto_basis_set, &
              write_gto_basis_set, &
+             dump_gto_basis_set, &
              write_orb_basis_set
 
    PUBLIC :: allocate_sto_basis_set, &
@@ -134,7 +135,7 @@ MODULE basis_set_types
              create_gto_from_sto_basis, &
              deallocate_sto_basis_set, &
              set_sto_basis_set, &
-             srules
+             srules, process_gto_basis
 
    ! Public data types
    PUBLIC :: gto_basis_set_p_type, &
@@ -192,6 +193,7 @@ CONTAINS
          IF (ASSOCIATED(gto_basis_set%pgf_radius)) DEALLOCATE (gto_basis_set%pgf_radius)
          IF (ASSOCIATED(gto_basis_set%sphi)) DEALLOCATE (gto_basis_set%sphi)
          IF (ASSOCIATED(gto_basis_set%scon)) DEALLOCATE (gto_basis_set%scon)
+         IF (ASSOCIATED(gto_basis_set%ccon)) DEALLOCATE (gto_basis_set%ccon)
          IF (ASSOCIATED(gto_basis_set%zet)) DEALLOCATE (gto_basis_set%zet)
          IF (ASSOCIATED(gto_basis_set%first_cgf)) DEALLOCATE (gto_basis_set%first_cgf)
          IF (ASSOCIATED(gto_basis_set%first_sgf)) DEALLOCATE (gto_basis_set%first_sgf)
@@ -253,9 +255,16 @@ CONTAINS
       basis_set_out%nsgf_set = basis_set_in%nsgf_set
       maxco = SIZE(basis_set_in%cphi, 1)
       ALLOCATE (basis_set_out%cphi(maxco, ncgf), basis_set_out%sphi(maxco, nsgf), basis_set_out%scon(maxco, nsgf))
+      ALLOCATE (basis_set_out%ccon(maxco, ncgf))
       basis_set_out%cphi = basis_set_in%cphi
       basis_set_out%sphi = basis_set_in%sphi
       basis_set_out%scon = basis_set_in%scon
+      basis_set_out%ccon = 0.0_dp
+      IF (ASSOCIATED(basis_set_in%ccon)) THEN
+         IF ((SIZE(basis_set_in%ccon, 1) == maxco) .AND. (SIZE(basis_set_in%ccon, 2) == ncgf)) THEN
+            basis_set_out%ccon = basis_set_in%ccon
+         END IF
+      END IF
       maxpgf = MAXVAL(basis_set_in%npgf)
       ALLOCATE (basis_set_out%pgf_radius(maxpgf, nset), basis_set_out%zet(maxpgf, nset))
       basis_set_out%pgf_radius = basis_set_in%pgf_radius
@@ -339,7 +348,10 @@ CONTAINS
          lm = MIN(lm, lmax)
       END IF
 
-      pbasis%name = basis_set%name//"_primitive"
+      IF (LEN_TRIM(basis_set%name) + 10 > default_string_length) THEN
+         CPWARN("The name of the primitive basis set will be truncated.")
+      END IF
+      pbasis%name = TRIM(basis_set%name)//"_primitive"
       pbasis%kind_radius = basis_set%kind_radius
       pbasis%short_kind_radius = basis_set%short_kind_radius
       pbasis%norm_type = basis_set%norm_type
@@ -392,7 +404,7 @@ CONTAINS
                pbasis%ly(ncgf) = indco(2, ico)
                pbasis%lz(ncgf) = indco(3, ico)
                pbasis%cgf_symbol(ncgf) = &
-                  cgf_symbol(pbasis%n(ishell, iset), (/pbasis%lx(ncgf), pbasis%ly(ncgf), pbasis%lz(ncgf)/))
+                  cgf_symbol(pbasis%n(ishell, iset), [pbasis%lx(ncgf), pbasis%ly(ncgf), pbasis%lz(ncgf)])
             END DO
             DO m = -lshell, lshell
                nsgf = nsgf + 1
@@ -439,6 +451,8 @@ CONTAINS
       pbasis%sphi = 0.0_dp
       ALLOCATE (pbasis%scon(maxco, ncgf))
       pbasis%scon = 0.0_dp
+      ALLOCATE (pbasis%ccon(maxco, ncgf))
+      pbasis%ccon = 0.0_dp
       ALLOCATE (pbasis%set_radius(nset))
       ALLOCATE (pbasis%pgf_radius(mpgf, nset))
       pbasis%pgf_radius = 0.0_dp
@@ -467,7 +481,10 @@ CONTAINS
                                                             maxshell, nc, ncgf, ncgfn, ncgfo, ns, &
                                                             nset, nsetn, nseto, nsgf, nsgfn, nsgfo
 
-      basis_set%name = basis_set%name//basis_set_add%name
+      IF (LEN_TRIM(basis_set%name) + LEN_TRIM(basis_set_add%name) > default_string_length) THEN
+         CPWARN("The name of the combined GTO basis set will be truncated.")
+      END IF
+      basis_set%name = TRIM(basis_set%name)//TRIM(basis_set_add%name)
       basis_set%nset = basis_set%nset + basis_set_add%nset
       basis_set%ncgf = basis_set%ncgf + basis_set_add%ncgf
       basis_set%nsgf = basis_set%nsgf + basis_set_add%nsgf
@@ -563,6 +580,7 @@ CONTAINS
       CALL reallocate(basis_set%cphi, 1, maxco, 1, ncgf)
       CALL reallocate(basis_set%sphi, 1, maxco, 1, nsgf)
       CALL reallocate(basis_set%scon, 1, maxco, 1, nsgf)
+      CALL reallocate(basis_set%ccon, 1, maxco, 1, ncgf)
       CALL reallocate(basis_set%pgf_radius, 1, maxpgf, 1, nset)
 
    END SUBROUTINE combine_basis_sets
@@ -615,12 +633,13 @@ CONTAINS
 !> \param maxder ...
 !> \param short_kind_radius ...
 !> \param npgf_seg_sum number of primitives in "segmented contraction format"
+!> \param ccon ...
 ! **************************************************************************************************
    SUBROUTINE get_gto_basis_set(gto_basis_set, name, aliases, norm_type, kind_radius, ncgf, &
                                 nset, nsgf, cgf_symbol, sgf_symbol, norm_cgf, set_radius, lmax, lmin, lx, ly, lz, &
                                 m, ncgf_set, npgf, nsgf_set, nshell, cphi, pgf_radius, sphi, scon, zet, first_cgf, first_sgf, l, &
                                 last_cgf, last_sgf, n, gcc, maxco, maxl, maxpgf, maxsgf_set, maxshell, maxso, nco_sum, &
-                                npgf_sum, nshell_sum, maxder, short_kind_radius, npgf_seg_sum)
+                                npgf_sum, nshell_sum, maxder, short_kind_radius, npgf_seg_sum, ccon)
 
       ! Get informations about a Gaussian-type orbital (GTO) basis set.
 
@@ -648,6 +667,7 @@ CONTAINS
       INTEGER, INTENT(IN), OPTIONAL                      :: maxder
       REAL(KIND=dp), INTENT(OUT), OPTIONAL               :: short_kind_radius
       INTEGER, INTENT(OUT), OPTIONAL                     :: npgf_seg_sum
+      REAL(KIND=dp), DIMENSION(:, :), OPTIONAL, POINTER  :: ccon
 
       INTEGER                                            :: iset, nder
 
@@ -677,6 +697,7 @@ CONTAINS
       IF (PRESENT(pgf_radius)) pgf_radius => gto_basis_set%pgf_radius
       IF (PRESENT(sphi)) sphi => gto_basis_set%sphi
       IF (PRESENT(scon)) scon => gto_basis_set%scon
+      IF (PRESENT(ccon)) ccon => gto_basis_set%ccon
       IF (PRESENT(zet)) zet => gto_basis_set%zet
       IF (PRESENT(first_cgf)) first_cgf => gto_basis_set%first_cgf
       IF (PRESENT(first_sgf)) first_sgf => gto_basis_set%first_sgf
@@ -782,7 +803,7 @@ CONTAINS
       END SELECT
 
       ! Initialise the transformation matrices "pgf" -> "cgf"
-      CALL init_cphi_and_sphi(gto_basis_set)
+      CALL init_cphi_and_sphi(gto_basis_set, .FALSE.)
 
       CALL timestop(handle)
 
@@ -791,8 +812,9 @@ CONTAINS
 ! **************************************************************************************************
 !> \brief ...
 !> \param gto_basis_set ...
+!> \param lccon ...
 ! **************************************************************************************************
-   SUBROUTINE init_cphi_and_sphi(gto_basis_set)
+   SUBROUTINE init_cphi_and_sphi(gto_basis_set, lccon)
 
       ! Initialise the matrices for the transformation of primitive Cartesian
       ! Gaussian-type functions to contracted Cartesian (cphi) and spherical
@@ -801,6 +823,7 @@ CONTAINS
       ! - Creation (20.09.2000,MK)
 
       TYPE(gto_basis_set_type), INTENT(INOUT)            :: gto_basis_set
+      LOGICAL, INTENT(IN), OPTIONAL                      :: lccon
 
       CHARACTER(len=*), PARAMETER :: routineN = 'init_cphi_and_sphi'
 
@@ -808,7 +831,10 @@ CONTAINS
                                                             ipgf, iset, ishell, l, last_sgf, lmax, &
                                                             lmin, n, n1, n2, ncgf, nn, nn1, nn2, &
                                                             npgf, nsgf
+      LOGICAL                                            :: my_lccon
 
+      my_lccon = .FALSE.
+      IF (PRESENT(lccon)) my_lccon = lccon
 ! -------------------------------------------------------------------------
 ! Build the Cartesian transformation matrix "cphi"
 
@@ -837,7 +863,7 @@ CONTAINS
       n = SIZE(gto_basis_set%cphi, 1)
 
       gto_basis_set%sphi = 0.0_dp
-      IF (n .GT. 0) THEN
+      IF (n > 0) THEN
          lmax = -1
          ! Ensure proper setup of orbtramat
          DO iset = 1, gto_basis_set%nset
@@ -869,7 +895,7 @@ CONTAINS
       n = SIZE(gto_basis_set%scon, 1)
 
       gto_basis_set%scon = 0.0_dp
-      IF (n .GT. 0) THEN
+      IF (n > 0) THEN
          DO iset = 1, gto_basis_set%nset
             lmin = gto_basis_set%lmin(iset)
             lmax = gto_basis_set%lmax(iset)
@@ -887,6 +913,36 @@ CONTAINS
                END DO
             END DO
          END DO
+      END IF
+
+      IF (my_lccon) THEN
+         IF (.NOT. ASSOCIATED(gto_basis_set%ccon)) THEN
+            CALL reallocate(gto_basis_set%ccon, 1, SIZE(gto_basis_set%cphi, 1), 1, gto_basis_set%ncgf)
+         ELSE IF ((SIZE(gto_basis_set%ccon, 1) /= SIZE(gto_basis_set%cphi, 1)) .OR. &
+                  (SIZE(gto_basis_set%ccon, 2) /= gto_basis_set%ncgf)) THEN
+            CALL reallocate(gto_basis_set%ccon, 1, SIZE(gto_basis_set%cphi, 1), 1, gto_basis_set%ncgf)
+         END IF
+         n = SIZE(gto_basis_set%ccon, 1)
+         gto_basis_set%ccon = 0.0_dp
+         IF (n > 0) THEN
+            DO iset = 1, gto_basis_set%nset
+               lmin = gto_basis_set%lmin(iset)
+               lmax = gto_basis_set%lmax(iset)
+               npgf = gto_basis_set%npgf(iset)
+               nn = ncoset(lmax) - ncoset(lmin - 1)
+               DO ishell = 1, gto_basis_set%nshell(iset)
+                  first_sgf = gto_basis_set%first_cgf(ishell, iset)
+                  last_sgf = gto_basis_set%last_cgf(ishell, iset)
+                  DO ipgf = 1, npgf
+                     nn1 = (ipgf - 1)*ncoset(lmax) + ncoset(lmin - 1) + 1
+                     nn2 = ipgf*ncoset(lmax)
+                     n1 = (ipgf - 1)*nn + 1
+                     n2 = ipgf*nn
+                     gto_basis_set%ccon(n1:n2, first_sgf:last_sgf) = gto_basis_set%cphi(nn1:nn2, first_sgf:last_sgf)
+                  END DO
+               END DO
+            END DO
+         END IF
       END IF
 
       CALL timestop(handle)
@@ -937,7 +993,7 @@ CONTAINS
          zeta => gto_basis_set%zet(1:npgfa, iset)
          CALL coulomb2(lmax, npgfa, zeta, rpgfa, lmin, &
                        lmax, npgfa, zeta, rpgfa, lmin, &
-                       (/0.0_dp, 0.0_dp, 0.0_dp/), 0.0_dp, gaa, vv, ff(0:))
+                       [0.0_dp, 0.0_dp, 0.0_dp], 0.0_dp, gaa, vv, ff(0:))
          DO ishell = 1, gto_basis_set%nshell(iset)
             DO icgf = gto_basis_set%first_cgf(ishell, iset), &
                gto_basis_set%last_cgf(ishell, iset)
@@ -1103,13 +1159,15 @@ CONTAINS
          ! Compute the normalization factors of the contracted Gaussian-type
          ! functions
          CALL init_norm_cgf_orb(gto_basis_set)
+      CASE (3)
+         CALL init_norm_cgf_orb(gto_basis_set)
       CASE DEFAULT
          CPABORT("Normalization method not specified")
       END SELECT
 
       ! Initialise the transformation matrices "pgf" -> "cgf"
 
-      CALL init_cphi_and_sphi(gto_basis_set)
+      CALL init_cphi_and_sphi(gto_basis_set, .TRUE.)
 
       CALL timestop(handle)
 
@@ -1198,7 +1256,7 @@ CONTAINS
          basis_set_file_name = cbasis(ibasis)
          tmp = basis_set_file_name
          CALL uppercase(tmp)
-         IF (INDEX(tmp, "MOLOPT") .NE. 0) CALL cite_reference(VandeVondele2007)
+         IF (INDEX(tmp, "MOLOPT") /= 0) CALL cite_reference(VandeVondele2007)
       END DO
 
       ! Search for the requested basis set in the basis set file
@@ -1216,7 +1274,7 @@ CONTAINS
 
          tmp = basis_set_name
          CALL uppercase(tmp)
-         IF (INDEX(tmp, "MOLOPT") .NE. 0) CALL cite_reference(VandeVondele2007)
+         IF (INDEX(tmp, "MOLOPT") /= 0) CALL cite_reference(VandeVondele2007)
 
          nset = 0
          maxshell = 0
@@ -1246,13 +1304,14 @@ CONTAINS
          CALL reallocate(gto_basis_set%cphi, 1, maxco, 1, ncgf)
          CALL reallocate(gto_basis_set%sphi, 1, maxco, 1, nsgf)
          CALL reallocate(gto_basis_set%scon, 1, maxco, 1, nsgf)
+         CALL reallocate(gto_basis_set%ccon, 1, maxco, 1, ncgf)
          CALL reallocate(gto_basis_set%lx, 1, ncgf)
          CALL reallocate(gto_basis_set%ly, 1, ncgf)
          CALL reallocate(gto_basis_set%lz, 1, ncgf)
          CALL reallocate(gto_basis_set%m, 1, nsgf)
          CALL reallocate(gto_basis_set%norm_cgf, 1, ncgf)
 
-         IF (tmp .NE. "NONE") THEN
+         IF (tmp /= "NONE") THEN
             search_loop: DO
 
                CALL parser_search_string(parser, TRIM(bsname), .TRUE., found, line)
@@ -1401,6 +1460,7 @@ CONTAINS
                      CALL reallocate(gto_basis_set%cphi, 1, maxco, 1, ncgf)
                      CALL reallocate(gto_basis_set%sphi, 1, maxco, 1, nsgf)
                      CALL reallocate(gto_basis_set%scon, 1, maxco, 1, nsgf)
+                     CALL reallocate(gto_basis_set%ccon, 1, maxco, 1, ncgf)
                      CALL reallocate(gto_basis_set%lx, 1, ncgf)
                      CALL reallocate(gto_basis_set%ly, 1, ncgf)
                      CALL reallocate(gto_basis_set%lz, 1, ncgf)
@@ -1422,9 +1482,9 @@ CONTAINS
                               gto_basis_set%ly(ncgf) = indco(2, ico)
                               gto_basis_set%lz(ncgf) = indco(3, ico)
                               gto_basis_set%cgf_symbol(ncgf) = &
-                                 cgf_symbol(n(ishell, iset), (/gto_basis_set%lx(ncgf), &
-                                                               gto_basis_set%ly(ncgf), &
-                                                               gto_basis_set%lz(ncgf)/))
+                                 cgf_symbol(n(ishell, iset), [gto_basis_set%lx(ncgf), &
+                                                              gto_basis_set%ly(ncgf), &
+                                                              gto_basis_set%lz(ncgf)])
                            END DO
                            DO m = -lshell, lshell
                               nsgf = nsgf + 1
@@ -1454,7 +1514,7 @@ CONTAINS
 
       END DO basis_loop
 
-      IF (tmp .NE. "NONE") THEN
+      IF (tmp /= "NONE") THEN
          IF (.NOT. basis_found) THEN
             basis_set_file_name = ""
             DO ibasis = 1, nbasis
@@ -1552,6 +1612,7 @@ CONTAINS
       CALL reallocate(gto_basis_set%cphi, 1, maxco, 1, ncgf)
       CALL reallocate(gto_basis_set%sphi, 1, maxco, 1, nsgf)
       CALL reallocate(gto_basis_set%scon, 1, maxco, 1, nsgf)
+      CALL reallocate(gto_basis_set%ccon, 1, maxco, 1, ncgf)
       CALL reallocate(gto_basis_set%lx, 1, ncgf)
       CALL reallocate(gto_basis_set%ly, 1, ncgf)
       CALL reallocate(gto_basis_set%lz, 1, ncgf)
@@ -1704,6 +1765,7 @@ CONTAINS
       CALL reallocate(gto_basis_set%cphi, 1, maxco, 1, ncgf)
       CALL reallocate(gto_basis_set%sphi, 1, maxco, 1, nsgf)
       CALL reallocate(gto_basis_set%scon, 1, maxco, 1, nsgf)
+      CALL reallocate(gto_basis_set%ccon, 1, maxco, 1, ncgf)
       CALL reallocate(gto_basis_set%lx, 1, ncgf)
       CALL reallocate(gto_basis_set%ly, 1, ncgf)
       CALL reallocate(gto_basis_set%lz, 1, ncgf)
@@ -1725,9 +1787,9 @@ CONTAINS
                gto_basis_set%ly(ncgf) = indco(2, ico)
                gto_basis_set%lz(ncgf) = indco(3, ico)
                gto_basis_set%cgf_symbol(ncgf) = &
-                  cgf_symbol(n(ishell, iset), (/gto_basis_set%lx(ncgf), &
-                                                gto_basis_set%ly(ncgf), &
-                                                gto_basis_set%lz(ncgf)/))
+                  cgf_symbol(n(ishell, iset), [gto_basis_set%lx(ncgf), &
+                                               gto_basis_set%ly(ncgf), &
+                                               gto_basis_set%lz(ncgf)])
             END DO
             DO m = -lshell, lshell
                nsgf = nsgf + 1
@@ -1784,13 +1846,14 @@ CONTAINS
 !> \param n ...
 !> \param gcc ...
 !> \param short_kind_radius ...
+!> \param ccon ...
 !> \author MK
 ! **************************************************************************************************
    SUBROUTINE set_gto_basis_set(gto_basis_set, name, aliases, norm_type, kind_radius, ncgf, &
                                 nset, nsgf, cgf_symbol, sgf_symbol, norm_cgf, set_radius, lmax, &
                                 lmin, lx, ly, lz, m, ncgf_set, npgf, nsgf_set, nshell, &
                                 cphi, pgf_radius, sphi, scon, zet, first_cgf, first_sgf, l, &
-                                last_cgf, last_sgf, n, gcc, short_kind_radius)
+                                last_cgf, last_sgf, n, gcc, short_kind_radius, ccon)
 
       TYPE(gto_basis_set_type), INTENT(INOUT)            :: gto_basis_set
       CHARACTER(LEN=default_string_length), INTENT(IN), &
@@ -1809,6 +1872,7 @@ CONTAINS
       REAL(KIND=dp), DIMENSION(:, :, :), OPTIONAL, &
          POINTER                                         :: gcc
       REAL(KIND=dp), INTENT(IN), OPTIONAL                :: short_kind_radius
+      REAL(KIND=dp), DIMENSION(:, :), OPTIONAL, POINTER  :: ccon
 
       IF (PRESENT(name)) gto_basis_set%name = name
       IF (PRESENT(aliases)) gto_basis_set%aliases = aliases
@@ -1836,6 +1900,7 @@ CONTAINS
       IF (PRESENT(pgf_radius)) gto_basis_set%pgf_radius(:, :) = pgf_radius(:, :)
       IF (PRESENT(sphi)) gto_basis_set%sphi(:, :) = sphi(:, :)
       IF (PRESENT(scon)) gto_basis_set%scon(:, :) = scon(:, :)
+      IF (PRESENT(ccon)) gto_basis_set%ccon(:, :) = ccon(:, :)
       IF (PRESENT(zet)) gto_basis_set%zet(:, :) = zet(:, :)
       IF (PRESENT(first_cgf)) gto_basis_set%first_cgf(:, :) = first_cgf(:, :)
       IF (PRESENT(first_sgf)) gto_basis_set%first_sgf(:, :) = first_sgf(:, :)
@@ -1966,6 +2031,87 @@ CONTAINS
       END IF
 
    END SUBROUTINE write_orb_basis_set
+
+! **************************************************************************************************
+!> \brief ...
+!> \param gto_basis_set ...
+!> \param output_unit ...
+!> \author JGH
+! **************************************************************************************************
+   SUBROUTINE dump_gto_basis_set(gto_basis_set, output_unit)
+
+      TYPE(gto_basis_set_type), INTENT(IN)               :: gto_basis_set
+      INTEGER, INTENT(in)                                :: output_unit
+
+      INTEGER                                            :: ipgf, iset, ishell
+
+      IF (output_unit > 0) THEN
+
+         WRITE (UNIT=output_unit, FMT="(/,T6,A40)") TRIM(gto_basis_set%name)
+         WRITE (UNIT=output_unit, FMT="(/,T6,A40)") TRIM(gto_basis_set%aliases)
+         WRITE (UNIT=output_unit, FMT="(/,T6,F12.8)") gto_basis_set%kind_radius
+         WRITE (UNIT=output_unit, FMT="(/,T6,F12.8)") gto_basis_set%short_kind_radius
+         WRITE (UNIT=output_unit, FMT="(/,T6,I8)") gto_basis_set%norm_type
+         WRITE (UNIT=output_unit, FMT="(/,T6,3I8)") gto_basis_set%ncgf, gto_basis_set%nset, gto_basis_set%nsgf
+         WRITE (UNIT=output_unit, FMT="(/,T6,6A12)") gto_basis_set%cgf_symbol
+         WRITE (UNIT=output_unit, FMT="(/,T6,6A12)") gto_basis_set%sgf_symbol
+         WRITE (UNIT=output_unit, FMT="(/,T6,6F12.6)") gto_basis_set%norm_cgf
+         WRITE (UNIT=output_unit, FMT="(/,T6,6F12.6)") gto_basis_set%set_radius
+         WRITE (UNIT=output_unit, FMT="(/,T6,12I6)") gto_basis_set%lmax
+         WRITE (UNIT=output_unit, FMT="(/,T6,12I6)") gto_basis_set%lmin
+         WRITE (UNIT=output_unit, FMT="(/,T6,12I6)") gto_basis_set%lx
+         WRITE (UNIT=output_unit, FMT="(/,T6,12I6)") gto_basis_set%ly
+         WRITE (UNIT=output_unit, FMT="(/,T6,12I6)") gto_basis_set%lz
+         WRITE (UNIT=output_unit, FMT="(/,T6,12I6)") gto_basis_set%m
+         WRITE (UNIT=output_unit, FMT="(/,T6,12I6)") gto_basis_set%ncgf_set
+         WRITE (UNIT=output_unit, FMT="(/,T6,12I6)") gto_basis_set%nsgf_set
+         WRITE (UNIT=output_unit, FMT="(/,T6,12I6)") gto_basis_set%npgf
+         WRITE (UNIT=output_unit, FMT="(/,T6,12I6)") gto_basis_set%nshell
+
+         DO iset = 1, gto_basis_set%nset
+            WRITE (UNIT=output_unit, FMT="(T8,6F15.6)") &
+               gto_basis_set%pgf_radius(1:gto_basis_set%npgf(iset), iset)
+         END DO
+
+         DO iset = 1, gto_basis_set%nset
+            WRITE (UNIT=output_unit, FMT="(T8,6F15.6)") &
+               gto_basis_set%zet(1:gto_basis_set%npgf(iset), iset)
+         END DO
+
+         DO iset = 1, gto_basis_set%nset
+            DO ishell = 1, gto_basis_set%nshell(iset)
+               WRITE (UNIT=output_unit, FMT="(T8,8I10)") &
+                  iset, ishell, &
+                  gto_basis_set%n(ishell, iset), &
+                  gto_basis_set%l(ishell, iset), &
+                  gto_basis_set%first_cgf(ishell, iset), &
+                  gto_basis_set%last_cgf(ishell, iset), &
+                  gto_basis_set%first_sgf(ishell, iset), &
+                  gto_basis_set%last_sgf(ishell, iset)
+            END DO
+         END DO
+
+         DO iset = 1, gto_basis_set%nset
+            DO ishell = 1, gto_basis_set%nshell(iset)
+               WRITE (UNIT=output_unit, FMT="(T8,2I5,(T25,4F15.6))") &
+                  iset, ishell, &
+                  (gto_basis_set%gcc(ipgf, ishell, iset), &
+                   ipgf=1, gto_basis_set%npgf(iset))
+            END DO
+         END DO
+
+         WRITE (UNIT=output_unit, FMT="(A5)") "CPHI"
+         WRITE (UNIT=output_unit, FMT="(12F10.5)") gto_basis_set%cphi
+         WRITE (UNIT=output_unit, FMT="(A1)") "SPHI"
+         WRITE (UNIT=output_unit, FMT="(12F10.5)") gto_basis_set%sphi
+         WRITE (UNIT=output_unit, FMT="(A1)") "SCON"
+         WRITE (UNIT=output_unit, FMT="(12F10.5)") gto_basis_set%scon
+         WRITE (UNIT=output_unit, FMT="(A1)") "CCON"
+         WRITE (UNIT=output_unit, FMT="(12F10.5)") gto_basis_set%ccon
+
+      END IF
+
+   END SUBROUTINE dump_gto_basis_set
 
 ! **************************************************************************************************
 !> \brief ...
@@ -2171,7 +2317,7 @@ CONTAINS
          tmp = basis_set_name
          CALL uppercase(tmp)
 
-         IF (tmp .NE. "NONE") THEN
+         IF (tmp /= "NONE") THEN
             search_loop: DO
 
                CALL parser_search_string(parser, TRIM(bsname), .TRUE., found, line)
@@ -2251,7 +2397,7 @@ CONTAINS
 
       END DO basis_loop
 
-      IF (tmp .NE. "NONE") THEN
+      IF (tmp /= "NONE") THEN
          IF (.NOT. basis_found) THEN
             basis_set_file_name = ""
             DO ibasis = 1, nbasis
@@ -2285,13 +2431,9 @@ CONTAINS
       INTEGER, PARAMETER                                 :: maxng = 6
 
       CHARACTER(LEN=default_string_length)               :: name, sng
-      INTEGER                                            :: i1, i2, ico, ipgf, iset, jset, l, &
-                                                            lshell, m, maxco, maxl, ncgf, ng, ngs, &
-                                                            np, nset, nsgf, nshell
-      INTEGER, DIMENSION(0:10)                           :: mxf
+      INTEGER                                            :: ipgf, iset, maxl, ng, nset, nshell
       INTEGER, DIMENSION(:), POINTER                     :: lq, nq
       LOGICAL                                            :: do_ortho
-      REAL(KIND=dp), ALLOCATABLE, DIMENSION(:, :)        :: gal, zal, zll
       REAL(KIND=dp), DIMENSION(:), POINTER               :: zet
       REAL(KIND=dp), DIMENSION(maxng)                    :: gcc, zetg
 
@@ -2335,6 +2477,34 @@ CONTAINS
             gto_basis_set%gcc(ipgf, 1, iset) = gcc(ipgf)
             gto_basis_set%zet(ipgf, iset) = zetg(ipgf)
          END DO
+      END DO
+
+      CALL process_gto_basis(gto_basis_set, do_ortho, nset, maxl)
+
+   END SUBROUTINE create_gto_from_sto_basis
+
+! **************************************************************************************************
+!> \brief ...
+!> \param gto_basis_set ...
+!> \param do_ortho ...
+!> \param nset ...
+!> \param maxl ...
+! **************************************************************************************************
+   SUBROUTINE process_gto_basis(gto_basis_set, do_ortho, nset, maxl)
+
+      TYPE(gto_basis_set_type), POINTER                  :: gto_basis_set
+      LOGICAL, INTENT(IN), OPTIONAL                      :: do_ortho
+      INTEGER, INTENT(IN)                                :: nset, maxl
+
+      INTEGER                                            :: i1, i2, ico, iset, jset, l, lshell, m, &
+                                                            maxco, ncgf, ng, ngs, np, nsgf
+      INTEGER, DIMENSION(0:10)                           :: mxf
+      REAL(KIND=dp), ALLOCATABLE, DIMENSION(:, :)        :: gal, zal, zll
+
+      ng = gto_basis_set%npgf(1)
+      DO iset = 1, nset
+         IF ((ng /= gto_basis_set%npgf(iset)) .AND. do_ortho) &
+            CPABORT("different number of primitves")
       END DO
 
       IF (do_ortho) THEN
@@ -2424,6 +2594,7 @@ CONTAINS
       CALL reallocate(gto_basis_set%cphi, 1, maxco, 1, ncgf)
       CALL reallocate(gto_basis_set%sphi, 1, maxco, 1, nsgf)
       CALL reallocate(gto_basis_set%scon, 1, maxco, 1, nsgf)
+      CALL reallocate(gto_basis_set%ccon, 1, maxco, 1, ncgf)
       CALL reallocate(gto_basis_set%lx, 1, ncgf)
       CALL reallocate(gto_basis_set%ly, 1, ncgf)
       CALL reallocate(gto_basis_set%lz, 1, ncgf)
@@ -2444,9 +2615,9 @@ CONTAINS
             gto_basis_set%ly(ncgf) = indco(2, ico)
             gto_basis_set%lz(ncgf) = indco(3, ico)
             gto_basis_set%cgf_symbol(ncgf) = &
-               cgf_symbol(np, (/gto_basis_set%lx(ncgf), &
-                                gto_basis_set%ly(ncgf), &
-                                gto_basis_set%lz(ncgf)/))
+               cgf_symbol(np, [gto_basis_set%lx(ncgf), &
+                               gto_basis_set%ly(ncgf), &
+                               gto_basis_set%lz(ncgf)])
          END DO
          DO m = -lshell, lshell
             nsgf = nsgf + 1
@@ -2457,7 +2628,7 @@ CONTAINS
 
       gto_basis_set%norm_type = -1
 
-   END SUBROUTINE create_gto_from_sto_basis
+   END SUBROUTINE process_gto_basis
 
 ! **************************************************************************************************
 !> \brief ...
@@ -2538,7 +2709,7 @@ CONTAINS
       REAL(dp)                                           :: srules
 
       REAL(dp), DIMENSION(7), PARAMETER :: &
-         xns = (/1.0_dp, 2.0_dp, 3.0_dp, 3.7_dp, 4.0_dp, 4.2_dp, 4.4_dp/)
+         xns = [1.0_dp, 2.0_dp, 3.0_dp, 3.7_dp, 4.0_dp, 4.2_dp, 4.4_dp]
 
       INTEGER                                            :: i, l1, l2, m, m1, m2, nn
       REAL(dp)                                           :: s
@@ -2599,11 +2770,12 @@ CONTAINS
       INTEGER, ALLOCATABLE, DIMENSION(:)                 :: sort_index
       INTEGER, ALLOCATABLE, DIMENSION(:, :)              :: icgf_set, isgf_set
       INTEGER, DIMENSION(:), POINTER                     :: lx, ly, lz, m, npgf
+      LOGICAL                                            :: ccon_available
       REAL(dp), ALLOCATABLE, DIMENSION(:)                :: tmp
       REAL(dp), DIMENSION(:), POINTER                    :: set_radius
       REAL(dp), DIMENSION(:, :), POINTER                 :: zet
       REAL(KIND=dp), DIMENSION(:), POINTER               :: norm_cgf
-      REAL(KIND=dp), DIMENSION(:, :), POINTER            :: cphi, scon, sphi
+      REAL(KIND=dp), DIMENSION(:, :), POINTER            :: ccon, cphi, scon, sphi
 
       NULLIFY (set_radius, zet)
 
@@ -2686,6 +2858,13 @@ CONTAINS
       sphi = 0.0_dp
       ALLOCATE (scon(SIZE(basis_set%scon, 1), SIZE(basis_set%scon, 2)))
       scon = 0.0_dp
+      ALLOCATE (ccon(SIZE(basis_set%cphi, 1), SIZE(basis_set%cphi, 2)))
+      ccon = 0.0_dp
+      ccon_available = ASSOCIATED(basis_set%ccon)
+      IF (ccon_available) THEN
+         ccon_available = (SIZE(basis_set%ccon, 1) == SIZE(ccon, 1)) .AND. &
+                          (SIZE(basis_set%ccon, 2) == SIZE(ccon, 2))
+      END IF
 
       ALLOCATE (sgf_symbol(SIZE(basis_set%sgf_symbol)))
       ALLOCATE (m(SIZE(basis_set%m)))
@@ -2702,6 +2881,7 @@ CONTAINS
             ly(icgf_new) = basis_set%ly(icgf_old)
             lz(icgf_new) = basis_set%lz(icgf_old)
             cphi(:, icgf_new) = basis_set%cphi(:, icgf_old)
+            IF (ccon_available) ccon(:, icgf_new) = basis_set%ccon(:, icgf_old)
             cgf_symbol(icgf_new) = basis_set%cgf_symbol(icgf_old)
          END DO
          DO is = 1, is_max
@@ -2731,6 +2911,8 @@ CONTAINS
       basis_set%sphi => sphi
       DEALLOCATE (basis_set%scon)
       basis_set%scon => scon
+      IF (ASSOCIATED(basis_set%ccon)) DEALLOCATE (basis_set%ccon)
+      basis_set%ccon => ccon
 
       DEALLOCATE (basis_set%m)
       basis_set%m => m
@@ -2766,6 +2948,6 @@ CONTAINS
          END DO
       END DO
 
-   END SUBROUTINE
+   END SUBROUTINE sort_gto_basis_set
 
 END MODULE basis_set_types

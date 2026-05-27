@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2025 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2026 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -98,7 +98,7 @@ CONTAINS
          CALL zgeqrf(msize, msize, tmp_mat, msize, tau, work_measure, lwork, info)
          lwork = INT(work_measure(1))
          IF (ALLOCATED(work)) THEN
-            IF (SIZE(work) .LT. lwork) THEN
+            IF (SIZE(work) < lwork) THEN
                DEALLOCATE (work)
             END IF
          END IF
@@ -207,7 +207,7 @@ CONTAINS
       REAL(dp)                                           :: rnorm
       REAL(kind=dp)                                      :: norm
       REAL(kind=dp), ALLOCATABLE, DIMENSION(:)           :: v_vec, w_vec
-      REAL(kind=dp), DIMENSION(:), POINTER               :: data_vec
+      REAL(kind=dp), DIMENSION(:, :), POINTER            :: data_block
       TYPE(arnoldi_control_type), POINTER                :: control
       TYPE(arnoldi_data_type), POINTER                   :: ar_data
       TYPE(dbcsr_iterator_type)                          :: iter
@@ -235,9 +235,9 @@ CONTAINS
          ! Setup the initial normalized random vector (sufficient if it only happens on proc_col 0)
          CALL dbcsr_iterator_start(iter, vectors%input_vec)
          DO WHILE (dbcsr_iterator_blocks_left(iter))
-            CALL dbcsr_iterator_next_block(iter, row, col, data_vec, row_size=row_size, col_size=col_size)
+            CALL dbcsr_iterator_next_block(iter, row, col, data_block, row_size=row_size, col_size=col_size)
             iseed(1) = 2; iseed(2) = MOD(row, 4095); iseed(3) = MOD(col, 4095); iseed(4) = 11
-            CALL dlarnv(2, iseed, row_size*col_size, data_vec)
+            CALL dlarnv(2, iseed, row_size*col_size, data_block)
          END DO
          CALL dbcsr_iterator_stop(iter)
       END IF
@@ -298,7 +298,7 @@ CONTAINS
       REAL(dp)                                           :: rnorm
       REAL(kind=dp)                                      :: denom, norm
       REAL(kind=dp), ALLOCATABLE, DIMENSION(:)           :: v_vec, w_vec
-      REAL(kind=dp), DIMENSION(:), POINTER               :: data_vec
+      REAL(kind=dp), DIMENSION(:, :), POINTER            :: data_block
       TYPE(arnoldi_control_type), POINTER                :: control
       TYPE(arnoldi_data_type), POINTER                   :: ar_data
       TYPE(dbcsr_iterator_type)                          :: iter
@@ -326,9 +326,9 @@ CONTAINS
          ! Setup the initial normalized random vector (sufficient if it only happens on proc_col 0)
          CALL dbcsr_iterator_start(iter, vectors%input_vec)
          DO WHILE (dbcsr_iterator_blocks_left(iter))
-            CALL dbcsr_iterator_next_block(iter, row, col, data_vec, row_size=row_size, col_size=col_size)
+            CALL dbcsr_iterator_next_block(iter, row, col, data_block, row_size=row_size, col_size=col_size)
             iseed(1) = 2; iseed(2) = MOD(row, 4095); iseed(3) = MOD(col, 4095); iseed(4) = 11
-            CALL dlarnv(2, iseed, row_size*col_size, data_vec)
+            CALL dlarnv(2, iseed, row_size*col_size, data_block)
          END DO
          CALL dbcsr_iterator_stop(iter)
       END IF
@@ -414,7 +414,7 @@ CONTAINS
          CALL compute_norms(ar_data%f_vec, norm, rnorm, control%pcol_group)
 
          ! check convergence and inform everybody about it, a bit annoying to talk to everybody because of that
-         IF (control%myproc == 0) control%converged = rnorm .LT. REAL(control%threshold, dp)
+         IF (control%myproc == 0) control%converged = rnorm < REAL(control%threshold, dp)
          CALL control%mp_group%bcast(control%converged, 0)
          IF (control%converged) EXIT
 
@@ -538,7 +538,7 @@ CONTAINS
          norm = DOT_PRODUCT(ar_data%f_vec, v_vec)
          CALL pcol_group%sum(norm)
 
-         IF (control%myproc == 0) control%converged = REAL(norm, dp) .LT. EPSILON(REAL(1.0, dp))
+         IF (control%myproc == 0) control%converged = REAL(norm, dp) < EPSILON(REAL(1.0, dp))
          CALL control%mp_group%bcast(control%converged, 0)
          IF (control%converged) EXIT
          IF (j == control%max_iter - 1) EXIT
@@ -561,7 +561,7 @@ CONTAINS
       ar_data%local_history = Zmat
       ! broadcast the Hessenberg matrix so we don't need to care later on
 
-      DEALLOCATE (v_vec); DEALLOCATE (w_vec); DEALLOCATE (s_vec); DEALLOCATE (h_vec); DEALLOCATE (CZmat); 
+      DEALLOCATE (v_vec); DEALLOCATE (w_vec); DEALLOCATE (s_vec); DEALLOCATE (h_vec); DEALLOCATE (CZmat);
       DEALLOCATE (Zmat); DEALLOCATE (BZmat)
 
       CALL timestop(handle)
@@ -632,7 +632,7 @@ CONTAINS
       IF (ncol_local > 0) THEN
          CALL compute_norms(v_vec, norm, rnorm, control%pcol_group)
          ! check convergence
-         control%converged = rnorm .LT. control%threshold
+         control%converged = rnorm < control%threshold
          DEALLOCATE (v_vec)
       END IF
       ! and broadcast the real eigenvalue
@@ -662,7 +662,7 @@ CONTAINS
 
       REAL(kind=dp), DIMENSION(:), POINTER               :: data_vec
 
-      data_vec => dbcsr_get_data_p(vec, select_data_type=0.0_dp)
+      data_vec => dbcsr_get_data_p(vec)
       IF (is_local) array(1:n) = data_vec(1:n)
 
    END SUBROUTINE transfer_dbcsr_to_local_array
@@ -682,7 +682,7 @@ CONTAINS
 
       REAL(kind=dp), DIMENSION(:), POINTER               :: data_vec
 
-      data_vec => dbcsr_get_data_p(vec, select_data_type=0.0_dp)
+      data_vec => dbcsr_get_data_p(vec)
       IF (is_local) data_vec(1:n) = array(1:n)
 
    END SUBROUTINE transfer_local_array_to_dbcsr

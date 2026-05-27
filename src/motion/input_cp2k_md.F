@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2025 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2026 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -22,11 +22,12 @@ MODULE input_cp2k_md
                                               low_print_level,&
                                               medium_print_level
    USE cp_units,                        ONLY: cp_unit_to_cp2k
+   USE fparser,                         ONLY: docf
    USE input_constants,                 ONLY: &
-        isokin_ensemble, langevin_ensemble, md_init_default, md_init_vib, npe_f_ensemble, &
-        npe_i_ensemble, nph_ensemble, nph_uniaxial_damped_ensemble, nph_uniaxial_ensemble, &
-        npt_f_ensemble, npt_i_ensemble, npt_ia_ensemble, nve_ensemble, nvt_adiabatic_ensemble, &
-        nvt_ensemble, reftraj_ensemble
+        do_constr_atomic, do_constr_molec, do_constr_none, isokin_ensemble, langevin_ensemble, &
+        md_init_default, md_init_vib, npe_f_ensemble, npe_i_ensemble, nph_ensemble, &
+        nph_uniaxial_damped_ensemble, nph_uniaxial_ensemble, npt_f_ensemble, npt_i_ensemble, &
+        npt_ia_ensemble, nve_ensemble, nvt_adiabatic_ensemble, nvt_ensemble, reftraj_ensemble
    USE input_cp2k_barostats,            ONLY: create_barostat_section
    USE input_cp2k_thermostats,          ONLY: create_region_section,&
                                               create_thermo_fast_section,&
@@ -40,14 +41,16 @@ MODULE input_cp2k_md
                                               section_create,&
                                               section_release,&
                                               section_type
-   USE input_val_types,                 ONLY: integer_t,&
+   USE input_val_types,                 ONLY: char_t,&
+                                              integer_t,&
                                               lchar_t,&
                                               real_t
    USE kinds,                           ONLY: dp
    USE reftraj_types,                   ONLY: REFTRAJ_EVAL_ENERGY,&
                                               REFTRAJ_EVAL_ENERGY_FORCES,&
                                               REFTRAJ_EVAL_NONE
-   USE string_utilities,                ONLY: s2a
+   USE string_utilities,                ONLY: newline,&
+                                              s2a
 #include "../base/base_uses.f90"
 
    IMPLICIT NONE
@@ -98,107 +101,107 @@ CONTAINS
                                         "constant pressure ensemble using an isotropic cell (no thermostat)", &
                                         "adiabatic dynamics in constant temperature and volume ensemble (CAFES)", &
                                         "NPT_I ensemble with frozen atoms in absolute coordinate"), &
-                          citations=(/Evans1983, VandeVondele2002, Minary2003/), &
-                          enum_i_vals=(/nve_ensemble, nvt_ensemble, npt_i_ensemble, npt_f_ensemble, &
-                                        nph_uniaxial_ensemble, nph_uniaxial_damped_ensemble, nph_ensemble, isokin_ensemble, &
-                                        reftraj_ensemble, langevin_ensemble, npe_f_ensemble, npe_i_ensemble, &
-                                        nvt_adiabatic_ensemble, npt_ia_ensemble/))
+                          citations=[Evans1983, VandeVondele2002, Minary2003], &
+                          enum_i_vals=[nve_ensemble, nvt_ensemble, npt_i_ensemble, npt_f_ensemble, &
+                                       nph_uniaxial_ensemble, nph_uniaxial_damped_ensemble, nph_ensemble, isokin_ensemble, &
+                                       reftraj_ensemble, langevin_ensemble, npe_f_ensemble, npe_i_ensemble, &
+                                       nvt_adiabatic_ensemble, npt_ia_ensemble])
       CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
 
-      CALL keyword_create(keyword, __LOCATION__, name="steps", &
+      CALL keyword_create(keyword, __LOCATION__, name="STEPS", &
                           description="The number of MD steps to perform, counting from step_start_val. ", &
-                          usage="steps 100", default_i_val=3)
+                          usage="STEPS 100", default_i_val=3)
       CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
 
-      CALL keyword_create(keyword, __LOCATION__, name="max_steps", &
+      CALL keyword_create(keyword, __LOCATION__, name="MAX_STEPS", &
                           description="The number of MD steps to perform, counting from step 1", &
-                          usage="max_steps 100", default_i_val=1000000000)
+                          usage="MAX_STEPS 100", default_i_val=1000000000)
       CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
 
-      CALL keyword_create(keyword, __LOCATION__, name="timestep", &
+      CALL keyword_create(keyword, __LOCATION__, name="TIMESTEP", &
                           description="The length of an integration step (in case RESPA the large TIMESTEP)", &
-                          usage="timestep 1.0", default_r_val=cp_unit_to_cp2k(value=0.5_dp, unit_str="fs"), &
+                          usage="TIMESTEP 1.0", default_r_val=cp_unit_to_cp2k(value=0.5_dp, unit_str="fs"), &
                           unit_str="fs")
       CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
 
-      CALL keyword_create(keyword, __LOCATION__, name="step_start_val", &
-                          description="The starting step value for the MD", usage="step_start_val <integer>", &
+      CALL keyword_create(keyword, __LOCATION__, name="STEP_START_VAL", &
+                          description="The starting step value for the MD", usage="STEP_START_VAL <integer>", &
                           default_i_val=0)
       CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
 
-      CALL keyword_create(keyword, __LOCATION__, name="time_start_val", &
+      CALL keyword_create(keyword, __LOCATION__, name="TIME_START_VAL", &
                           description="The starting timer value for the MD", &
-                          usage="time_start_val <real>", default_r_val=cp_unit_to_cp2k(value=0.0_dp, unit_str="fs"), &
+                          usage="TIME_START_VAL <real>", default_r_val=cp_unit_to_cp2k(value=0.0_dp, unit_str="fs"), &
                           unit_str="fs")
       CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
 
-      CALL keyword_create(keyword, __LOCATION__, name="econs_start_val", &
+      CALL keyword_create(keyword, __LOCATION__, name="ECONS_START_VAL", &
                           description="The starting  value of the conserved quantity", &
-                          usage="econs_start_val <real>", default_r_val=0.0_dp, &
+                          usage="ECONS_START_VAL <real>", default_r_val=0.0_dp, &
                           unit_str="hartree")
       CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
 
-      CALL keyword_create(keyword, __LOCATION__, name="temperature", &
+      CALL keyword_create(keyword, __LOCATION__, name="TEMPERATURE", &
                           description="The temperature in K used to initialize "// &
                           "the velocities with init and pos restart, and in the NPT/NVT simulations", &
-                          usage="temperature 325.0", default_r_val=cp_unit_to_cp2k(value=300.0_dp, unit_str="K"), &
+                          usage="TEMPERATURE 325.0", default_r_val=cp_unit_to_cp2k(value=300.0_dp, unit_str="K"), &
                           unit_str="K")
       CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
 
-      CALL keyword_create(keyword, __LOCATION__, name="temp_tol", &
+      CALL keyword_create(keyword, __LOCATION__, name="TEMP_TOL", &
                           variants=s2a("temp_to", "temperature_tolerance"), &
                           description="The maximum accepted deviation of the (global) temperature "// &
-                          "from the desired target temperature before a rescaling of the velocites "// &
+                          "from the desired target temperature before a rescaling of the velocities "// &
                           "is performed. If it is 0 no rescaling is performed. NOTE: This keyword is "// &
                           "obsolescent; Using a CSVR thermostat with a short timeconstant is "// &
                           "recommended as a better alternative.", &
-                          usage="temp_tol 0.0", default_r_val=0.0_dp, unit_str='K')
+                          usage="TEMP_TOL 0.0", default_r_val=0.0_dp, unit_str='K')
       CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
 
-      CALL keyword_create(keyword, __LOCATION__, name="temp_kind", &
+      CALL keyword_create(keyword, __LOCATION__, name="TEMP_KIND", &
                           description="Compute the temperature per each kind separately", &
-                          usage="temp_kind LOGICAL", &
+                          usage="TEMP_KIND LOGICAL", &
                           default_l_val=.FALSE., lone_keyword_l_val=.TRUE.)
       CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
 
-      CALL keyword_create(keyword, __LOCATION__, name="scale_temp_kind", &
+      CALL keyword_create(keyword, __LOCATION__, name="SCALE_TEMP_KIND", &
                           description="When necessary rescale the temperature per each kind separately", &
-                          usage="scale_temp_kind LOGICAL", &
+                          usage="SCALE_TEMP_KIND LOGICAL", &
                           default_l_val=.FALSE., lone_keyword_l_val=.TRUE.)
       CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
 
-      CALL keyword_create(keyword, __LOCATION__, name="comvel_tol", &
+      CALL keyword_create(keyword, __LOCATION__, name="COMVEL_TOL", &
                           description="The maximum accepted velocity of the center of mass. "// &
                           "With Shell-Model, comvel may drift if MD%THERMOSTAT%REGION /= GLOBAL ", &
-                          usage="comvel_tol 0.1", type_of_var=real_t, n_var=1, unit_str="bohr*au_t^-1")
+                          usage="COMVEL_TOL 0.1", type_of_var=real_t, n_var=1, unit_str="bohr*au_t^-1")
       CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
 
-      CALL keyword_create(keyword, __LOCATION__, name="angvel_tol", &
+      CALL keyword_create(keyword, __LOCATION__, name="ANGVEL_TOL", &
                           description="The maximum accepted angular velocity. This option is ignored "// &
                           "when the system is periodic. Removes the components of the velocities that "// &
                           "project on the external rotational degrees of freedom.", &
-                          usage="angvel_tol 0.1", type_of_var=real_t, n_var=1, unit_str="bohr*au_t^-1")
+                          usage="ANGVEL_TOL 0.1", type_of_var=real_t, n_var=1, unit_str="bohr*au_t^-1")
       CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
 
-      CALL keyword_create(keyword, __LOCATION__, name="angvel_zero", &
+      CALL keyword_create(keyword, __LOCATION__, name="ANGVEL_ZERO", &
                           description="Set the initial angular velocity to zero. This option is ignored "// &
                           "when the system is periodic or when initial velocities are defined. Technically, "// &
                           "the part of the random initial velocities that projects on the external "// &
                           "rotational degrees of freedom is subtracted.", &
-                          usage="angvel_zero LOGICAL", &
+                          usage="ANGVEL_ZERO LOGICAL", &
                           default_l_val=.FALSE., lone_keyword_l_val=.TRUE.)
       CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
@@ -256,7 +259,7 @@ CONTAINS
                                         "TEMPERATURE", &
                                         "Initialise positions and velocities to give canonical ensemble "// &
                                         "with TEMPERATURE, using the method described in PRL 96, 115504 (2006)"), &
-                          enum_i_vals=(/md_init_default, md_init_vib/))
+                          enum_i_vals=[md_init_default, md_init_vib])
       CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
 
@@ -336,7 +339,7 @@ CONTAINS
                           "undergoes Langevin MD, while those outside the regions undergoes "// &
                           "NVE Born Oppenheimer MD. To define the regions, the user should "// &
                           "use THERMAL_REGION subsection of MOTION%MD. ", &
-                          citations=(/Ricci2003, Kuhne2007, Rengaraj2020/), &
+                          citations=[Ricci2003, Kuhne2007, Rengaraj2020], &
                           n_keywords=0, n_subsections=1, repeats=.FALSE.)
       NULLIFY (keyword)
 
@@ -348,17 +351,17 @@ CONTAINS
       CALL keyword_release(keyword)
 
       CALL keyword_create(keyword, __LOCATION__, name="Noisy_Gamma", &
-                          variants=(/"NoisyGamma"/), &
+                          variants=["NoisyGamma"], &
                           description="Imaginary Langevin Friction term for LD with noisy forces.", &
-                          citations=(/Kuhne2007/), &
+                          citations=[Kuhne2007], &
                           usage="Noisy_Gamma 4.0E-5", default_r_val=0.0_dp, unit_str='fs^-1')
       CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
 
       CALL keyword_create(keyword, __LOCATION__, name="Shadow_Gamma", &
-                          variants=(/"ShadowGamma"/), &
+                          variants=["ShadowGamma"], &
                           description="Shadow Langevin Friction term for LD with noisy forces in order to adjust Noisy_Gamma.", &
-                          citations=(/Rengaraj2020/), &
+                          citations=[Rengaraj2020], &
                           usage="Shadow_Gamma 0.001", default_r_val=0.0_dp, unit_str='fs^-1')
       CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
@@ -477,7 +480,7 @@ CONTAINS
                           " subsys in the force_eval corresponding at the first index in the multiple_force_eval list."// &
                           " Can be used to speedup classical and ab initio MD simulations.", &
                           n_keywords=1, n_subsections=0, repeats=.FALSE., &
-                          citations=(/Tuckerman1992, Guidon2008/))
+                          citations=[Tuckerman1992, Guidon2008])
 
       NULLIFY (keyword)
       CALL keyword_create(keyword, __LOCATION__, name="FREQUENCY", &
@@ -557,7 +560,7 @@ CONTAINS
       CALL keyword_create(keyword, __LOCATION__, name="EVAL", &
                           description="Selects the properties to evaluate for each retrieved snapshot during a REFTRAJ run", &
                           default_i_val=REFTRAJ_EVAL_NONE, &
-                          enum_i_vals=(/REFTRAJ_EVAL_NONE, REFTRAJ_EVAL_ENERGY, REFTRAJ_EVAL_ENERGY_FORCES/), &
+                          enum_i_vals=[REFTRAJ_EVAL_NONE, REFTRAJ_EVAL_ENERGY, REFTRAJ_EVAL_ENERGY_FORCES], &
                           enum_c_vals=s2a("NONE", "ENERGY", "ENERGY_FORCES"), &
                           enum_desc=s2a("Evaluate nothing", "Evaluate only the energy", "Evaluate energy and forces"))
       CALL section_add_keyword(section, keyword)
@@ -738,7 +741,7 @@ CONTAINS
       CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
 
-      CALL keyword_create(keyword, __LOCATION__, name="VSHOCK", variants=(/"V_SHOCK"/), &
+      CALL keyword_create(keyword, __LOCATION__, name="VSHOCK", variants=["V_SHOCK"], &
                           description="Velocity shock", &
                           usage="VSHOCK real", &
                           default_r_val=0._dp, n_var=1, unit_str='m/s')
@@ -831,7 +834,7 @@ CONTAINS
       CALL section_create(section, __LOCATION__, name="ADIABATIC_DYNAMICS", &
                           description="Parameters used in canonical adiabatic free energy sampling (CAFES).", &
                           n_keywords=5, n_subsections=2, repeats=.FALSE., &
-                          citations=(/VandeVondele2002/))
+                          citations=[VandeVondele2002])
 
       NULLIFY (keyword, thermo_fast_section, thermo_slow_section)
 
@@ -857,7 +860,7 @@ CONTAINS
                           description="Maximum accepted temperature deviation"// &
                           " from the expected value, for the fast motion."// &
                           " If 0, no rescaling is performed", &
-                          usage="temp_tol 0.0", default_r_val=0.0_dp, unit_str='K')
+                          usage="temp_tol_fast 0.0", default_r_val=0.0_dp, unit_str='K')
       CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
 
@@ -865,7 +868,7 @@ CONTAINS
                           description="Maximum accepted temperature deviation"// &
                           " from the expected value, for the slow motion."// &
                           " If 0, no rescaling is performed", &
-                          usage="temp_tol 0.0", default_r_val=0.0_dp, unit_str='K')
+                          usage="temp_tol_slow 0.0", default_r_val=0.0_dp, unit_str='K')
       CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
 
@@ -940,24 +943,25 @@ CONTAINS
       TYPE(section_type), POINTER                        :: section
 
       TYPE(keyword_type), POINTER                        :: keyword
-      TYPE(section_type), POINTER                        :: print_key, region_section, subsection
+      TYPE(section_type), POINTER                        :: print_key, region_section, subsection, &
+                                                            tfunc_section
 
       CPASSERT(.NOT. ASSOCIATED(section))
 
-      CALL section_create(section, __LOCATION__, name="thermal_region", &
+      CALL section_create(section, __LOCATION__, name="THERMAL_REGION", &
                           description="Define regions where different initialization and control "// &
                           "of the temperature is used. When MOTION%MD%ENSEMBLE is set to LANGEVIN, "// &
                           "this section controls if the atoms defined inside and outside the "// &
                           "thermal regions should undergo Langevin MD or NVE Born-Oppenheimer MD. "// &
                           "The theory behind Langevin MD using different regions can be found in "// &
                           "articles by Kantorovitch et al. listed below.", &
-                          citations=(/Kantorovich2008, Kantorovich2008a/), &
+                          citations=[Kantorovich2008, Kantorovich2008a], &
                           n_keywords=0, n_subsections=1, repeats=.FALSE.)
 
       NULLIFY (region_section)
-      NULLIFY (keyword, subsection)
+      NULLIFY (keyword, subsection, tfunc_section)
 
-      CALL keyword_create(keyword, __LOCATION__, name="force_rescaling", &
+      CALL keyword_create(keyword, __LOCATION__, name="FORCE_RESCALING", &
                           description="Control the rescaling ot the velocities in all the regions, "// &
                           "according to the temperature assigned to each reagion, when "// &
                           "RESTART_VELOCITY in EXT_RESTART is active.", &
@@ -965,18 +969,23 @@ CONTAINS
       CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
 
-      CALL keyword_create(keyword, __LOCATION__, name="do_langevin_default", &
+      CALL keyword_create(keyword, __LOCATION__, name="DO_LANGEVIN_DEFAULT", &
                           description="If ENSEMBLE is set to LANGEVIN, controls whether the "// &
                           "atoms NOT defined in the thermal regions to undergo langevin MD "// &
                           "or not. If not, then the atoms will undergo NVE Born-Oppenheimer MD.", &
-                          usage="do_langevin_default .FALSE.", &
+                          usage="DO_LANGEVIN_DEFAULT .FALSE.", &
                           default_l_val=.FALSE., lone_keyword_l_val=.TRUE.)
       CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
 
       CALL section_create(region_section, __LOCATION__, name="DEFINE_REGION", &
-                          description="This section provides the possibility to define arbitrary region ", &
-                          n_keywords=3, n_subsections=0, repeats=.TRUE.)
+                          description="Define arbitrary thermal region with distinct "// &
+                          "temperature controls. For thermostat regions, see section "// &
+                          "MOTION%MD%THERMOSTAT%DEFINE_REGION; when the keyword "// &
+                          "MOTION%MD%THERMOSTAT%REGION is set to THERMAL, the "// &
+                          "definition of thermostat regions will be the same as "// &
+                          "that of thermal regions.", &
+                          n_keywords=3, n_subsections=1, repeats=.TRUE.)
 
       NULLIFY (keyword)
       CALL keyword_create(keyword, __LOCATION__, name="LIST", &
@@ -986,42 +995,135 @@ CONTAINS
       CALL section_add_keyword(region_section, keyword)
       CALL keyword_release(keyword)
 
-      CALL keyword_create(keyword, __LOCATION__, name="temperature", &
+      CALL keyword_create(keyword, __LOCATION__, name="MOLNAME", &
+                          variants=["SEGNAME"], &
+                          description="Specifies the name of the molecules belonging to the region.", &
+                          usage="MOLNAME WAT MEOH", repeats=.TRUE., &
+                          n_var=-1, type_of_var=char_t)
+      CALL section_add_keyword(region_section, keyword)
+      CALL keyword_release(keyword)
+
+      CALL keyword_create(keyword, __LOCATION__, name="MM_SUBSYS", &
+                          variants=["PROTEIN"], &
+                          description="Not yet implemented: In a QM/MM run all "// &
+                          "MM atoms are specified as a whole region", &
+                          usage="MM_SUBSYS (NONE|ATOMIC|MOLECULAR)", &
+                          enum_c_vals=s2a("NONE", "ATOMIC", "MOLECULAR"), &
+                          enum_i_vals=[do_constr_none, do_constr_atomic, do_constr_molec], &
+                          enum_desc=s2a("Nothing in the region", &
+                                        "Only the MM atoms itself", &
+                                        "The full molecule/residue that contains a MM atom"), &
+                          default_i_val=do_constr_none, repeats=.FALSE.)
+      CALL section_add_keyword(region_section, keyword)
+      CALL keyword_release(keyword)
+
+      CALL keyword_create(keyword, __LOCATION__, name="QM_SUBSYS", &
+                          description="Not yet implemented: In a QM/MM run all "// &
+                          "QM atoms are specified as a whole region", &
+                          usage="QM_SUBSYS (NONE|ATOMIC|MOLECULAR)", &
+                          enum_c_vals=s2a("NONE", "ATOMIC", "MOLECULAR"), &
+                          enum_desc=s2a("Nothing in the region", &
+                                        "Only the QM atoms itself", &
+                                        "The full molecule/residue that contains a QM atom"), &
+                          enum_i_vals=[do_constr_none, do_constr_atomic, do_constr_molec], &
+                          default_i_val=do_constr_none, repeats=.FALSE.)
+      CALL section_add_keyword(region_section, keyword)
+      CALL keyword_release(keyword)
+
+      CALL keyword_create(keyword, __LOCATION__, name="TEMPERATURE", &
                           description="The temperature in K used to initialize the velocities "// &
-                          "of the atoms in this region ", &
-                          usage="temperature 5.0", &
+                          "of the atoms in this region. It overrides the value evaluated by the "// &
+                          "function defined in TFUNC section.", &
+                          usage="TEMPERATURE 5.0", &
                           default_r_val=cp_unit_to_cp2k(value=0.0_dp, unit_str="K"), &
                           unit_str="K")
       CALL section_add_keyword(region_section, keyword)
       CALL keyword_release(keyword)
 
-      CALL keyword_create(keyword, __LOCATION__, name="temp_tol", &
-                          description="Maximum accepted temperature deviation from the expected "// &
-                          "value for this region. If temp_tol=0 no rescaling is performed", &
-                          usage="temp_tol 0.0", &
+      CALL keyword_create(keyword, __LOCATION__, name="TEMP_TOL", &
+                          description="Maximum accepted temperature deviation from the target "// &
+                          "value for this region, which is defined by TEMPERATURE or evaluated "// &
+                          "with the function defined in TFUNC section. Default value is 0 that "// &
+                          "turns off rescaling.", &
+                          usage="TEMP_TOL 0.0", &
                           default_r_val=0.0_dp, unit_str='K')
       CALL section_add_keyword(region_section, keyword)
       CALL keyword_release(keyword)
 
-      CALL keyword_create(keyword, __LOCATION__, name="do_langevin", &
+      CALL keyword_create(keyword, __LOCATION__, name="DO_LANGEVIN", &
                           description="When ENSEMBLE is set to LANGEVIN, Controls whether "// &
                           "the atoms in the thermal region should undergo Langevin MD. If "// &
                           "not, then they will undergo NVE Born-Oppenheimer MD.", &
-                          usage="do_langevin .TRUE.", &
+                          usage="DO_LANGEVIN .TRUE.", &
                           default_l_val=.TRUE., lone_keyword_l_val=.TRUE.)
       CALL section_add_keyword(region_section, keyword)
       CALL keyword_release(keyword)
 
-      CALL keyword_create(keyword, __LOCATION__, name="noisy_gamma_region", &
+      CALL keyword_create(keyword, __LOCATION__, name="NOISY_GAMMA_REGION", &
                           description="Special imaginary Langevin Friction term"// &
                           " for Langevin Dynamics with noisy forces for the atoms in this region."// &
                           " When set, overrides the general value set by NOISY_GAMMA in the MOTION%MD%LANGEVIN section."// &
                           " When unset for a defined region, the general NOISY_GAMMA value applies.", &
-                          citations=(/Kuhne2007/), usage="noisy_gamma_region 4.0E-5", &
+                          citations=[Kuhne2007], usage="NOISY_GAMMA_REGION 4.0E-5", &
                           type_of_var=real_t, &
                           unit_str="fs^-1")
       CALL section_add_keyword(region_section, keyword)
       CALL keyword_release(keyword)
+
+      ! Define temperature function start
+      CALL section_create(tfunc_section, __LOCATION__, name="TFUNC", &
+                          description="This section specifies the target temperature by using "// &
+                          "the time step and the temperature of the last step, allowing for "// &
+                          "simple region-wise simulated annealing (heating/cooling) controls. "// &
+                          "When the absolute difference between target and actual temperature "// &
+                          "is larger than TEMP_TOL value, the atomic velocities in this region "// &
+                          "are rescaled to match the target temperature. However, note that "// &
+                          "the actual temperature is subject to thermostat coupling as well "// &
+                          "and a small restrictive TEMP_TOL together with a rapidly varying "// &
+                          "target temperature function leaves little time for the system to "// &
+                          "adjust itself, possibly showing unphysical relaxation behaviors. "// &
+                          newline//newline//"Further notes about temperature. "//docf(), &
+                          n_keywords=4, n_subsections=0, repeats=.FALSE.)
+
+      NULLIFY (keyword)
+      CALL keyword_create(keyword, __LOCATION__, name="FUNCTION", &
+                          description="Specifies the functional form of the temperature "// &
+                          "in Kelvin in mathematical notation. Two variables are available "// &
+                          "with one denoted S for the integer time step and another denoted "// &
+                          "T for the temperature of the last step in Kelvin respectively. When "// &
+                          "DEFINE_REGION%TEMPERATURE is not explicitly set, the function "// &
+                          "will be evaluated at S set in MD%STEP_START_VAL and T = 0.0 "// &
+                          "to initialize the velocities of atoms in the region.", &
+                          usage="FUNCTION  A*T+(1-A)*B*(2/(1+EXP(-0.001*S))-1)", &
+                          type_of_var=lchar_t, n_var=1)
+      CALL section_add_keyword(tfunc_section, keyword)
+      CALL keyword_release(keyword)
+
+      CALL keyword_create(keyword, __LOCATION__, name="PARAMETERS", &
+                          description="Defines the parameters of the functional form", &
+                          usage="PARAMETERS A B", type_of_var=char_t, &
+                          n_var=-1, repeats=.TRUE.)
+      CALL section_add_keyword(tfunc_section, keyword)
+      CALL keyword_release(keyword)
+
+      CALL keyword_create(keyword, __LOCATION__, name="UNITS", &
+                          description="Optionally, allows to define valid CP2K unit strings for each parameter value. "// &
+                          "It is assumed that the corresponding parameter value is specified in this unit.", &
+                          usage="UNITS ", type_of_var=char_t, &
+                          n_var=-1, repeats=.TRUE.)
+      CALL section_add_keyword(tfunc_section, keyword)
+      CALL keyword_release(keyword)
+
+      CALL keyword_create(keyword, __LOCATION__, name="VALUES", &
+                          description="Defines the values of the parameter of the functional form", &
+                          usage="VALUES 0.75 3.00E+2", type_of_var=real_t, &
+                          n_var=-1, repeats=.TRUE., unit_str="internal_cp2k")
+      CALL section_add_keyword(tfunc_section, keyword)
+      CALL keyword_release(keyword)
+
+      CALL section_add_subsection(region_section, tfunc_section)
+      CALL section_release(tfunc_section)
+      ! Define temperature function end
 
       CALL section_add_subsection(section, region_section)
       CALL section_release(region_section)
@@ -1032,7 +1134,13 @@ CONTAINS
                           n_keywords=1, n_subsections=0, repeats=.FALSE.)
 
       CALL cp_print_key_section_create(print_key, __LOCATION__, "TEMPERATURE", &
-                                       description="Controls output of temperature per region.", &
+                                       description="Controls the output of the temperature per "// &
+                                       "region. The first three columns are: step number, time "// &
+                                       "(in fs), and the temperature of atoms not in any temperature "// &
+                                       "region (or zero if all atoms are in some temperature region). "// &
+                                       "Subsequent columns are, in pairs, the target value "// &
+                                       "(calculated by TFUNC or specified by TEMPERATURE) "// &
+                                       "and the actual value of the temperature for each region.", &
                                        print_level=high_print_level, common_iter_levels=1, &
                                        filename="")
       CALL section_add_subsection(subsection, print_key)
@@ -1364,7 +1472,7 @@ CONTAINS
                           "coordinates. The MD initialisation process expects the user has "// &
                           "performed both geometry optimisation and vibrational analysis "// &
                           "before hand, and won't perform those calculations automatically ", &
-                          citations=(/West2006/), &
+                          citations=[West2006], &
                           n_keywords=0, n_subsections=1, repeats=.FALSE.)
       NULLIFY (keyword)
       CALL keyword_create(keyword, __LOCATION__, name="VIB_EIGS_FILE_NAME", &

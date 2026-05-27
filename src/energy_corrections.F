@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2025 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2026 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -16,45 +16,45 @@
 !> \author JGH
 ! **************************************************************************************************
 MODULE energy_corrections
+   USE accint_weights_forces,           ONLY: accint_weight_force
    USE admm_dm_methods,                 ONLY: admm_dm_calc_rho_aux
    USE admm_methods,                    ONLY: admm_mo_calc_rho_aux
+   USE admm_types,                      ONLY: admm_type
    USE atomic_kind_types,               ONLY: atomic_kind_type,&
-                                              get_atomic_kind
+                                              get_atomic_kind,&
+                                              get_atomic_kind_set
    USE basis_set_types,                 ONLY: get_gto_basis_set,&
                                               gto_basis_set_type
    USE bibliography,                    ONLY: Belleflamme2023,&
                                               cite_reference
    USE cell_types,                      ONLY: cell_type,&
                                               pbc
-   USE core_ae,                         ONLY: build_core_ae
-   USE core_ppl,                        ONLY: build_core_ppl
-   USE core_ppnl,                       ONLY: build_core_ppnl
    USE cp_blacs_env,                    ONLY: cp_blacs_env_type
    USE cp_control_types,                ONLY: dft_control_type
    USE cp_dbcsr_api,                    ONLY: &
-        dbcsr_add, dbcsr_copy, dbcsr_create, dbcsr_desymmetrize, dbcsr_distribution_type, &
-        dbcsr_dot, dbcsr_filter, dbcsr_get_info, dbcsr_init_p, dbcsr_multiply, dbcsr_p_type, &
-        dbcsr_release, dbcsr_scale, dbcsr_set, dbcsr_type, dbcsr_type_no_symmetry, &
+        dbcsr_add, dbcsr_copy, dbcsr_create, dbcsr_distribution_type, dbcsr_filter, &
+        dbcsr_get_info, dbcsr_multiply, dbcsr_p_type, dbcsr_release, dbcsr_set, dbcsr_type, &
         dbcsr_type_symmetric
+   USE cp_dbcsr_contrib,                ONLY: dbcsr_dot
    USE cp_dbcsr_cp2k_link,              ONLY: cp_dbcsr_alloc_block_from_nbl
    USE cp_dbcsr_operations,             ONLY: copy_dbcsr_to_fm,&
-                                              copy_fm_to_dbcsr,&
                                               cp_dbcsr_sm_fm_multiply,&
                                               dbcsr_allocate_matrix_set,&
                                               dbcsr_deallocate_matrix_set
-   USE cp_fm_basic_linalg,              ONLY: cp_fm_column_scale,&
-                                              cp_fm_triangular_invert
-   USE cp_fm_cholesky,                  ONLY: cp_fm_cholesky_decompose
-   USE cp_fm_diag,                      ONLY: choose_eigv_solver
+   USE cp_files,                        ONLY: close_file,&
+                                              open_file
+   USE cp_fm_basic_linalg,              ONLY: cp_fm_scale_and_add,&
+                                              cp_fm_trace
    USE cp_fm_struct,                    ONLY: cp_fm_struct_create,&
                                               cp_fm_struct_release,&
                                               cp_fm_struct_type
    USE cp_fm_types,                     ONLY: cp_fm_create,&
-                                              cp_fm_init_random,&
+                                              cp_fm_get_info,&
                                               cp_fm_release,&
-                                              cp_fm_set_all,&
-                                              cp_fm_to_fm_triangular,&
-                                              cp_fm_type
+                                              cp_fm_set_submatrix,&
+                                              cp_fm_to_fm,&
+                                              cp_fm_type,&
+                                              cp_fm_write_unformatted
    USE cp_log_handling,                 ONLY: cp_get_default_logger,&
                                               cp_logger_get_default_unit_nr,&
                                               cp_logger_type
@@ -68,56 +68,62 @@ MODULE energy_corrections
    USE cp_units,                        ONLY: cp_unit_from_cp2k
    USE distribution_1d_types,           ONLY: distribution_1d_type
    USE distribution_2d_types,           ONLY: distribution_2d_type
-   USE dm_ls_scf,                       ONLY: calculate_w_matrix_ls,&
-                                              post_scf_sparsities
-   USE dm_ls_scf_methods,               ONLY: apply_matrix_preconditioner,&
-                                              density_matrix_sign,&
-                                              density_matrix_tc2,&
-                                              density_matrix_trs4,&
-                                              ls_scf_init_matrix_s
-   USE dm_ls_scf_qs,                    ONLY: matrix_ls_create,&
-                                              matrix_ls_to_qs,&
-                                              matrix_qs_to_ls
-   USE dm_ls_scf_types,                 ONLY: ls_scf_env_type
+   USE ec_diag_solver,                  ONLY: ec_diag_solver_gamma,&
+                                              ec_diag_solver_kp,&
+                                              ec_ls_init,&
+                                              ec_ls_solver,&
+                                              ec_ot_diag_solver
    USE ec_efield_local,                 ONLY: ec_efield_integrals,&
                                               ec_efield_local_operator
-   USE ec_env_types,                    ONLY: energy_correction_type
-   USE ec_external,                     ONLY: ec_ext_energy
-   USE ec_methods,                      ONLY: create_kernel,&
-                                              ec_mos_init
-   USE external_potential_types,        ONLY: get_potential,&
+   USE ec_env_types,                    ONLY: ec_env_potential_release,&
+                                              energy_correction_type
+   USE ec_external,                     ONLY: ec_ext_energy,&
+                                              matrix_r_forces
+   USE ec_methods,                      ONLY: create_kernel
+   USE external_potential_types,        ONLY: all_potential_type,&
+                                              get_potential,&
                                               gth_potential_type,&
                                               sgp_potential_type
+   USE hartree_local_methods,           ONLY: Vh_1c_gg_integrals,&
+                                              init_coulomb_local
+   USE hartree_local_types,             ONLY: hartree_local_create,&
+                                              hartree_local_release,&
+                                              hartree_local_type
    USE hfx_exx,                         ONLY: add_exx_to_rhs,&
                                               calculate_exx
    USE input_constants,                 ONLY: &
-        ec_diagonalization, ec_functional_dc, ec_functional_ext, ec_functional_harris, &
-        ec_matrix_sign, ec_matrix_tc2, ec_matrix_trs4, ec_ot_atomic, ec_ot_diag, ec_ot_gs, &
-        ot_precond_full_single_inverse, ot_precond_solver_default, vdw_pairpot_dftd3, &
-        vdw_pairpot_dftd3bj, xc_vdw_fun_pairpot
+        do_admm_aux_exch_func_none, ec_diagonalization, ec_functional_dc, ec_functional_ext, &
+        ec_functional_harris, ec_matrix_sign, ec_matrix_tc2, ec_matrix_trs4, ec_ot_diag, &
+        vdw_pairpot_dftd3, vdw_pairpot_dftd3bj, xc_vdw_fun_pairpot
    USE input_section_types,             ONLY: section_get_ival,&
                                               section_get_lval,&
+                                              section_vals_duplicate,&
                                               section_vals_get,&
                                               section_vals_get_subs_vals,&
                                               section_vals_type,&
-                                              section_vals_val_get
+                                              section_vals_val_get,&
+                                              section_vals_val_set
    USE kinds,                           ONLY: default_path_length,&
                                               default_string_length,&
                                               dp
+   USE kpoint_io,                       ONLY: get_cell,&
+                                              write_kpoints_file_header
+   USE kpoint_methods,                  ONLY: kpoint_init_cell_index
+   USE kpoint_types,                    ONLY: get_kpoint_info
    USE mao_basis,                       ONLY: mao_generate_basis
-   USE mathlib,                         ONLY: det_3x3
+   USE mathlib,                         ONLY: det_3x3,&
+                                              invmat_symm
    USE message_passing,                 ONLY: mp_para_env_type
    USE molecule_types,                  ONLY: molecule_type
    USE moments_utils,                   ONLY: get_reference_point
+   USE parallel_gemm_api,               ONLY: parallel_gemm
    USE particle_types,                  ONLY: particle_type
+   USE paw_proj_set_types,              ONLY: get_paw_proj_set,&
+                                              paw_proj_set_type
    USE periodic_table,                  ONLY: ptable
    USE physcon,                         ONLY: bohr,&
                                               debye,&
                                               pascal
-   USE preconditioner,                  ONLY: make_preconditioner
-   USE preconditioner_types,            ONLY: destroy_preconditioner,&
-                                              init_preconditioner,&
-                                              preconditioner_type
    USE pw_env_types,                    ONLY: pw_env_get,&
                                               pw_env_type
    USE pw_grid_types,                   ONLY: pw_grid_type
@@ -133,34 +139,37 @@ MODULE energy_corrections
                                               pw_pool_type
    USE pw_types,                        ONLY: pw_c1d_gs_type,&
                                               pw_r3d_rs_type
-   USE qs_atomic_block,                 ONLY: calculate_atomic_block_dm
    USE qs_collocate_density,            ONLY: calculate_rho_elec
    USE qs_core_energies,                ONLY: calculate_ecore_overlap,&
                                               calculate_ptrace
-   USE qs_density_matrices,             ONLY: calculate_density_matrix,&
-                                              calculate_w_matrix
+   USE qs_core_matrices,                ONLY: core_matrices,&
+                                              kinetic_energy_matrix
    USE qs_dispersion_pairpot,           ONLY: calculate_dispersion_pairpot
    USE qs_dispersion_types,             ONLY: qs_dispersion_type
    USE qs_energy_types,                 ONLY: qs_energy_type
    USE qs_environment_types,            ONLY: get_qs_env,&
-                                              qs_environment_type
-   USE qs_force_types,                  ONLY: qs_force_type,&
+                                              qs_environment_type,&
+                                              set_qs_env
+   USE qs_force_types,                  ONLY: allocate_qs_force,&
+                                              deallocate_qs_force,&
+                                              qs_force_type,&
                                               total_qs_force,&
                                               zero_qs_force
+   USE qs_gapw_densities,               ONLY: prepare_gapw_den
    USE qs_integrate_potential,          ONLY: integrate_v_core_rspace,&
                                               integrate_v_rspace
    USE qs_kind_types,                   ONLY: get_qs_kind,&
                                               get_qs_kind_set,&
                                               qs_kind_type
    USE qs_kinetic,                      ONLY: build_kinetic_matrix
+   USE qs_ks_atom,                      ONLY: update_ks_atom
    USE qs_ks_methods,                   ONLY: calc_rho_tot_gspace
-   USE qs_ks_reference,                 ONLY: ks_ref_potential
+   USE qs_ks_reference,                 ONLY: ks_ref_potential,&
+                                              ks_ref_potential_atom
    USE qs_ks_types,                     ONLY: qs_ks_env_type
-   USE qs_mo_methods,                   ONLY: calculate_subspace_eigenvalues,&
-                                              make_basis_sm
-   USE qs_mo_types,                     ONLY: deallocate_mo_set,&
-                                              get_mo_set,&
-                                              mo_set_type
+   USE qs_local_rho_types,              ONLY: local_rho_set_create,&
+                                              local_rho_set_release,&
+                                              local_rho_type
    USE qs_moments,                      ONLY: build_local_moment_matrix
    USE qs_neighbor_list_types,          ONLY: neighbor_list_set_p_type
    USE qs_neighbor_lists,               ONLY: atom2d_build,&
@@ -168,23 +177,34 @@ MODULE energy_corrections
                                               build_neighbor_lists,&
                                               local_atoms_type,&
                                               pair_radius_setup
-   USE qs_ot_eigensolver,               ONLY: ot_eigensolver
+   USE qs_oce_methods,                  ONLY: build_oce_matrices
+   USE qs_oce_types,                    ONLY: allocate_oce_set,&
+                                              create_oce_set,&
+                                              oce_matrix_type
    USE qs_overlap,                      ONLY: build_overlap_matrix
+   USE qs_rho0_ggrid,                   ONLY: integrate_vhg0_rspace,&
+                                              rho0_s_grid_create
+   USE qs_rho0_methods,                 ONLY: init_rho0
+   USE qs_rho_atom_methods,             ONLY: allocate_rho_atom_internals,&
+                                              calculate_rho_atom_coeff
    USE qs_rho_types,                    ONLY: qs_rho_get,&
                                               qs_rho_type
    USE qs_vxc,                          ONLY: qs_vxc_create
+   USE qs_vxc_atom,                     ONLY: calculate_vxc_atom
    USE response_solver,                 ONLY: response_calculation,&
                                               response_force
-   USE rtp_admm_methods,                ONLY: rtp_admm_calc_rho_aux
    USE string_utilities,                ONLY: uppercase
    USE task_list_methods,               ONLY: generate_qs_task_list
    USE task_list_types,                 ONLY: allocate_task_list,&
-                                              deallocate_task_list
+                                              deallocate_task_list,&
+                                              task_list_type
+   USE trexio_utils,                    ONLY: write_trexio
    USE virial_methods,                  ONLY: one_third_sum_diag,&
                                               write_stress_tensor,&
                                               write_stress_tensor_components
    USE virial_types,                    ONLY: symmetrize_virial,&
-                                              virial_type
+                                              virial_type,&
+                                              zero_virial
    USE voronoi_interface,               ONLY: entry_voronoi_or_bqb
 #include "./base/base_uses.f90"
 
@@ -221,19 +241,14 @@ CONTAINS
 
       INTEGER                                            :: handle, unit_nr
       LOGICAL                                            :: my_calc_forces
-      TYPE(cp_logger_type), POINTER                      :: logger
       TYPE(energy_correction_type), POINTER              :: ec_env
       TYPE(qs_energy_type), POINTER                      :: energy
       TYPE(qs_force_type), DIMENSION(:), POINTER         :: ks_force
+      TYPE(virial_type), POINTER                         :: virial
 
       CALL timeset(routineN, handle)
 
-      logger => cp_get_default_logger()
-      IF (logger%para_env%is_source()) THEN
-         unit_nr = cp_logger_get_default_unit_nr(logger, local=.TRUE.)
-      ELSE
-         unit_nr = -1
-      END IF
+      unit_nr = cp_logger_get_default_unit_nr(local=.FALSE.)
 
       CALL cite_reference(Belleflamme2023)
 
@@ -259,6 +274,10 @@ CONTAINS
             ec_env%vhxc = 0.0_dp
             ec_env%edispersion = 0.0_dp
             ec_env%exc_aux_fit = 0.0_dp
+            ec_env%ekTS = 0.0_dp
+            ec_env%exc1 = 0.0_dp
+            ec_env%ehartree_1c = 0.0_dp
+            ec_env%exc1_aux_fit = 0.0_dp
 
             ! Save total energy of reference calculation
             CALL get_qs_env(qs_env, energy=energy)
@@ -271,8 +290,9 @@ CONTAINS
                WRITE (unit_nr, '(T2,A,A,A,A,A)') "!", REPEAT("-", 25), &
                   " Energy Correction Forces ", REPEAT("-", 26), "!"
             END IF
-            CALL get_qs_env(qs_env, force=ks_force)
+            CALL get_qs_env(qs_env, force=ks_force, virial=virial)
             CALL zero_qs_force(ks_force)
+            CALL zero_virial(virial, reset=.FALSE.)
          ELSE
             IF (unit_nr > 0) THEN
                WRITE (unit_nr, '(T2,A,A,A,A,A)') "!", REPEAT("-", 29), &
@@ -330,21 +350,31 @@ CONTAINS
       LOGICAL, INTENT(IN)                                :: calculate_forces
       INTEGER, INTENT(IN)                                :: unit_nr
 
-      INTEGER                                            :: ispin, nspins
-      LOGICAL                                            :: debug_f
-      REAL(KIND=dp)                                      :: exc
+      INTEGER                                            :: ispin, nkind, nspins
+      LOGICAL                                            :: debug_f, gapw, gapw_xc
+      REAL(KIND=dp)                                      :: eps_fit, exc
       TYPE(dft_control_type), POINTER                    :: dft_control
+      TYPE(neighbor_list_set_p_type), DIMENSION(:), &
+         POINTER                                         :: sap_oce
+      TYPE(oce_matrix_type), POINTER                     :: oce
+      TYPE(particle_type), DIMENSION(:), POINTER         :: particle_set
       TYPE(pw_env_type), POINTER                         :: pw_env
       TYPE(pw_pool_type), POINTER                        :: auxbas_pw_pool
+      TYPE(qs_kind_type), DIMENSION(:), POINTER          :: qs_kind_set
 
       IF (ec_env%should_update) THEN
          CALL ec_build_neighborlist(qs_env, ec_env)
+         CALL ec_env_potential_release(ec_env)
+         !
          CALL ks_ref_potential(qs_env, &
                                ec_env%vh_rspace, &
                                ec_env%vxc_rspace, &
                                ec_env%vtau_rspace, &
                                ec_env%vadmm_rspace, &
-                               ec_env%ehartree, exc)
+                               ec_env%ehartree, exc, &
+                               vadmm_tau_rspace=ec_env%vadmm_tau_rspace)
+         CALL ks_ref_potential_atom(qs_env, ec_env%local_rho_set, &
+                                    ec_env%local_rho_set_admm, ec_env%vh_rspace)
 
          SELECT CASE (ec_env%energy_functional)
          CASE (ec_functional_harris)
@@ -353,6 +383,7 @@ CONTAINS
             CALL ec_build_ks_matrix(qs_env, ec_env)
 
             IF (ec_env%mao) THEN
+               CPASSERT(.NOT. ec_env%do_kpoints)
                ! MAO basis
                IF (ASSOCIATED(ec_env%mao_coef)) CALL dbcsr_deallocate_matrix_set(ec_env%mao_coef)
                NULLIFY (ec_env%mao_coef)
@@ -365,7 +396,12 @@ CONTAINS
 
             CALL evaluate_ec_core_matrix_traces(qs_env, ec_env)
 
+            IF (ec_env%write_harris_wfn) THEN
+               CALL harris_wfn_output(qs_env, ec_env, unit_nr)
+            END IF
+
          CASE (ec_functional_dc)
+            CPASSERT(.NOT. ec_env%do_kpoints)
 
             ! Prepare Density-corrected DFT (DC-DFT) calculation
             CALL ec_dc_energy(qs_env, ec_env, calculate_forces=.FALSE.)
@@ -376,6 +412,7 @@ CONTAINS
             CALL ec_build_ks_matrix(qs_env, ec_env)
 
          CASE (ec_functional_ext)
+            CPASSERT(.NOT. ec_env%do_kpoints)
 
             CALL ec_ext_energy(qs_env, ec_env, calculate_forces=.FALSE.)
 
@@ -395,6 +432,23 @@ CONTAINS
 
          debug_f = ec_env%debug_forces .OR. ec_env%debug_stress
 
+         CALL get_qs_env(qs_env=qs_env, dft_control=dft_control)
+         nspins = dft_control%nspins
+         gapw = dft_control%qs_control%gapw
+         gapw_xc = dft_control%qs_control%gapw_xc
+         IF (gapw .OR. gapw_xc) THEN
+            CALL get_qs_env(qs_env=qs_env, nkind=nkind, &
+                            qs_kind_set=qs_kind_set, particle_set=particle_set)
+            NULLIFY (oce, sap_oce)
+            CALL get_qs_env(qs_env=qs_env, oce=oce, sap_oce=sap_oce)
+            CALL create_oce_set(oce)
+            CALL allocate_oce_set(oce, nkind)
+            eps_fit = dft_control%qs_control%gapw_control%eps_fit
+            CALL build_oce_matrices(oce%intac, .TRUE., 1, qs_kind_set, particle_set, &
+                                    sap_oce, eps_fit)
+            CALL set_qs_env(qs_env, oce=oce)
+         END IF
+
          CALL ec_disp(qs_env, ec_env, calculate_forces=.TRUE.)
 
          SELECT CASE (ec_env%energy_functional)
@@ -405,8 +459,14 @@ CONTAINS
                                                  ec_env%matrix_s, &
                                                  ec_env%matrix_w)
             CALL ec_build_ks_matrix_force(qs_env, ec_env)
+            IF (ec_env%debug_external) THEN
+               CALL write_response_interface(qs_env, ec_env)
+               CALL init_response_deriv(qs_env, ec_env)
+            END IF
+
          CASE (ec_functional_dc)
 
+            CPASSERT(.NOT. ec_env%do_kpoints)
             ! Prepare Density-corrected DFT (DC-DFT) calculation
             ! by getting ground-state matrices
             CALL ec_dc_energy(qs_env, ec_env, calculate_forces=.TRUE.)
@@ -416,21 +476,38 @@ CONTAINS
                                                  ec_env%matrix_s, &
                                                  ec_env%matrix_w)
             CALL ec_dc_build_ks_matrix_force(qs_env, ec_env)
+            IF (ec_env%debug_external) THEN
+               CALL write_response_interface(qs_env, ec_env)
+               CALL init_response_deriv(qs_env, ec_env)
+            END IF
 
          CASE (ec_functional_ext)
 
+            CPASSERT(.NOT. ec_env%do_kpoints)
             CALL ec_ext_energy(qs_env, ec_env, calculate_forces=.TRUE.)
+            CALL init_response_deriv(qs_env, ec_env)
+            ! orthogonality force
+            CALL matrix_r_forces(qs_env, ec_env%cpmos, ec_env%mo_occ, &
+                                 ec_env%matrix_w(1, 1)%matrix, unit_nr, &
+                                 ec_env%debug_forces, ec_env%debug_stress)
 
          CASE DEFAULT
             CPABORT("unknown energy correction")
          END SELECT
 
+         IF (ec_env%do_error) THEN
+            ALLOCATE (ec_env%cpref(nspins))
+            DO ispin = 1, nspins
+               CALL cp_fm_create(ec_env%cpref(ispin), ec_env%cpmos(ispin)%matrix_struct)
+               CALL cp_fm_to_fm(ec_env%cpmos(ispin), ec_env%cpref(ispin))
+            END DO
+         END IF
+
          CALL response_calculation(qs_env, ec_env)
 
          ! Allocate response density on real space grid for use in properties
          ! Calculated in response_force
-         CALL get_qs_env(qs_env=qs_env, dft_control=dft_control, pw_env=pw_env)
-         nspins = dft_control%nspins
+         CALL get_qs_env(qs_env=qs_env, pw_env=pw_env)
 
          CPASSERT(ASSOCIATED(pw_env))
          CALL pw_env_get(pw_env, auxbas_pw_pool=auxbas_pw_pool)
@@ -444,6 +521,7 @@ CONTAINS
                              vxc_rspace=ec_env%vxc_rspace, &
                              vtau_rspace=ec_env%vtau_rspace, &
                              vadmm_rspace=ec_env%vadmm_rspace, &
+                             vadmm_tau_rspace=ec_env%vadmm_tau_rspace, &
                              matrix_hz=ec_env%matrix_hz, &
                              matrix_pz=ec_env%matrix_z, &
                              matrix_pz_admm=ec_env%z_admm, &
@@ -455,7 +533,13 @@ CONTAINS
                              p_env=ec_env%p_env, &
                              debug=debug_f)
 
+         CALL output_response_deriv(qs_env, ec_env, unit_nr)
+
          CALL ec_properties(qs_env, ec_env)
+
+         IF (ec_env%do_error) THEN
+            CALL response_force_error(qs_env, ec_env, unit_nr)
+         END IF
 
          ! Deallocate Harris density and response density on grid
          IF (ASSOCIATED(ec_env%rhoout_r)) THEN
@@ -485,6 +569,127 @@ CONTAINS
       END IF
 
    END SUBROUTINE energy_correction_low
+
+! **************************************************************************************************
+!> \brief Output response information to TREXIO file (for testing external method read in)
+!> \param qs_env ...
+!> \param ec_env ...
+!> \author JHU
+! **************************************************************************************************
+   SUBROUTINE write_response_interface(qs_env, ec_env)
+      TYPE(qs_environment_type), POINTER                 :: qs_env
+      TYPE(energy_correction_type), POINTER              :: ec_env
+
+      TYPE(section_vals_type), POINTER                   :: section, trexio_section
+
+      section => section_vals_get_subs_vals(qs_env%input, "DFT%PRINT%TREXIO")
+      NULLIFY (trexio_section)
+      CALL section_vals_duplicate(section, trexio_section)
+      CALL section_vals_val_set(trexio_section, "FILENAME", c_val=ec_env%exresp_fn)
+      CALL section_vals_val_set(trexio_section, "CARTESIAN", l_val=.FALSE.)
+      CALL write_trexio(qs_env, trexio_section, ec_env%matrix_hz)
+
+   END SUBROUTINE write_response_interface
+
+! **************************************************************************************************
+!> \brief Initialize arrays for response derivatives
+!> \param qs_env ...
+!> \param ec_env ...
+!> \author JHU
+! **************************************************************************************************
+   SUBROUTINE init_response_deriv(qs_env, ec_env)
+      TYPE(qs_environment_type), POINTER                 :: qs_env
+      TYPE(energy_correction_type), POINTER              :: ec_env
+
+      INTEGER                                            :: natom
+      TYPE(atomic_kind_type), DIMENSION(:), POINTER      :: atomic_kind_set
+      TYPE(qs_force_type), DIMENSION(:), POINTER         :: force
+      TYPE(virial_type), POINTER                         :: virial
+
+      CALL get_qs_env(qs_env, natom=natom)
+      ALLOCATE (ec_env%rf(3, natom))
+      ec_env%rf = 0.0_dp
+      ec_env%rpv = 0.0_dp
+      CALL get_qs_env(qs_env, force=force, virial=virial)
+
+      CALL get_qs_env(qs_env, atomic_kind_set=atomic_kind_set)
+      CALL total_qs_force(ec_env%rf, force, atomic_kind_set)
+
+      IF (virial%pv_availability .AND. (.NOT. virial%pv_numer)) THEN
+         ec_env%rpv = virial%pv_virial
+      END IF
+
+   END SUBROUTINE init_response_deriv
+
+! **************************************************************************************************
+!> \brief Write the reponse forces to file
+!> \param qs_env ...
+!> \param ec_env ...
+!> \param unit_nr ...
+!> \author JHU
+! **************************************************************************************************
+   SUBROUTINE output_response_deriv(qs_env, ec_env, unit_nr)
+      TYPE(qs_environment_type), POINTER                 :: qs_env
+      TYPE(energy_correction_type), POINTER              :: ec_env
+      INTEGER, INTENT(IN)                                :: unit_nr
+
+      CHARACTER(LEN=default_string_length)               :: unit_string
+      INTEGER                                            :: funit, ia, natom
+      REAL(KIND=dp)                                      :: evol, fconv
+      REAL(KIND=dp), ALLOCATABLE, DIMENSION(:, :)        :: ftot
+      TYPE(atomic_kind_type), DIMENSION(:), POINTER      :: atomic_kind_set
+      TYPE(cell_type), POINTER                           :: cell
+      TYPE(mp_para_env_type), POINTER                    :: para_env
+      TYPE(particle_type), DIMENSION(:), POINTER         :: particle_set
+      TYPE(qs_force_type), DIMENSION(:), POINTER         :: force
+      TYPE(virial_type), POINTER                         :: virial
+
+      IF (ASSOCIATED(ec_env%rf)) THEN
+         CALL get_qs_env(qs_env, natom=natom)
+         ALLOCATE (ftot(3, natom))
+         ftot = 0.0_dp
+         CALL get_qs_env(qs_env, force=force, virial=virial, para_env=para_env)
+
+         CALL get_qs_env(qs_env, atomic_kind_set=atomic_kind_set)
+         CALL total_qs_force(ftot, force, atomic_kind_set)
+         ec_env%rf(1:3, 1:natom) = ftot(1:3, 1:natom) - ec_env%rf(1:3, 1:natom)
+         CALL para_env%sum(ec_env%rf)
+         DEALLOCATE (ftot)
+
+         IF (virial%pv_availability .AND. (.NOT. virial%pv_numer)) THEN
+            ec_env%rpv = virial%pv_virial - ec_env%rpv
+            CALL para_env%sum(ec_env%rpv)
+            ! Volume terms
+            evol = ec_env%exc + ec_env%exc_aux_fit + 2.0_dp*ec_env%ehartree
+            ec_env%rpv(1, 1) = ec_env%rpv(1, 1) - evol
+            ec_env%rpv(2, 2) = ec_env%rpv(2, 2) - evol
+            ec_env%rpv(3, 3) = ec_env%rpv(3, 3) - evol
+         END IF
+
+         CALL get_qs_env(qs_env, particle_set=particle_set, cell=cell)
+         ! Conversion factor a.u. -> GPa
+         unit_string = "GPa"
+         fconv = cp_unit_from_cp2k(1.0_dp/cell%deth, TRIM(unit_string))
+         IF (unit_nr > 0) THEN
+            WRITE (unit_nr, '(/,T2,A)') "Write EXTERNAL Response Derivative: "//TRIM(ec_env%exresult_fn)
+
+            CALL open_file(ec_env%exresult_fn, file_status="REPLACE", file_form="FORMATTED", &
+                           file_action="WRITE", unit_number=funit)
+            WRITE (funit, "(T8,A,T58,A)") "COORDINATES [Bohr]", "RESPONSE FORCES [Hartree/Bohr]"
+            DO ia = 1, natom
+               WRITE (funit, "(2(3F15.8,5x))") particle_set(ia)%r(1:3), ec_env%rf(1:3, ia)
+            END DO
+            WRITE (funit, *)
+            WRITE (funit, "(T8,A,T58,A)") "CELL [Bohr]", "RESPONSE PRESSURE [GPa]"
+            DO ia = 1, 3
+               WRITE (funit, "(3F15.8,5x,3F15.8)") cell%hmat(ia, 1:3), -fconv*ec_env%rpv(ia, 1:3)
+            END DO
+
+            CALL close_file(funit)
+         END IF
+      END IF
+
+   END SUBROUTINE output_response_deriv
 
 ! **************************************************************************************************
 !> \brief Calculates the traces of the core matrices and the density matrix.
@@ -540,6 +745,7 @@ CONTAINS
       INTEGER                                            :: handle, ispin, nspins
       TYPE(dbcsr_p_type), DIMENSION(:, :), POINTER       :: matrix_h, matrix_p, matrix_s, matrix_w
       TYPE(dft_control_type), POINTER                    :: dft_control
+      TYPE(qs_energy_type), POINTER                      :: energy
       TYPE(qs_ks_env_type), POINTER                      :: ks_env
       TYPE(qs_rho_type), POINTER                         :: rho
 
@@ -602,6 +808,10 @@ CONTAINS
 
       END IF
 
+      ! Electronic entropy term
+      CALL get_qs_env(qs_env=qs_env, energy=energy)
+      ec_env%ekTS = energy%ktS
+
       ! External field (nonperiodic case)
       ec_env%efield_nuclear = 0.0_dp
       ec_env%efield_elec = 0.0_dp
@@ -626,24 +836,27 @@ CONTAINS
 
       CHARACTER(LEN=*), PARAMETER :: routineN = 'ec_dc_build_ks_matrix_force'
 
-      CHARACTER(LEN=default_string_length)               :: unit_string
+      CHARACTER(LEN=default_string_length)               :: basis_type, unit_string
       INTEGER                                            :: handle, i, iounit, ispin, natom, nspins
       LOGICAL                                            :: debug_forces, debug_stress, do_ec_hfx, &
-                                                            use_virial
+                                                            gapw, gapw_xc, use_virial
       REAL(dp)                                           :: dummy_real, dummy_real2(2), ehartree, &
-                                                            eovrl, exc, fconv
+                                                            ehartree_1c, eovrl, exc, exc1, fconv
       REAL(dp), ALLOCATABLE, DIMENSION(:, :)             :: ftot
       REAL(dp), DIMENSION(3)                             :: fodeb, fodeb2
       REAL(KIND=dp), DIMENSION(3, 3)                     :: h_stress, pv_loc, stdeb, sttot
+      TYPE(admm_type), POINTER                           :: admm_env
       TYPE(atomic_kind_type), DIMENSION(:), POINTER      :: atomic_kind_set
       TYPE(cell_type), POINTER                           :: cell
-      TYPE(cp_logger_type), POINTER                      :: logger
-      TYPE(dbcsr_p_type), DIMENSION(:), POINTER          :: matrix_ks, matrix_s, scrm
+      TYPE(dbcsr_p_type), DIMENSION(:), POINTER          :: matrix_s, scrm
       TYPE(dbcsr_p_type), DIMENSION(:, :), POINTER       :: matrix_p
       TYPE(dft_control_type), POINTER                    :: dft_control
+      TYPE(hartree_local_type), POINTER                  :: hartree_local
+      TYPE(local_rho_type), POINTER                      :: local_rho_set
       TYPE(mp_para_env_type), POINTER                    :: para_env
       TYPE(neighbor_list_set_p_type), DIMENSION(:), &
          POINTER                                         :: sab_orb
+      TYPE(oce_matrix_type), POINTER                     :: oce
       TYPE(pw_c1d_gs_type)                               :: rho_tot_gspace, v_hartree_gspace
       TYPE(pw_env_type), POINTER                         :: pw_env
       TYPE(pw_grid_type), POINTER                        :: pw_grid
@@ -653,9 +866,11 @@ CONTAINS
       TYPE(pw_r3d_rs_type), DIMENSION(:), POINTER        :: rho_r, v_rspace, v_rspace_in, &
                                                             v_tau_rspace
       TYPE(qs_force_type), DIMENSION(:), POINTER         :: force
+      TYPE(qs_kind_type), DIMENSION(:), POINTER          :: qs_kind_set
       TYPE(qs_ks_env_type), POINTER                      :: ks_env
-      TYPE(qs_rho_type), POINTER                         :: rho
+      TYPE(qs_rho_type), POINTER                         :: rho, rho1, rho_struct, rho_xc
       TYPE(section_vals_type), POINTER                   :: ec_hfx_sections
+      TYPE(task_list_type), POINTER                      :: task_list
       TYPE(virial_type), POINTER                         :: virial
 
       CALL timeset(routineN, handle)
@@ -663,26 +878,20 @@ CONTAINS
       debug_forces = ec_env%debug_forces
       debug_stress = ec_env%debug_stress
 
-      logger => cp_get_default_logger()
-      IF (logger%para_env%is_source()) THEN
-         iounit = cp_logger_get_default_unit_nr(logger, local=.TRUE.)
-      ELSE
-         iounit = -1
-      END IF
+      iounit = cp_logger_get_default_unit_nr(local=.FALSE.)
 
-      NULLIFY (atomic_kind_set, cell, dft_control, force, ks_env, matrix_ks, &
+      NULLIFY (atomic_kind_set, cell, dft_control, force, ks_env, &
                matrix_p, matrix_s, para_env, pw_env, rho, sab_orb, virial)
       CALL get_qs_env(qs_env=qs_env, &
                       cell=cell, &
                       dft_control=dft_control, &
                       force=force, &
                       ks_env=ks_env, &
-                      matrix_ks=matrix_ks, &
                       matrix_s=matrix_s, &
                       para_env=para_env, &
                       pw_env=pw_env, &
                       rho=rho, &
-                      sab_orb=sab_orb, &
+                      rho_xc=rho_xc, &
                       virial=virial)
       CPASSERT(ASSOCIATED(pw_env))
 
@@ -694,8 +903,42 @@ CONTAINS
          sttot = virial%pv_virial
       END IF
 
+      ! check for GAPW/GAPW_XC
+      gapw = dft_control%qs_control%gapw
+      gapw_xc = dft_control%qs_control%gapw_xc
+      IF (gapw_xc) THEN
+         CPASSERT(ASSOCIATED(rho_xc))
+      END IF
+      IF (gapw .OR. gapw_xc) THEN
+         IF (use_virial) THEN
+            CPABORT("DC-DFT + GAPW + Stress NYA")
+         END IF
+      END IF
+
       ! Get density matrix of reference calculation
       CALL qs_rho_get(rho, rho_ao_kp=matrix_p)
+
+      NULLIFY (hartree_local, local_rho_set)
+      IF (gapw .OR. gapw_xc) THEN
+         CALL get_qs_env(qs_env, &
+                         atomic_kind_set=atomic_kind_set, &
+                         qs_kind_set=qs_kind_set)
+         CALL local_rho_set_create(local_rho_set)
+         CALL allocate_rho_atom_internals(local_rho_set%rho_atom_set, atomic_kind_set, &
+                                          qs_kind_set, dft_control, para_env)
+         IF (gapw) THEN
+            CALL get_qs_env(qs_env, natom=natom)
+            CALL init_rho0(local_rho_set, qs_env, dft_control%qs_control%gapw_control)
+            CALL rho0_s_grid_create(pw_env, local_rho_set%rho0_mpole)
+            CALL hartree_local_create(hartree_local)
+            CALL init_coulomb_local(hartree_local, natom)
+         END IF
+
+         CALL get_qs_env(qs_env=qs_env, oce=oce, sab_orb=sab_orb)
+         CALL calculate_rho_atom_coeff(qs_env, matrix_p, local_rho_set%rho_atom_set, &
+                                       qs_kind_set, oce, sab_orb, para_env)
+         CALL prepare_gapw_den(qs_env, local_rho_set, do_rho0=gapw)
+      END IF
 
       NULLIFY (auxbas_pw_pool, poisson_env)
       ! gets the tmp grids
@@ -772,8 +1015,31 @@ CONTAINS
       IF (use_virial) virial%pv_calculate = .TRUE.
 
       ! Exchange-correlation potential
-      CALL qs_vxc_create(ks_env=ks_env, rho_struct=rho, xc_section=ec_env%xc_section, &
+      IF (gapw_xc) THEN
+         CALL get_qs_env(qs_env=qs_env, rho_xc=rho_struct)
+      ELSE
+         CALL get_qs_env(qs_env=qs_env, rho=rho_struct)
+      END IF
+      CALL qs_vxc_create(ks_env=ks_env, rho_struct=rho_struct, xc_section=ec_env%xc_section, &
                          vxc_rho=v_rspace, vxc_tau=v_tau_rspace, exc=exc, just_energy=.FALSE.)
+
+      IF (debug_forces) fodeb(1:3) = force(1)%rho_elec(1:3, 1)
+      IF (debug_stress .AND. use_virial) stdeb = virial%pv_virial
+      !
+      NULLIFY (rho1)
+      CALL accint_weight_force(qs_env, rho_struct, rho1, 0, ec_env%xc_section)
+      !
+      IF (debug_forces) THEN
+         fodeb(1:3) = force(1)%rho_elec(1:3, 1) - fodeb(1:3)
+         CALL para_env%sum(fodeb)
+         IF (iounit > 0) WRITE (iounit, "(T3,A,T33,3F16.8)") "DEBUG:: Fxc*dw        ", fodeb
+      END IF
+      IF (debug_stress .AND. use_virial) THEN
+         stdeb = fconv*(virial%pv_virial - stdeb)
+         CALL para_env%sum(stdeb)
+         IF (iounit > 0) WRITE (UNIT=iounit, FMT="(T2,A,T41,2(1X,ES19.11))") &
+            'STRESS| INT Fxc*dw        ', one_third_sum_diag(stdeb), det_3x3(stdeb)
+      END IF
 
       IF (.NOT. ASSOCIATED(v_rspace)) THEN
          ALLOCATE (v_rspace(nspins))
@@ -809,17 +1075,27 @@ CONTAINS
       DO ispin = 1, nspins
          ! v_xc[n_in]_GS
          CALL pw_transfer(ec_env%vxc_rspace(ispin), v_rspace_in(ispin))
-         ! add v_H[n_in]
-         CALL pw_axpy(ec_env%vh_rspace, v_rspace_in(ispin))
+         IF (.NOT. gapw_xc) THEN
+            ! add v_H[n_in] this is not really needed, see further down
+            !               but we do it for historical reasons
+            ! for gapw_xc we have to skip it as it is not integrated on the same grid
+            CALL pw_axpy(ec_env%vh_rspace, v_rspace_in(ispin))
+         END IF
       END DO
-
-!------------------------------------------------
 
       ! If hybrid functional in DC-DFT
       ec_hfx_sections => section_vals_get_subs_vals(qs_env%input, "DFT%ENERGY_CORRECTION%XC%HF")
       CALL section_vals_get(ec_hfx_sections, explicit=do_ec_hfx)
 
       IF (do_ec_hfx) THEN
+
+         IF ((gapw .OR. gapw_xc) .AND. ec_env%do_ec_admm) THEN
+            CALL get_qs_env(qs_env, admm_env=admm_env)
+            IF (admm_env%aux_exch_func /= do_admm_aux_exch_func_none) THEN
+               ! define proper xc_section
+               CPABORT("GAPW HFX ADMM + Energy Correction NYA")
+            END IF
+         END IF
 
          IF (debug_forces) fodeb(1:3) = force(1)%fock_4c(1:3, 1)
          IF (debug_forces) fodeb2(1:3) = force(1)%overlap_admm(1:3, 1)
@@ -858,12 +1134,17 @@ CONTAINS
 
       END IF
 
-!------------------------------------------------
-
       ! Stress-tensor contribution derivative of integrand
-      ! int v_Hxc[n^în]*n^out
+      ! int v_Hxc[n_in]*n_out
       IF (use_virial) THEN
          pv_loc = virial%pv_virial
+      END IF
+
+      basis_type = "HARRIS"
+      IF (gapw .OR. gapw_xc) THEN
+         task_list => ec_env%task_list_soft
+      ELSE
+         task_list => ec_env%task_list
       END IF
 
       IF (debug_forces) fodeb(1:3) = force(1)%rho_elec(1:3, 1)
@@ -872,15 +1153,34 @@ CONTAINS
       DO ispin = 1, nspins
          ! Add v_H[n_in] + v_xc[n_in] = v_rspace
          CALL pw_scale(v_rspace(ispin), v_rspace(ispin)%pw_grid%dvol)
-         CALL pw_axpy(v_hartree_rspace, v_rspace(ispin))
-         ! integrate over potential <a|V|b>
-         CALL integrate_v_rspace(v_rspace=v_rspace(ispin), &
-                                 hmat=scrm(ispin), &
-                                 pmat=matrix_p(ispin, 1), &
-                                 qs_env=qs_env, &
-                                 calculate_forces=.TRUE., &
-                                 basis_type="HARRIS", &
-                                 task_list_external=ec_env%task_list)
+         IF (gapw_xc) THEN
+            ! integrate over potential <a|Vxc|b>
+            CALL integrate_v_rspace(v_rspace=v_rspace(ispin), &
+                                    hmat=scrm(ispin), &
+                                    pmat=matrix_p(ispin, 1), &
+                                    qs_env=qs_env, &
+                                    calculate_forces=.TRUE., &
+                                    basis_type=basis_type, &
+                                    task_list_external=task_list)
+            ! integrate over potential <a|Vh|b>
+            CALL integrate_v_rspace(v_rspace=v_hartree_rspace, &
+                                    hmat=scrm(ispin), &
+                                    pmat=matrix_p(ispin, 1), &
+                                    qs_env=qs_env, &
+                                    calculate_forces=.TRUE., &
+                                    basis_type=basis_type, &
+                                    task_list_external=ec_env%task_list)
+         ELSE
+            CALL pw_axpy(v_hartree_rspace, v_rspace(ispin))
+            ! integrate over potential <a|V|b>
+            CALL integrate_v_rspace(v_rspace=v_rspace(ispin), &
+                                    hmat=scrm(ispin), &
+                                    pmat=matrix_p(ispin, 1), &
+                                    qs_env=qs_env, &
+                                    calculate_forces=.TRUE., &
+                                    basis_type=basis_type, &
+                                    task_list_external=task_list)
+         END IF
       END DO
 
       IF (debug_forces) THEN
@@ -907,8 +1207,8 @@ CONTAINS
                                     qs_env=qs_env, &
                                     calculate_forces=.TRUE., &
                                     compute_tau=.TRUE., &
-                                    basis_type="HARRIS", &
-                                    task_list_external=ec_env%task_list)
+                                    basis_type=basis_type, &
+                                    task_list_external=task_list)
          END DO
 
          IF (debug_forces) THEN
@@ -921,6 +1221,38 @@ CONTAINS
             CALL para_env%sum(stdeb)
             IF (iounit > 0) WRITE (UNIT=iounit, FMT="(T2,A,T41,2(1X,ES19.11))") &
                'STRESS| INT Pout*dVhxc_tau   ', one_third_sum_diag(stdeb), det_3x3(stdeb)
+         END IF
+      END IF
+
+      IF (gapw .OR. gapw_xc) THEN
+         exc1 = 0.0_dp
+         CALL calculate_vxc_atom(qs_env, .FALSE., exc1, &
+                                 rho_atom_set_external=local_rho_set%rho_atom_set, &
+                                 xc_section_external=ec_env%xc_section)
+      END IF
+      IF (gapw) THEN
+         IF (debug_forces) fodeb(1:3) = force(1)%g0s_Vh_elec(1:3, 1)
+         CALL integrate_vhg0_rspace(qs_env, v_hartree_rspace, para_env, &
+                                    calculate_forces=.TRUE., local_rho_set=local_rho_set)
+         IF (debug_forces) THEN
+            fodeb(1:3) = force(1)%g0s_Vh_elec(1:3, 1) - fodeb(1:3)
+            CALL para_env%sum(fodeb)
+            IF (iounit > 0) WRITE (iounit, "(T3,A,T33,3F16.8)") "DEBUG:: P*g0s_Vh_elec ", fodeb
+         END IF
+         ehartree_1c = 0.0_dp
+         CALL Vh_1c_gg_integrals(qs_env, ehartree_1c, hartree_local%ecoul_1c, local_rho_set, &
+                                 para_env, tddft=.FALSE., core_2nd=.FALSE.)
+      END IF
+
+      IF (gapw .OR. gapw_xc) THEN
+         ! Single atom contributions in the KS matrix ***
+         IF (debug_forces) fodeb(1:3) = force(1)%vhxc_atom(1:3, 1)
+         CALL update_ks_atom(qs_env, scrm, matrix_p, forces=.TRUE., &
+                             rho_atom_external=local_rho_set%rho_atom_set)
+         IF (debug_forces) THEN
+            fodeb(1:3) = force(1)%vhxc_atom(1:3, 1) - fodeb(1:3)
+            CALL para_env%sum(fodeb)
+            IF (iounit > 0) WRITE (iounit, "(T3,A,T33,3F16.8)") "DEBUG:: P*vhxc_atom ", fodeb
          END IF
       END IF
 
@@ -941,7 +1273,7 @@ CONTAINS
       !
       ! with v_Hxc[n] = v_H[n] + v_xc[n]
       !
-      ! Actually v_H[n_in] same for DC and GS, just there for convenience
+      ! Actually v_H[n_in] same for DC and GS, just there for convenience (v_H skipped for GAPW_XC)
       !          v_xc[n_in]_GS = 0 if GS is HF BUT =/0 if hybrid
       !          so, we keep this general form
 
@@ -966,8 +1298,8 @@ CONTAINS
                                  pmat=matrix_p(ispin, 1), &
                                  qs_env=qs_env, &
                                  calculate_forces=.FALSE., &
-                                 basis_type="HARRIS", &
-                                 task_list_external=ec_env%task_list)
+                                 basis_type=basis_type, &
+                                 task_list_external=task_list)
       END DO
 
       ! Check if mGGA functionals are used
@@ -993,9 +1325,19 @@ CONTAINS
                                     pmat=matrix_p(ispin, 1), &
                                     qs_env=qs_env, &
                                     calculate_forces=.FALSE., compute_tau=.TRUE., &
-                                    basis_type="HARRIS", &
-                                    task_list_external=ec_env%task_list)
+                                    basis_type=basis_type, &
+                                    task_list_external=task_list)
          END DO
+      END IF
+
+      IF (gapw .OR. gapw_xc) THEN
+         ! Single atom contributions in the KS matrix ***
+         ! DC-DFT
+         CALL update_ks_atom(qs_env, ec_env%matrix_hz, matrix_p, .FALSE., &
+                             rho_atom_external=local_rho_set%rho_atom_set, kintegral=1.0_dp)
+         ! Ref
+         CALL update_ks_atom(qs_env, ec_env%matrix_hz, matrix_p, .FALSE., &
+                             rho_atom_external=ec_env%local_rho_set%rho_atom_set, kintegral=-1.0_dp)
       END IF
 
       ! Need to also subtract HFX contribution of reference calculation from ec_env%matrix_hz
@@ -1034,6 +1376,14 @@ CONTAINS
          DEALLOCATE (ftot)
          CALL para_env%sum(fodeb)
          IF (iounit > 0) WRITE (iounit, "(T3,A,T33,3F16.8)") "DEBUG:: Force Explicit", fodeb
+      END IF
+
+      ! return gapw arrays
+      IF (gapw .OR. gapw_xc) THEN
+         CALL local_rho_set_release(local_rho_set)
+      END IF
+      IF (gapw) THEN
+         CALL hartree_local_release(hartree_local)
       END IF
 
       ! return pw grids
@@ -1135,10 +1485,13 @@ CONTAINS
       TYPE(energy_correction_type), POINTER              :: ec_env
       LOGICAL, INTENT(IN)                                :: calculate_forces
 
-      REAL(KIND=dp)                                      :: edisp
+      REAL(KIND=dp)                                      :: edisp, egcp
 
+      egcp = 0.0_dp
       CALL calculate_dispersion_pairpot(qs_env, ec_env%dispersion_env, edisp, calculate_forces)
-      IF (.NOT. calculate_forces) ec_env%edispersion = ec_env%edispersion + edisp
+      IF (.NOT. calculate_forces) THEN
+         ec_env%edispersion = ec_env%edispersion + edisp + egcp
+      END IF
 
    END SUBROUTINE ec_disp
 
@@ -1155,23 +1508,22 @@ CONTAINS
 
       CHARACTER(LEN=*), PARAMETER :: routineN = 'ec_build_core_hamiltonian'
 
-      INTEGER                                            :: handle, nder, nimages
-      INTEGER, DIMENSION(:, :, :), POINTER               :: cell_to_index
+      CHARACTER(LEN=default_string_length)               :: basis_type
+      INTEGER                                            :: handle, img, nder, nhfimg, nimages
       LOGICAL                                            :: calculate_forces, use_virial
-      REAL(KIND=dp)                                      :: eps_ppnl
       TYPE(atomic_kind_type), DIMENSION(:), POINTER      :: atomic_kind_set
+      TYPE(dbcsr_type), POINTER                          :: smat
       TYPE(dft_control_type), POINTER                    :: dft_control
       TYPE(neighbor_list_set_p_type), DIMENSION(:), &
          POINTER                                         :: sab_orb, sac_ae, sac_ppl, sap_ppnl
       TYPE(particle_type), DIMENSION(:), POINTER         :: particle_set
-      TYPE(qs_force_type), DIMENSION(:), POINTER         :: force
       TYPE(qs_kind_type), DIMENSION(:), POINTER          :: qs_kind_set
       TYPE(qs_ks_env_type), POINTER                      :: ks_env
-      TYPE(virial_type), POINTER                         :: virial
 
       CALL timeset(routineN, handle)
 
-      NULLIFY (atomic_kind_set, cell_to_index, dft_control, ks_env, particle_set, qs_kind_set, virial)
+      NULLIFY (atomic_kind_set, dft_control, ks_env, particle_set, &
+               qs_kind_set)
 
       CALL get_qs_env(qs_env=qs_env, &
                       atomic_kind_set=atomic_kind_set, &
@@ -1198,57 +1550,43 @@ CONTAINS
       ! get neighbor lists, we need the full sab_orb list from the ec_env
       NULLIFY (sab_orb, sac_ae, sac_ppl, sap_ppnl)
       sab_orb => ec_env%sab_orb
+      sac_ae => ec_env%sac_ae
       sac_ppl => ec_env%sac_ppl
       sap_ppnl => ec_env%sap_ppnl
+
+      basis_type = "HARRIS"
 
       nder = 0
       ! Overlap and kinetic energy matrices
       CALL build_overlap_matrix(ks_env, matrixkp_s=ec_env%matrix_s, &
                                 matrix_name="OVERLAP MATRIX", &
-                                basis_type_a="HARRIS", &
-                                basis_type_b="HARRIS", &
-                                sab_nl=sab_orb)
+                                basis_type_a=basis_type, &
+                                basis_type_b=basis_type, &
+                                sab_nl=sab_orb, ext_kpoints=ec_env%kpoints)
       CALL build_kinetic_matrix(ks_env, matrixkp_t=ec_env%matrix_t, &
                                 matrix_name="KINETIC ENERGY MATRIX", &
-                                basis_type="HARRIS", &
-                                sab_nl=sab_orb)
+                                basis_type=basis_type, &
+                                sab_nl=sab_orb, ext_kpoints=ec_env%kpoints)
 
       ! initialize H matrix
-      CALL dbcsr_allocate_matrix_set(ec_env%matrix_h, 1, 1)
-      ALLOCATE (ec_env%matrix_h(1, 1)%matrix)
-      CALL dbcsr_create(ec_env%matrix_h(1, 1)%matrix, template=ec_env%matrix_s(1, 1)%matrix)
-      CALL cp_dbcsr_alloc_block_from_nbl(ec_env%matrix_h(1, 1)%matrix, sab_orb)
+      nhfimg = SIZE(ec_env%matrix_s, 2)
+      CALL dbcsr_allocate_matrix_set(ec_env%matrix_h, 1, nhfimg)
+      DO img = 1, nhfimg
+         ALLOCATE (ec_env%matrix_h(1, img)%matrix)
+         smat => ec_env%matrix_s(1, img)%matrix
+         CALL dbcsr_create(ec_env%matrix_h(1, img)%matrix, template=smat)
+         CALL cp_dbcsr_alloc_block_from_nbl(ec_env%matrix_h(1, img)%matrix, sab_orb)
+      END DO
 
       ! add kinetic energy
-      CALL dbcsr_copy(ec_env%matrix_h(1, 1)%matrix, ec_env%matrix_t(1, 1)%matrix, &
-                      keep_sparsity=.TRUE., name="CORE HAMILTONIAN MATRIX")
+      DO img = 1, nhfimg
+         CALL dbcsr_copy(ec_env%matrix_h(1, img)%matrix, ec_env%matrix_t(1, img)%matrix, &
+                         keep_sparsity=.TRUE., name="CORE HAMILTONIAN MATRIX")
+      END DO
 
-      ! Possible AE contributions (also ECP)
-      IF (ASSOCIATED(sac_ae)) THEN
-         CPABORT("ECP/AE not available for energy corrections")
-         ! missig code: sac_ae has to bee calculated and stored in ec_env
-         ! build_core_ae: needs functionality to set the basis type at input
-         CALL build_core_ae(ec_env%matrix_h, ec_env%matrix_p, force, &
-                            virial, calculate_forces, use_virial, nder, &
-                            qs_kind_set, atomic_kind_set, particle_set, sab_orb, sac_ae, &
-                            nimages, cell_to_index)
-      END IF
-      ! compute the ppl contribution to the core hamiltonian
-      IF (ASSOCIATED(sac_ppl)) THEN
-         CALL build_core_ppl(ec_env%matrix_h, ec_env%matrix_p, force, &
-                             virial, calculate_forces, use_virial, nder, &
-                             qs_kind_set, atomic_kind_set, particle_set, sab_orb, sac_ppl, &
-                             nimages, cell_to_index, "HARRIS")
-      END IF
-
-      ! compute the ppnl contribution to the core hamiltonian ***
-      eps_ppnl = dft_control%qs_control%eps_ppnl
-      IF (ASSOCIATED(sap_ppnl)) THEN
-         CALL build_core_ppnl(ec_env%matrix_h, ec_env%matrix_p, force, &
-                              virial, calculate_forces, use_virial, nder, &
-                              qs_kind_set, atomic_kind_set, particle_set, sab_orb, sap_ppnl, &
-                              eps_ppnl, nimages, cell_to_index, "HARRIS")
-      END IF
+      CALL core_matrices(qs_env, ec_env%matrix_h, ec_env%matrix_p, calculate_forces, nder, &
+                         ec_env=ec_env, ec_env_matrices=.TRUE., ext_kpoints=ec_env%kpoints, &
+                         basis_type=basis_type)
 
       ! External field (nonperiodic case)
       ec_env%efield_nuclear = 0.0_dp
@@ -1274,53 +1612,70 @@ CONTAINS
       CHARACTER(LEN=*), PARAMETER :: routineN = 'ec_build_ks_matrix'
 
       CHARACTER(LEN=default_string_length)               :: headline
-      INTEGER                                            :: handle, iounit, ispin, nspins
+      INTEGER                                            :: handle, img, iounit, ispin, natom, &
+                                                            nhfimg, nimages, nspins
       LOGICAL                                            :: calculate_forces, &
                                                             do_adiabatic_rescaling, do_ec_hfx, &
-                                                            hfx_treat_lsd_in_core, use_virial
-      REAL(dp)                                           :: dummy_real, dummy_real2(2), eexc, evhxc, &
-                                                            t3
-      TYPE(cp_logger_type), POINTER                      :: logger
-      TYPE(dbcsr_p_type), DIMENSION(:), POINTER          :: ks_mat
+                                                            gapw, gapw_xc, hfx_treat_lsd_in_core, &
+                                                            use_virial
+      REAL(dp)                                           :: dummy_real, dummy_real2(2), eexc, eh1c, &
+                                                            evhxc, exc1, t3
+      TYPE(admm_type), POINTER                           :: admm_env
+      TYPE(atomic_kind_type), DIMENSION(:), POINTER      :: atomic_kind_set
+      TYPE(dbcsr_p_type), DIMENSION(:), POINTER          :: ks_mat, ps_mat
+      TYPE(dbcsr_p_type), DIMENSION(:, :), POINTER       :: rho_ao_kp
+      TYPE(dbcsr_type), POINTER                          :: smat
       TYPE(dft_control_type), POINTER                    :: dft_control
+      TYPE(hartree_local_type), POINTER                  :: hartree_local
+      TYPE(local_rho_type), POINTER                      :: local_rho_set_ec
+      TYPE(mp_para_env_type), POINTER                    :: para_env
+      TYPE(neighbor_list_set_p_type), DIMENSION(:), &
+         POINTER                                         :: sab
+      TYPE(oce_matrix_type), POINTER                     :: oce
       TYPE(pw_env_type), POINTER                         :: pw_env
       TYPE(pw_pool_type), POINTER                        :: auxbas_pw_pool
       TYPE(pw_r3d_rs_type), DIMENSION(:), POINTER        :: rho_r, tau_r, v_rspace, v_tau_rspace
       TYPE(qs_energy_type), POINTER                      :: energy
+      TYPE(qs_kind_type), DIMENSION(:), POINTER          :: qs_kind_set
       TYPE(qs_ks_env_type), POINTER                      :: ks_env
-      TYPE(qs_rho_type), POINTER                         :: rho
+      TYPE(qs_rho_type), POINTER                         :: rho, rho_xc
       TYPE(section_vals_type), POINTER                   :: adiabatic_rescaling_section, &
                                                             ec_hfx_sections, ec_section
 
       CALL timeset(routineN, handle)
 
-      logger => cp_get_default_logger()
-      IF (logger%para_env%is_source()) THEN
-         iounit = cp_logger_get_default_unit_nr(logger, local=.TRUE.)
-      ELSE
-         iounit = -1
-      END IF
+      iounit = cp_logger_get_default_unit_nr(local=.FALSE.)
 
       ! get all information on the electronic density
       NULLIFY (auxbas_pw_pool, dft_control, energy, ks_env, rho, rho_r, tau_r)
       CALL get_qs_env(qs_env=qs_env, &
                       dft_control=dft_control, &
                       ks_env=ks_env, &
-                      rho=rho)
+                      rho=rho, rho_xc=rho_xc)
       nspins = dft_control%nspins
+      nimages = dft_control%nimages  ! this is from the ref calculation
       calculate_forces = .FALSE.
       use_virial = .FALSE.
 
+      gapw = dft_control%qs_control%gapw
+      gapw_xc = dft_control%qs_control%gapw_xc
+
       ! Kohn-Sham matrix
       IF (ASSOCIATED(ec_env%matrix_ks)) CALL dbcsr_deallocate_matrix_set(ec_env%matrix_ks)
-      CALL dbcsr_allocate_matrix_set(ec_env%matrix_ks, nspins, 1)
+      nhfimg = SIZE(ec_env%matrix_s, 2)
+      dft_control%nimages = nhfimg
+      CALL dbcsr_allocate_matrix_set(ec_env%matrix_ks, nspins, nhfimg)
       DO ispin = 1, nspins
          headline = "KOHN-SHAM MATRIX"
-         ALLOCATE (ec_env%matrix_ks(ispin, 1)%matrix)
-         CALL dbcsr_create(ec_env%matrix_ks(ispin, 1)%matrix, name=TRIM(headline), &
-                           template=ec_env%matrix_s(1, 1)%matrix, matrix_type=dbcsr_type_symmetric)
-         CALL cp_dbcsr_alloc_block_from_nbl(ec_env%matrix_ks(ispin, 1)%matrix, ec_env%sab_orb)
-         CALL dbcsr_set(ec_env%matrix_ks(ispin, 1)%matrix, 0.0_dp)
+         DO img = 1, nhfimg
+            ALLOCATE (ec_env%matrix_ks(ispin, img)%matrix)
+            smat => ec_env%matrix_s(1, img)%matrix
+            CALL dbcsr_create(ec_env%matrix_ks(ispin, img)%matrix, name=TRIM(headline), &
+                              template=smat, matrix_type=dbcsr_type_symmetric)
+            CALL cp_dbcsr_alloc_block_from_nbl(ec_env%matrix_ks(ispin, img)%matrix, &
+                                               ec_env%sab_orb)
+            CALL dbcsr_set(ec_env%matrix_ks(ispin, img)%matrix, 0.0_dp)
+         END DO
       END DO
 
       NULLIFY (pw_env)
@@ -1344,16 +1699,15 @@ CONTAINS
          IF (hfx_treat_lsd_in_core) THEN
             CALL cp_abort(__LOCATION__, "HFX_TREAT_LSD_IN_CORE NYI for energy correction")
          END IF
+         IF (ec_env%do_kpoints) THEN
+            CALL cp_abort(__LOCATION__, "HFX and K-points NYI for energy correction")
+         END IF
 
          ! calculate the density matrix for the fitted mo_coeffs
          IF (dft_control%do_admm) THEN
-
             IF (dft_control%do_admm_mo) THEN
-               IF (qs_env%run_rtp) THEN
-                  CALL rtp_admm_calc_rho_aux(qs_env)
-               ELSE
-                  CALL admm_mo_calc_rho_aux(qs_env)
-               END IF
+               CPASSERT(.NOT. qs_env%run_rtp)
+               CALL admm_mo_calc_rho_aux(qs_env)
             ELSEIF (dft_control%do_admm_dm) THEN
                CALL admm_dm_calc_rho_aux(qs_env)
             END IF
@@ -1402,8 +1756,13 @@ CONTAINS
       ! v_rspace and v_tau_rspace are generated from the auxbas pool
       CALL pw_env_get(pw_env, auxbas_pw_pool=auxbas_pw_pool)
       NULLIFY (v_rspace, v_tau_rspace)
-      CALL qs_vxc_create(ks_env=ks_env, rho_struct=rho, xc_section=ec_env%xc_section, &
-                         vxc_rho=v_rspace, vxc_tau=v_tau_rspace, exc=eexc, just_energy=.FALSE.)
+      IF (dft_control%qs_control%gapw_xc) THEN
+         CALL qs_vxc_create(ks_env=ks_env, rho_struct=rho_xc, xc_section=ec_env%xc_section, &
+                            vxc_rho=v_rspace, vxc_tau=v_tau_rspace, exc=eexc, just_energy=.FALSE.)
+      ELSE
+         CALL qs_vxc_create(ks_env=ks_env, rho_struct=rho, xc_section=ec_env%xc_section, &
+                            vxc_rho=v_rspace, vxc_tau=v_tau_rspace, exc=eexc, just_energy=.FALSE.)
+      END IF
 
       IF (.NOT. ASSOCIATED(v_rspace)) THEN
          ALLOCATE (v_rspace(nspins))
@@ -1423,8 +1782,9 @@ CONTAINS
          CALL pw_scale(v_rspace(ispin), v_rspace(ispin)%pw_grid%dvol)
          CALL pw_axpy(ec_env%vh_rspace, v_rspace(ispin))
          ! integrate over potential <a|V|b>
+         ks_mat => ec_env%matrix_ks(ispin, :)
          CALL integrate_v_rspace(v_rspace=v_rspace(ispin), &
-                                 hmat=ec_env%matrix_ks(ispin, 1), &
+                                 hmat_kp=ks_mat, &
                                  qs_env=qs_env, &
                                  calculate_forces=.FALSE., &
                                  basis_type="HARRIS", &
@@ -1434,7 +1794,7 @@ CONTAINS
             ! integrate over Tau-potential <nabla.a|V|nabla.b>
             CALL pw_scale(v_tau_rspace(ispin), v_tau_rspace(ispin)%pw_grid%dvol)
             CALL integrate_v_rspace(v_rspace=v_tau_rspace(ispin), &
-                                    hmat=ec_env%matrix_ks(ispin, 1), &
+                                    hmat_kp=ks_mat, &
                                     qs_env=qs_env, &
                                     calculate_forces=.FALSE., &
                                     compute_tau=.TRUE., &
@@ -1452,6 +1812,63 @@ CONTAINS
 
       END DO
 
+      IF (gapw .OR. gapw_xc) THEN
+         ! check for basis, we can only do basis=orbital
+         IF (ec_env%basis_inconsistent) THEN
+            CPABORT("Energy corrction [GAPW] only with BASIS=ORBITAL possible")
+         END IF
+
+         NULLIFY (hartree_local, local_rho_set_ec)
+         CALL get_qs_env(qs_env, para_env=para_env, &
+                         atomic_kind_set=atomic_kind_set, &
+                         qs_kind_set=qs_kind_set)
+         CALL local_rho_set_create(local_rho_set_ec)
+         CALL allocate_rho_atom_internals(local_rho_set_ec%rho_atom_set, atomic_kind_set, &
+                                          qs_kind_set, dft_control, para_env)
+         IF (gapw) THEN
+            CALL get_qs_env(qs_env, natom=natom)
+            CALL init_rho0(local_rho_set_ec, qs_env, dft_control%qs_control%gapw_control)
+            CALL rho0_s_grid_create(pw_env, local_rho_set_ec%rho0_mpole)
+            CALL hartree_local_create(hartree_local)
+            CALL init_coulomb_local(hartree_local, natom)
+         END IF
+
+         CALL get_qs_env(qs_env=qs_env, oce=oce, sab_orb=sab)
+         CALL qs_rho_get(rho, rho_ao_kp=rho_ao_kp)
+         CALL calculate_rho_atom_coeff(qs_env, rho_ao_kp, local_rho_set_ec%rho_atom_set, &
+                                       qs_kind_set, oce, sab, para_env)
+         CALL prepare_gapw_den(qs_env, local_rho_set_ec, do_rho0=gapw)
+
+         CALL calculate_vxc_atom(qs_env, .FALSE., exc1=exc1, xc_section_external=ec_env%xc_section, &
+                                 rho_atom_set_external=local_rho_set_ec%rho_atom_set)
+         ec_env%exc1 = exc1
+
+         IF (gapw) THEN
+            CALL Vh_1c_gg_integrals(qs_env, eh1c, hartree_local%ecoul_1c, local_rho_set_ec, para_env, .FALSE.)
+            CALL integrate_vhg0_rspace(qs_env, ec_env%vh_rspace, para_env, calculate_forces=.FALSE., &
+                                       local_rho_set=local_rho_set_ec)
+            ec_env%ehartree_1c = eh1c
+         END IF
+         IF (dft_control%do_admm) THEN
+            CALL get_qs_env(qs_env, admm_env=admm_env)
+            IF (admm_env%aux_exch_func /= do_admm_aux_exch_func_none) THEN
+               ! define proper xc_section
+               CPABORT("GAPW HFX ADMM + Energy Correction NYA")
+            END IF
+         END IF
+
+         ks_mat => ec_env%matrix_ks(:, 1)
+         ps_mat => ec_env%matrix_p(:, 1)
+         CALL update_ks_atom(qs_env, ks_mat, ps_mat, forces=.FALSE., &
+                             rho_atom_external=local_rho_set_ec%rho_atom_set)
+
+         CALL local_rho_set_release(local_rho_set_ec)
+         IF (gapw) THEN
+            CALL hartree_local_release(hartree_local)
+         END IF
+
+      END IF
+
       ! return pw grids
       DO ispin = 1, nspins
          CALL auxbas_pw_pool%give_back_pw(v_rspace(ispin))
@@ -1468,11 +1885,15 @@ CONTAINS
 
       ! add the core matrix
       DO ispin = 1, nspins
-         CALL dbcsr_add(ec_env%matrix_ks(ispin, 1)%matrix, ec_env%matrix_h(1, 1)%matrix, &
-                        alpha_scalar=1.0_dp, beta_scalar=1.0_dp)
-         CALL dbcsr_filter(ec_env%matrix_ks(ispin, 1)%matrix, &
-                           dft_control%qs_control%eps_filter_matrix)
+         DO img = 1, nhfimg
+            CALL dbcsr_add(ec_env%matrix_ks(ispin, img)%matrix, ec_env%matrix_h(1, img)%matrix, &
+                           alpha_scalar=1.0_dp, beta_scalar=1.0_dp)
+            CALL dbcsr_filter(ec_env%matrix_ks(ispin, img)%matrix, &
+                              dft_control%qs_control%eps_filter_matrix)
+         END DO
       END DO
+
+      dft_control%nimages = nimages
 
       CALL timestop(handle)
 
@@ -1495,24 +1916,21 @@ CONTAINS
 
       CHARACTER(LEN=*), PARAMETER :: routineN = 'ec_build_core_hamiltonian_force'
 
-      INTEGER                                            :: handle, iounit, nder, nimages
-      INTEGER, DIMENSION(:, :, :), POINTER               :: cell_to_index
+      CHARACTER(LEN=default_string_length)               :: basis_type
+      INTEGER                                            :: handle, img, iounit, nder, nhfimg, &
+                                                            nimages
       LOGICAL                                            :: calculate_forces, debug_forces, &
                                                             debug_stress, use_virial
-      REAL(KIND=dp)                                      :: eps_ppnl, fconv
+      REAL(KIND=dp)                                      :: fconv
       REAL(KIND=dp), DIMENSION(3)                        :: fodeb
       REAL(KIND=dp), DIMENSION(3, 3)                     :: stdeb, sttot
-      TYPE(atomic_kind_type), DIMENSION(:), POINTER      :: atomic_kind_set
       TYPE(cell_type), POINTER                           :: cell
-      TYPE(cp_logger_type), POINTER                      :: logger
       TYPE(dbcsr_p_type), DIMENSION(:, :), POINTER       :: scrm
       TYPE(dft_control_type), POINTER                    :: dft_control
       TYPE(mp_para_env_type), POINTER                    :: para_env
       TYPE(neighbor_list_set_p_type), DIMENSION(:), &
-         POINTER                                         :: sab_orb, sac_ppl, sap_ppnl
-      TYPE(particle_type), DIMENSION(:), POINTER         :: particle_set
+         POINTER                                         :: sab_orb
       TYPE(qs_force_type), DIMENSION(:), POINTER         :: force
-      TYPE(qs_kind_type), DIMENSION(:), POINTER          :: qs_kind_set
       TYPE(qs_ks_env_type), POINTER                      :: ks_env
       TYPE(virial_type), POINTER                         :: virial
 
@@ -1521,14 +1939,11 @@ CONTAINS
       debug_forces = ec_env%debug_forces
       debug_stress = ec_env%debug_stress
 
-      logger => cp_get_default_logger()
-      IF (logger%para_env%is_source()) THEN
-         iounit = cp_logger_get_default_unit_nr(logger, local=.TRUE.)
-      ELSE
-         iounit = -1
-      END IF
+      iounit = cp_logger_get_default_unit_nr(local=.FALSE.)
 
       calculate_forces = .TRUE.
+
+      basis_type = "HARRIS"
 
       ! no k-points possible
       NULLIFY (cell, dft_control, force, ks_env, para_env, virial)
@@ -1543,6 +1958,12 @@ CONTAINS
       IF (nimages /= 1) THEN
          CPABORT("K-points for Harris functional not implemented")
       END IF
+      ! check for GAPW/GAPW_XC
+      IF (dft_control%qs_control%gapw .OR. dft_control%qs_control%gapw_xc) THEN
+         IF (ec_env%energy_functional == ec_functional_harris) THEN
+            CPABORT("Harris functional for GAPW not implemented")
+         END IF
+      END IF
 
       ! check for virial
       use_virial = virial%pv_availability .AND. (.NOT. virial%pv_numer)
@@ -1552,30 +1973,25 @@ CONTAINS
          sttot = virial%pv_virial
       END IF
 
-      ! check for GAPW/GAPW_XC
-      IF (dft_control%qs_control%gapw .OR. dft_control%qs_control%gapw_xc) THEN
-         CPABORT("Harris functional for GAPW not implemented")
-      END IF
-
       ! get neighbor lists, we need the full sab_orb list from the ec_env
-      NULLIFY (sab_orb, sac_ppl, sap_ppnl)
       sab_orb => ec_env%sab_orb
-      sac_ppl => ec_env%sac_ppl
-      sap_ppnl => ec_env%sap_ppnl
 
       ! initialize src matrix
+      nhfimg = SIZE(matrix_s, 2)
       NULLIFY (scrm)
-      CALL dbcsr_allocate_matrix_set(scrm, 1, 1)
-      ALLOCATE (scrm(1, 1)%matrix)
-      CALL dbcsr_create(scrm(1, 1)%matrix, template=matrix_s(1, 1)%matrix)
-      CALL cp_dbcsr_alloc_block_from_nbl(scrm(1, 1)%matrix, sab_orb)
+      CALL dbcsr_allocate_matrix_set(scrm, 1, nhfimg)
+      DO img = 1, nhfimg
+         ALLOCATE (scrm(1, img)%matrix)
+         CALL dbcsr_create(scrm(1, img)%matrix, template=matrix_s(1, img)%matrix)
+         CALL cp_dbcsr_alloc_block_from_nbl(scrm(1, img)%matrix, sab_orb)
+      END DO
 
       nder = 1
       IF (SIZE(matrix_p, 1) == 2) THEN
-         CALL dbcsr_add(matrix_p(1, 1)%matrix, matrix_p(2, 1)%matrix, &
-                        alpha_scalar=1.0_dp, beta_scalar=1.0_dp)
-         CALL dbcsr_add(matrix_w(1, 1)%matrix, matrix_w(2, 1)%matrix, &
-                        alpha_scalar=1.0_dp, beta_scalar=1.0_dp)
+         DO img = 1, nhfimg
+            CALL dbcsr_add(matrix_w(1, img)%matrix, matrix_w(2, img)%matrix, &
+                           alpha_scalar=1.0_dp, beta_scalar=1.0_dp)
+         END DO
       END IF
 
       ! Overlap and kinetic energy matrices
@@ -1583,92 +1999,32 @@ CONTAINS
       IF (debug_stress .AND. use_virial) stdeb = virial%pv_overlap
       CALL build_overlap_matrix(ks_env, matrixkp_s=scrm, &
                                 matrix_name="OVERLAP MATRIX", &
-                                basis_type_a="HARRIS", &
-                                basis_type_b="HARRIS", &
+                                basis_type_a=basis_type, &
+                                basis_type_b=basis_type, &
                                 sab_nl=sab_orb, calculate_forces=.TRUE., &
-                                matrixkp_p=matrix_w)
+                                matrixkp_p=matrix_w, ext_kpoints=ec_env%kpoints)
 
       IF (debug_forces) THEN
          fodeb(1:3) = force(1)%overlap(1:3, 1) - fodeb(1:3)
          CALL para_env%sum(fodeb)
          IF (iounit > 0) WRITE (iounit, "(T3,A,T33,3F16.8)") "DEBUG:: Wout*dS    ", fodeb
-         fodeb(1:3) = force(1)%kinetic(1:3, 1)
       END IF
       IF (debug_stress .AND. use_virial) THEN
          stdeb = fconv*(virial%pv_overlap - stdeb)
          CALL para_env%sum(stdeb)
          IF (iounit > 0) WRITE (UNIT=iounit, FMT="(T2,A,T41,2(1X,ES19.11))") &
             'STRESS| Wout*dS', one_third_sum_diag(stdeb), det_3x3(stdeb)
-         stdeb = virial%pv_ekinetic
-      END IF
-      CALL build_kinetic_matrix(ks_env, matrixkp_t=scrm, &
-                                matrix_name="KINETIC ENERGY MATRIX", &
-                                basis_type="HARRIS", &
-                                sab_nl=sab_orb, calculate_forces=.TRUE., &
-                                matrixkp_p=matrix_p)
-      IF (debug_forces) THEN
-         fodeb(1:3) = force(1)%kinetic(1:3, 1) - fodeb(1:3)
-         CALL para_env%sum(fodeb)
-         IF (iounit > 0) WRITE (iounit, "(T3,A,T33,3F16.8)") "DEBUG:: Pout*dT    ", fodeb
-      END IF
-      IF (debug_stress .AND. use_virial) THEN
-         stdeb = fconv*(virial%pv_ekinetic - stdeb)
-         CALL para_env%sum(stdeb)
-         IF (iounit > 0) WRITE (UNIT=iounit, FMT="(T2,A,T41,2(1X,ES19.11))") &
-            'STRESS| Pout*dT', one_third_sum_diag(stdeb), det_3x3(stdeb)
-      END IF
-      IF (SIZE(matrix_p, 1) == 2) THEN
-         CALL dbcsr_add(matrix_p(1, 1)%matrix, matrix_p(2, 1)%matrix, &
-                        alpha_scalar=1.0_dp, beta_scalar=-1.0_dp)
       END IF
 
-      ! compute the ppl contribution to the core hamiltonian
-      NULLIFY (atomic_kind_set, particle_set, qs_kind_set)
-      CALL get_qs_env(qs_env=qs_env, qs_kind_set=qs_kind_set, particle_set=particle_set, &
-                      atomic_kind_set=atomic_kind_set)
+      CALL kinetic_energy_matrix(qs_env, matrixkp_t=scrm, matrix_p=matrix_p, &
+                                 calculate_forces=.TRUE., sab_orb=sab_orb, &
+                                 basis_type=basis_type, ext_kpoints=ec_env%kpoints, &
+                                 debug_forces=debug_forces, debug_stress=debug_stress)
 
-      IF (ASSOCIATED(sac_ppl)) THEN
-         IF (calculate_forces .AND. debug_forces) fodeb(1:3) = force(1)%gth_ppl(1:3, 1)
-         IF (debug_stress .AND. use_virial) stdeb = virial%pv_ppl
-         CALL build_core_ppl(scrm, matrix_p, force, &
-                             virial, calculate_forces, use_virial, nder, &
-                             qs_kind_set, atomic_kind_set, particle_set, sab_orb, sac_ppl, &
-                             nimages, cell_to_index, "HARRIS")
-         IF (calculate_forces .AND. debug_forces) THEN
-            fodeb(1:3) = force(1)%gth_ppl(1:3, 1) - fodeb(1:3)
-            CALL para_env%sum(fodeb)
-            IF (iounit > 0) WRITE (iounit, "(T3,A,T33,3F16.8)") "DEBUG:: Pout*dH_PPL ", fodeb
-         END IF
-         IF (debug_stress .AND. use_virial) THEN
-            stdeb = fconv*(virial%pv_ppl - stdeb)
-            CALL para_env%sum(stdeb)
-            IF (iounit > 0) WRITE (UNIT=iounit, FMT="(T2,A,T41,2(1X,ES19.11))") &
-               'STRESS| Pout*dH_PPL', one_third_sum_diag(stdeb), det_3x3(stdeb)
-         END IF
-      END IF
-
-      ! compute the ppnl contribution to the core hamiltonian ***
-      eps_ppnl = dft_control%qs_control%eps_ppnl
-      IF (ASSOCIATED(sap_ppnl)) THEN
-         IF (calculate_forces .AND. debug_forces) fodeb(1:3) = force(1)%gth_ppnl(1:3, 1)
-         IF (debug_stress .AND. use_virial) stdeb = virial%pv_ppnl
-         CALL build_core_ppnl(scrm, matrix_p, force, &
-                              virial, calculate_forces, use_virial, nder, &
-                              qs_kind_set, atomic_kind_set, particle_set, &
-                              sab_orb, sap_ppnl, eps_ppnl, &
-                              nimages, cell_to_index, "HARRIS")
-         IF (calculate_forces .AND. debug_forces) THEN
-            fodeb(1:3) = force(1)%gth_ppnl(1:3, 1) - fodeb(1:3)
-            CALL para_env%sum(fodeb)
-            IF (iounit > 0) WRITE (iounit, "(T3,A,T33,3F16.8)") "DEBUG:: Pout*dH_PPNL", fodeb
-         END IF
-         IF (debug_stress .AND. use_virial) THEN
-            stdeb = fconv*(virial%pv_ppnl - stdeb)
-            CALL para_env%sum(stdeb)
-            IF (iounit > 0) WRITE (UNIT=iounit, FMT="(T2,A,T41,2(1X,ES19.11))") &
-               'STRESS| Pout*dH_PPNL', one_third_sum_diag(stdeb), det_3x3(stdeb)
-         END IF
-      END IF
+      CALL core_matrices(qs_env, scrm, matrix_p, calculate_forces, nder, &
+                         ec_env=ec_env, ec_env_matrices=.FALSE., basis_type=basis_type, &
+                         ext_kpoints=ec_env%kpoints, &
+                         debug_forces=debug_forces, debug_stress=debug_stress)
 
       ! External field (nonperiodic case)
       ec_env%efield_nuclear = 0.0_dp
@@ -1710,7 +2066,8 @@ CONTAINS
       CHARACTER(LEN=*), PARAMETER :: routineN = 'ec_build_ks_matrix_force'
 
       CHARACTER(LEN=default_string_length)               :: unit_string
-      INTEGER                                            :: handle, i, iounit, ispin, natom, nspins
+      INTEGER                                            :: handle, i, img, iounit, ispin, natom, &
+                                                            nhfimg, nimages, nspins
       LOGICAL                                            :: debug_forces, debug_stress, do_ec_hfx, &
                                                             use_virial
       REAL(dp)                                           :: dehartree, dummy_real, dummy_real2(2), &
@@ -1720,9 +2077,8 @@ CONTAINS
       REAL(KIND=dp), DIMENSION(3, 3)                     :: h_stress, pv_loc, stdeb, sttot
       TYPE(atomic_kind_type), DIMENSION(:), POINTER      :: atomic_kind_set
       TYPE(cell_type), POINTER                           :: cell
-      TYPE(cp_logger_type), POINTER                      :: logger
-      TYPE(dbcsr_p_type), DIMENSION(:), POINTER          :: matrix_ks, scrm
-      TYPE(dbcsr_p_type), DIMENSION(:, :), POINTER       :: matrix_p, matrix_s
+      TYPE(dbcsr_p_type), DIMENSION(:), POINTER          :: matrix_ks, rho_ao, scrmat
+      TYPE(dbcsr_p_type), DIMENSION(:, :), POINTER       :: matrix_p, matrix_s, scrm
       TYPE(dft_control_type), POINTER                    :: dft_control
       TYPE(mp_para_env_type), POINTER                    :: para_env
       TYPE(neighbor_list_set_p_type), DIMENSION(:), &
@@ -1749,12 +2105,7 @@ CONTAINS
       debug_forces = ec_env%debug_forces
       debug_stress = ec_env%debug_stress
 
-      logger => cp_get_default_logger()
-      IF (logger%para_env%is_source()) THEN
-         iounit = cp_logger_get_default_unit_nr(logger, local=.TRUE.)
-      ELSE
-         iounit = -1
-      END IF
+      iounit = cp_logger_get_default_unit_nr(local=.FALSE.)
 
       ! get all information on the electronic density
       NULLIFY (atomic_kind_set, cell, dft_control, force, ks_env, &
@@ -1811,9 +2162,15 @@ CONTAINS
       CALL auxbas_pw_pool%create_pw(dv_hartree_rspace)
       CALL auxbas_pw_pool%create_pw(vtot_rspace)
 
+      ! set local number of images
+      nhfimg = SIZE(ec_env%matrix_s, 2)
+      nimages = dft_control%nimages
+      dft_control%nimages = nhfimg
+
       CALL pw_zero(rhodn_tot_gspace)
       DO ispin = 1, nspins
-         CALL calculate_rho_elec(ks_env=ks_env, matrix_p=ec_env%matrix_p(ispin, 1)%matrix, &
+         rho_ao => ec_env%matrix_p(ispin, :)
+         CALL calculate_rho_elec(ks_env=ks_env, matrix_p_kp=rho_ao, &
                                  rho=rhoout_r(ispin), &
                                  rho_gspace=rhoout_g(ispin), &
                                  basis_type="HARRIS", &
@@ -1849,6 +2206,9 @@ CONTAINS
             CALL auxbas_pw_pool%give_back_pw(tauout_g)
          END BLOCK
       END IF
+
+      ! reset nimages to base method
+      dft_control%nimages = nimages
 
       IF (use_virial) THEN
 
@@ -2079,16 +2439,6 @@ CONTAINS
          virial%pv_ehartree = virial%pv_ehartree + (virial%pv_virial - pv_loc)
       END IF
 
-      ! initialize srcm matrix
-      NULLIFY (scrm)
-      CALL dbcsr_allocate_matrix_set(scrm, nspins)
-      DO ispin = 1, nspins
-         ALLOCATE (scrm(ispin)%matrix)
-         CALL dbcsr_create(scrm(ispin)%matrix, template=ec_env%matrix_ks(ispin, 1)%matrix)
-         CALL dbcsr_copy(scrm(ispin)%matrix, ec_env%matrix_ks(ispin, 1)%matrix)
-         CALL dbcsr_set(scrm(ispin)%matrix, 0.0_dp)
-      END DO
-
       ! v_rspace and v_tau_rspace are generated from the auxbas pool
       NULLIFY (v_rspace, v_tau_rspace)
 
@@ -2124,6 +2474,20 @@ CONTAINS
       IF (use_virial) THEN
          pv_loc = virial%pv_virial
       END IF
+      ! set local number of images
+      dft_control%nimages = nhfimg
+
+      ! initialize srcm matrix
+      NULLIFY (scrm)
+      CALL dbcsr_allocate_matrix_set(scrm, nspins, nhfimg)
+      DO ispin = 1, nspins
+         DO img = 1, nhfimg
+            ALLOCATE (scrm(ispin, img)%matrix)
+            CALL dbcsr_create(scrm(ispin, img)%matrix, template=ec_env%matrix_ks(ispin, img)%matrix)
+            CALL dbcsr_copy(scrm(ispin, img)%matrix, ec_env%matrix_ks(ispin, img)%matrix)
+            CALL dbcsr_set(scrm(ispin, img)%matrix, 0.0_dp)
+         END DO
+      END DO
 
       IF (debug_forces) fodeb(1:3) = force(1)%rho_elec(1:3, 1)
       IF (debug_stress .AND. use_virial) stdeb = virial%pv_virial
@@ -2132,9 +2496,11 @@ CONTAINS
          CALL pw_scale(v_rspace(ispin), v_rspace(ispin)%pw_grid%dvol)
          CALL pw_axpy(v_hartree_rspace, v_rspace(ispin))
          ! integrate over potential <a|V|b>
+         rho_ao => ec_env%matrix_p(ispin, :)
+         scrmat => scrm(ispin, :)
          CALL integrate_v_rspace(v_rspace=v_rspace(ispin), &
-                                 hmat=scrm(ispin), &
-                                 pmat=ec_env%matrix_p(ispin, 1), &
+                                 hmat_kp=scrmat, &
+                                 pmat_kp=rho_ao, &
                                  qs_env=qs_env, &
                                  calculate_forces=.TRUE., &
                                  basis_type="HARRIS", &
@@ -2158,14 +2524,19 @@ CONTAINS
          virial%pv_ehartree = virial%pv_ehartree + (virial%pv_virial - pv_loc)
       END IF
 
+      ! reset nimages to base method
+      dft_control%nimages = nimages
+
       IF (ASSOCIATED(v_tau_rspace)) THEN
          IF (debug_forces) fodeb(1:3) = force(1)%rho_elec(1:3, 1)
          DO ispin = 1, nspins
             ! integrate over Tau-potential <nabla.a|V|nabla.b>
             CALL pw_scale(v_tau_rspace(ispin), v_tau_rspace(ispin)%pw_grid%dvol)
+            rho_ao => ec_env%matrix_p(ispin, :)
+            scrmat => scrm(ispin, :)
             CALL integrate_v_rspace(v_rspace=v_tau_rspace(ispin), &
-                                    hmat=scrm(ispin), &
-                                    pmat=ec_env%matrix_p(ispin, 1), &
+                                    hmat_kp=scrmat, &
+                                    pmat_kp=rho_ao, &
                                     qs_env=qs_env, &
                                     calculate_forces=.TRUE., &
                                     compute_tau=.TRUE., &
@@ -2179,15 +2550,19 @@ CONTAINS
          END IF
       END IF
 
-!------------------------------------------------------------------------------
-! HFX direct force
-!------------------------------------------------------------------------------
+      !------------------------------------------------------------------------------
+      ! HFX direct force
+      !------------------------------------------------------------------------------
 
       ! If hybrid functional
       ec_hfx_sections => section_vals_get_subs_vals(qs_env%input, "DFT%ENERGY_CORRECTION%XC%HF")
       CALL section_vals_get(ec_hfx_sections, explicit=do_ec_hfx)
 
       IF (do_ec_hfx) THEN
+
+         IF (ec_env%do_kpoints) THEN
+            CALL cp_abort(__LOCATION__, "HFX and K-points NYI for energy correction")
+         END IF
 
          IF (debug_forces) fodeb(1:3) = force(1)%fock_4c(1:3, 1)
          IF (use_virial) virial%pv_fock_4c = 0.0_dp
@@ -2223,8 +2598,6 @@ CONTAINS
          END IF
 
       END IF
-
-!------------------------------------------------------------------------------
 
       ! delete scrm matrix
       CALL dbcsr_deallocate_matrix_set(scrm)
@@ -2385,35 +2758,45 @@ CONTAINS
       CHARACTER(LEN=*), PARAMETER                        :: routineN = 'ec_ks_solver'
 
       CHARACTER(LEN=default_string_length)               :: headline
-      INTEGER                                            :: handle, ispin, nspins
+      INTEGER                                            :: handle, img, ispin, nhfimg, nspins
       TYPE(dbcsr_p_type), DIMENSION(:, :), POINTER       :: ksmat, pmat, smat, wmat
+      TYPE(dbcsr_type), POINTER                          :: tsmat
       TYPE(dft_control_type), POINTER                    :: dft_control
 
       CALL timeset(routineN, handle)
 
       CALL get_qs_env(qs_env=qs_env, dft_control=dft_control)
       nspins = dft_control%nspins
+      nhfimg = SIZE(ec_env%matrix_s, 2)
 
       ! create density matrix
       IF (.NOT. ASSOCIATED(ec_env%matrix_p)) THEN
          headline = "DENSITY MATRIX"
-         CALL dbcsr_allocate_matrix_set(ec_env%matrix_p, nspins, 1)
+         CALL dbcsr_allocate_matrix_set(ec_env%matrix_p, nspins, nhfimg)
          DO ispin = 1, nspins
-            ALLOCATE (ec_env%matrix_p(ispin, 1)%matrix)
-            CALL dbcsr_create(ec_env%matrix_p(ispin, 1)%matrix, name=TRIM(headline), &
-                              template=ec_env%matrix_s(1, 1)%matrix)
-            CALL cp_dbcsr_alloc_block_from_nbl(ec_env%matrix_p(ispin, 1)%matrix, ec_env%sab_orb)
+            DO img = 1, nhfimg
+               tsmat => ec_env%matrix_s(1, img)%matrix
+               ALLOCATE (ec_env%matrix_p(ispin, img)%matrix)
+               CALL dbcsr_create(ec_env%matrix_p(ispin, img)%matrix, &
+                                 name=TRIM(headline), template=tsmat)
+               CALL cp_dbcsr_alloc_block_from_nbl(ec_env%matrix_p(ispin, img)%matrix, &
+                                                  ec_env%sab_orb)
+            END DO
          END DO
       END IF
       ! create energy weighted density matrix
       IF (.NOT. ASSOCIATED(ec_env%matrix_w)) THEN
          headline = "ENERGY WEIGHTED DENSITY MATRIX"
-         CALL dbcsr_allocate_matrix_set(ec_env%matrix_w, nspins, 1)
+         CALL dbcsr_allocate_matrix_set(ec_env%matrix_w, nspins, nhfimg)
          DO ispin = 1, nspins
-            ALLOCATE (ec_env%matrix_w(ispin, 1)%matrix)
-            CALL dbcsr_create(ec_env%matrix_w(ispin, 1)%matrix, name=TRIM(headline), &
-                              template=ec_env%matrix_s(1, 1)%matrix)
-            CALL cp_dbcsr_alloc_block_from_nbl(ec_env%matrix_w(ispin, 1)%matrix, ec_env%sab_orb)
+            DO img = 1, nhfimg
+               tsmat => ec_env%matrix_s(1, img)%matrix
+               ALLOCATE (ec_env%matrix_w(ispin, img)%matrix)
+               CALL dbcsr_create(ec_env%matrix_w(ispin, img)%matrix, &
+                                 name=TRIM(headline), template=tsmat)
+               CALL cp_dbcsr_alloc_block_from_nbl(ec_env%matrix_w(ispin, img)%matrix, &
+                                                  ec_env%sab_orb)
+            END DO
          END DO
       END IF
 
@@ -2426,9 +2809,20 @@ CONTAINS
          wmat => ec_env%matrix_w
       END IF
 
+      IF (ec_env%do_kpoints) THEN
+         IF (ec_env%ks_solver /= ec_diagonalization) THEN
+            CALL cp_abort(__LOCATION__, "Harris functional with k-points "// &
+                          "needs diagonalization solver")
+         END IF
+      END IF
+
       SELECT CASE (ec_env%ks_solver)
       CASE (ec_diagonalization)
-         CALL ec_diag_solver(qs_env, ksmat, smat, pmat, wmat)
+         IF (ec_env%do_kpoints) THEN
+            CALL ec_diag_solver_kp(qs_env, ec_env, ksmat, smat, pmat, wmat)
+         ELSE
+            CALL ec_diag_solver_gamma(qs_env, ec_env, ksmat, smat, pmat, wmat)
+         END IF
       CASE (ec_ot_diag)
          CALL ec_ot_diag_solver(qs_env, ec_env, ksmat, smat, pmat, wmat)
       CASE (ec_matrix_sign, ec_matrix_trs4, ec_matrix_tc2)
@@ -2437,57 +2831,6 @@ CONTAINS
       CASE DEFAULT
          CPASSERT(.FALSE.)
       END SELECT
-
-      ! OUtput density available now
-
-! HFX contribution to Harris functional and energy
-! Can't calculate this earlier, cause ec_env%matrix_p doesnt exist yet
-!------------------------------------------------------------------------------
-
-!      ! Exact exchange contribution (hybrid functionals)
-!      ec_section => section_vals_get_subs_vals(qs_env%input, "DFT%ENERGY_CORRECTION")
-!      ec_hfx_sections => section_vals_get_subs_vals(ec_section, "XC%HF")
-!      CALL section_vals_get(ec_hfx_sections, explicit=do_ec_hfx)
-!
-!      IF (do_ec_hfx) THEN
-!
-!         ! Check what works
-!         IF (dft_control%do_admm) THEN
-!            CALL cp_warn(__LOCATION__, "Energy correction with hybrid functional does not use ADMM.")
-!         END IF
-!
-!         adiabatic_rescaling_section => section_vals_get_subs_vals(ec_section, "XC%ADIABATIC_RESCALING")
-!         CALL section_vals_get(adiabatic_rescaling_section, explicit=do_adiabatic_rescaling)
-!         IF (do_adiabatic_rescaling) THEN
-!            CALL cp_abort(__LOCATION__, "Adiabatic rescaling NYI for energy correction")
-!         END IF
-!         CALL section_vals_val_get(ec_hfx_sections, "TREAT_LSD_IN_CORE", l_val=hfx_treat_lsd_in_core)
-!         IF (hfx_treat_lsd_in_core) THEN
-!            CALL cp_abort(__LOCATION__, "HFX_TREAT_LSD_IN_CORE NYI for energy correction")
-!         END IF
-!
-!         ! Exchange matrix
-!         IF (ASSOCIATED(ec_env%matrix_x)) CALL dbcsr_deallocate_matrix_set(ec_env%matrix_x)
-!         CALL dbcsr_allocate_matrix_set(ec_env%matrix_x, nspins)
-!         DO ispin = 1, nspins
-!            headline = "EXCHANGE MATRIX"
-!            ALLOCATE (ec_env%matrix_x(ispin)%matrix)
-!            CALL dbcsr_create(ec_env%matrix_x(ispin)%matrix, name=TRIM(headline), &
-!                              template=ec_env%matrix_s(1, 1)%matrix, matrix_type=dbcsr_type_symmetric)
-!            CALL cp_dbcsr_alloc_block_from_nbl(ec_env%matrix_x(ispin)%matrix, ec_env%sab_orb)
-!            CALL dbcsr_set(ec_env%matrix_x(ispin)%matrix, 0.0_dp)
-!         END DO
-!
-!         ! Get exact exchange energy (fraction) and its contribution to the EC hamiltonian
-!         should_update=.TRUE.
-!         ks_mat => ec_env%matrix_ks(:,1)
-!         CALL ec_hfx_contributions(qs_env, ks_mat, matrix_p, &
-!                                   ec_hfx_sections, ec_env%x_data, use_virial, &
-!                                   should_update, calculate_forces, matrix_x = ec_env%matrix_x, ex = ec_env%ex)
-!
-!      END IF
-
-!------------------------------------------------------------------------------
 
       IF (ec_env%mao) THEN
          CALL mao_release_matrices(ec_env, ksmat, smat, pmat, wmat)
@@ -2534,11 +2877,11 @@ CONTAINS
          ALLOCATE (ksmat(ispin, 1)%matrix)
          CALL dbcsr_create(ksmat(ispin, 1)%matrix, dist=dbcsr_dist, name="MAO KS mat", &
                            matrix_type=dbcsr_type_symmetric, row_blk_size=col_blk_sizes, &
-                           col_blk_size=col_blk_sizes, nze=0)
+                           col_blk_size=col_blk_sizes)
          ALLOCATE (smat(ispin, 1)%matrix)
          CALL dbcsr_create(smat(ispin, 1)%matrix, dist=dbcsr_dist, name="MAO S mat", &
                            matrix_type=dbcsr_type_symmetric, row_blk_size=col_blk_sizes, &
-                           col_blk_size=col_blk_sizes, nze=0)
+                           col_blk_size=col_blk_sizes)
       END DO
       !
       CALL dbcsr_create(cgmat, name="TEMP matrix", template=mao_coef(1)%matrix)
@@ -2619,131 +2962,6 @@ CONTAINS
    END SUBROUTINE mao_release_matrices
 
 ! **************************************************************************************************
-!> \brief Solve KS equation using diagonalization
-!> \param qs_env ...
-!> \param matrix_ks ...
-!> \param matrix_s ...
-!> \param matrix_p ...
-!> \param matrix_w ...
-!> \par History
-!>      03.2014 created [JGH]
-!> \author JGH
-! **************************************************************************************************
-   SUBROUTINE ec_diag_solver(qs_env, matrix_ks, matrix_s, matrix_p, matrix_w)
-
-      TYPE(qs_environment_type), POINTER                 :: qs_env
-      TYPE(dbcsr_p_type), DIMENSION(:, :), POINTER       :: matrix_ks, matrix_s, matrix_p, matrix_w
-
-      CHARACTER(LEN=*), PARAMETER                        :: routineN = 'ec_diag_solver'
-
-      INTEGER                                            :: handle, ispin, nmo(2), nsize, nspins
-      REAL(KIND=dp)                                      :: eps_filter, focc(2)
-      REAL(KIND=dp), ALLOCATABLE, DIMENSION(:)           :: eigenvalues
-      TYPE(cp_blacs_env_type), POINTER                   :: blacs_env
-      TYPE(cp_fm_struct_type), POINTER                   :: fm_struct
-      TYPE(cp_fm_type)                                   :: fm_ks, fm_mo, fm_ortho
-      TYPE(dbcsr_type), POINTER                          :: buf1_dbcsr, buf2_dbcsr, buf3_dbcsr, &
-                                                            ortho_dbcsr, ref_matrix
-      TYPE(dft_control_type), POINTER                    :: dft_control
-      TYPE(mp_para_env_type), POINTER                    :: para_env
-
-      CALL timeset(routineN, handle)
-
-      NULLIFY (blacs_env, para_env)
-      CALL get_qs_env(qs_env=qs_env, blacs_env=blacs_env, para_env=para_env)
-
-      CALL get_qs_env(qs_env=qs_env, dft_control=dft_control)
-      eps_filter = dft_control%qs_control%eps_filter_matrix
-      nspins = dft_control%nspins
-
-      nmo = 0
-      CALL get_qs_env(qs_env=qs_env, nelectron_spin=nmo)
-      focc = 1._dp
-      IF (nspins == 1) THEN
-         focc = 2._dp
-         nmo(1) = nmo(1)/2
-      END IF
-
-      CALL dbcsr_get_info(matrix_ks(1, 1)%matrix, nfullrows_total=nsize)
-      ALLOCATE (eigenvalues(nsize))
-
-      NULLIFY (fm_struct, ref_matrix)
-      CALL cp_fm_struct_create(fm_struct, context=blacs_env, nrow_global=nsize, &
-                               ncol_global=nsize, para_env=para_env)
-      CALL cp_fm_create(fm_ortho, fm_struct)
-      CALL cp_fm_create(fm_ks, fm_struct)
-      CALL cp_fm_create(fm_mo, fm_struct)
-      CALL cp_fm_struct_release(fm_struct)
-
-      ! factorization
-      ref_matrix => matrix_s(1, 1)%matrix
-      NULLIFY (ortho_dbcsr, buf1_dbcsr, buf2_dbcsr, buf3_dbcsr)
-      CALL dbcsr_init_p(ortho_dbcsr)
-      CALL dbcsr_create(ortho_dbcsr, template=ref_matrix, &
-                        matrix_type=dbcsr_type_no_symmetry)
-      CALL dbcsr_init_p(buf1_dbcsr)
-      CALL dbcsr_create(buf1_dbcsr, template=ref_matrix, &
-                        matrix_type=dbcsr_type_no_symmetry)
-      CALL dbcsr_init_p(buf2_dbcsr)
-      CALL dbcsr_create(buf2_dbcsr, template=ref_matrix, &
-                        matrix_type=dbcsr_type_no_symmetry)
-      CALL dbcsr_init_p(buf3_dbcsr)
-      CALL dbcsr_create(buf3_dbcsr, template=ref_matrix, &
-                        matrix_type=dbcsr_type_no_symmetry)
-
-      ref_matrix => matrix_s(1, 1)%matrix
-      CALL copy_dbcsr_to_fm(ref_matrix, fm_ortho)
-      CALL cp_fm_cholesky_decompose(fm_ortho)
-      CALL cp_fm_triangular_invert(fm_ortho)
-      CALL cp_fm_set_all(fm_ks, 0.0_dp)
-      CALL cp_fm_to_fm_triangular(fm_ortho, fm_ks, "U")
-      CALL copy_fm_to_dbcsr(fm_ks, ortho_dbcsr)
-      DO ispin = 1, nspins
-         ! calculate ZHZ(T)
-         CALL dbcsr_desymmetrize(matrix_ks(ispin, 1)%matrix, buf1_dbcsr)
-         CALL dbcsr_multiply("N", "N", 1.0_dp, buf1_dbcsr, ortho_dbcsr, &
-                             0.0_dp, buf2_dbcsr, filter_eps=eps_filter)
-         CALL dbcsr_multiply("T", "N", 1.0_dp, ortho_dbcsr, buf2_dbcsr, &
-                             0.0_dp, buf1_dbcsr, filter_eps=eps_filter)
-         ! copy to fm format
-         CALL copy_dbcsr_to_fm(buf1_dbcsr, fm_ks)
-         CALL choose_eigv_solver(fm_ks, fm_mo, eigenvalues)
-         ! back transform of mos c = Z(T)*c
-         CALL copy_fm_to_dbcsr(fm_mo, buf1_dbcsr)
-         CALL dbcsr_multiply("N", "N", 1.0_dp, ortho_dbcsr, buf1_dbcsr, &
-                             0.0_dp, buf2_dbcsr, filter_eps=eps_filter)
-         ! density matrix
-         CALL dbcsr_set(matrix_p(ispin, 1)%matrix, 0.0_dp)
-         CALL dbcsr_multiply("N", "T", focc(ispin), buf2_dbcsr, buf2_dbcsr, &
-                             1.0_dp, matrix_p(ispin, 1)%matrix, &
-                             retain_sparsity=.TRUE., last_k=nmo(ispin))
-
-         ! energy weighted density matrix
-         CALL dbcsr_set(matrix_w(ispin, 1)%matrix, 0.0_dp)
-         CALL cp_fm_column_scale(fm_mo, eigenvalues)
-         CALL copy_fm_to_dbcsr(fm_mo, buf1_dbcsr)
-         CALL dbcsr_multiply("N", "N", 1.0_dp, ortho_dbcsr, buf1_dbcsr, &
-                             0.0_dp, buf3_dbcsr, filter_eps=eps_filter)
-         CALL dbcsr_multiply("N", "T", focc(ispin), buf2_dbcsr, buf3_dbcsr, &
-                             1.0_dp, matrix_w(ispin, 1)%matrix, &
-                             retain_sparsity=.TRUE., last_k=nmo(ispin))
-      END DO
-
-      CALL cp_fm_release(fm_ks)
-      CALL cp_fm_release(fm_mo)
-      CALL cp_fm_release(fm_ortho)
-      CALL dbcsr_release(ortho_dbcsr)
-      CALL dbcsr_release(buf1_dbcsr)
-      CALL dbcsr_release(buf2_dbcsr)
-      CALL dbcsr_release(buf3_dbcsr)
-      DEALLOCATE (ortho_dbcsr, buf1_dbcsr, buf2_dbcsr, buf3_dbcsr)
-      DEALLOCATE (eigenvalues)
-
-      CALL timestop(handle)
-
-   END SUBROUTINE ec_diag_solver
-
-! **************************************************************************************************
 !> \brief Calculate the energy correction
 !> \param ec_env ...
 !> \param unit_nr ...
@@ -2755,31 +2973,26 @@ CONTAINS
 
       CHARACTER(LEN=*), PARAMETER                        :: routineN = 'ec_energy'
 
-      INTEGER                                            :: handle, ispin, nspins
+      INTEGER                                            :: handle, nspins
       REAL(KIND=dp)                                      :: eband, trace
 
       CALL timeset(routineN, handle)
 
       nspins = SIZE(ec_env%matrix_p, 1)
-      DO ispin = 1, nspins
-         CALL dbcsr_dot(ec_env%matrix_p(ispin, 1)%matrix, ec_env%matrix_s(1, 1)%matrix, trace)
-         IF (unit_nr > 0) WRITE (unit_nr, '(T3,A,T65,F16.10)') 'Tr[PS] ', trace
-      END DO
+      CALL calculate_ptrace(ec_env%matrix_s, ec_env%matrix_p, trace, nspins)
+      IF (unit_nr > 0) WRITE (unit_nr, '(T3,A,T65,F16.10)') 'Tr[PS] ', trace
 
       ! Total energy depends on energy correction method
       SELECT CASE (ec_env%energy_functional)
       CASE (ec_functional_harris)
 
          ! Get energy of "band structure" term
-         eband = 0.0_dp
-         DO ispin = 1, nspins
-            CALL dbcsr_dot(ec_env%matrix_ks(ispin, 1)%matrix, ec_env%matrix_p(ispin, 1)%matrix, trace)
-            eband = eband + trace
-         END DO
+         CALL calculate_ptrace(ec_env%matrix_ks, ec_env%matrix_p, eband, nspins, .TRUE.)
          ec_env%eband = eband + ec_env%efield_nuclear
 
          ! Add Harris functional "correction" terms
-         ec_env%etotal = ec_env%eband + ec_env%ehartree + ec_env%exc - ec_env%vhxc + ec_env%edispersion - ec_env%ex
+         ec_env%etotal = ec_env%eband + ec_env%ehartree + ec_env%exc - ec_env%vhxc + ec_env%ekTS + &
+                         ec_env%edispersion - ec_env%ex
          IF (unit_nr > 0) THEN
             WRITE (unit_nr, '(T3,A,T56,F25.15)') "Eband    ", ec_env%eband
             WRITE (unit_nr, '(T3,A,T56,F25.15)') "Ehartree ", ec_env%ehartree
@@ -2787,25 +3000,28 @@ CONTAINS
             WRITE (unit_nr, '(T3,A,T56,F25.15)') "Ex       ", ec_env%ex
             WRITE (unit_nr, '(T3,A,T56,F25.15)') "Evhxc    ", ec_env%vhxc
             WRITE (unit_nr, '(T3,A,T56,F25.15)') "Edisp    ", ec_env%edispersion
+            WRITE (unit_nr, '(T3,A,T56,F25.15)') "Entropy  ", ec_env%ekTS
             WRITE (unit_nr, '(T3,A,T56,F25.15)') "Etotal Harris Functional   ", ec_env%etotal
          END IF
 
       CASE (ec_functional_dc)
 
          ! Core hamiltonian energy
-         CALL calculate_ptrace(ec_env%matrix_h, ec_env%matrix_p, ec_env%ecore, SIZE(ec_env%matrix_p, 1))
+         CALL calculate_ptrace(ec_env%matrix_h, ec_env%matrix_p, ec_env%ecore, nspins)
 
          ec_env%ecore = ec_env%ecore + ec_env%efield_nuclear
-         ec_env%etotal = ec_env%ecore + ec_env%ehartree + ec_env%exc + ec_env%edispersion &
-                         + ec_env%ex + ec_env%exc_aux_fit
+         ec_env%etotal = ec_env%ecore + ec_env%ehartree + ec_env%ehartree_1c + &
+                         ec_env%exc + ec_env%exc1 + ec_env%ekTS + ec_env%edispersion + &
+                         ec_env%ex + ec_env%exc_aux_fit + ec_env%exc1_aux_fit
 
          IF (unit_nr > 0) THEN
             WRITE (unit_nr, '(T3,A,T56,F25.15)') "Ecore    ", ec_env%ecore
-            WRITE (unit_nr, '(T3,A,T56,F25.15)') "Ehartree ", ec_env%ehartree
-            WRITE (unit_nr, '(T3,A,T56,F25.15)') "Exc      ", ec_env%exc
+            WRITE (unit_nr, '(T3,A,T56,F25.15)') "Ehartree ", ec_env%ehartree + ec_env%ehartree_1c
+            WRITE (unit_nr, '(T3,A,T56,F25.15)') "Exc      ", ec_env%exc + ec_env%exc1
             WRITE (unit_nr, '(T3,A,T56,F25.15)') "Ex       ", ec_env%ex
-            WRITE (unit_nr, '(T3,A,T56,F25.15)') "Exc_aux_fit", ec_env%exc_aux_fit
+            WRITE (unit_nr, '(T3,A,T56,F25.15)') "Exc_aux_fit", ec_env%exc_aux_fit + ec_env%exc1_aux_fit
             WRITE (unit_nr, '(T3,A,T56,F25.15)') "Edisp    ", ec_env%edispersion
+            WRITE (unit_nr, '(T3,A,T56,F25.15)') "Entropy  ", ec_env%ekTS
             WRITE (unit_nr, '(T3,A,T56,F25.15)') "Etotal Energy Functional   ", ec_env%etotal
          END IF
 
@@ -2842,16 +3058,17 @@ CONTAINS
 
       CHARACTER(LEN=*), PARAMETER :: routineN = 'ec_build_neighborlist'
 
-      INTEGER                                            :: handle, ikind, nkind, zat
-      LOGICAL                                            :: gth_potential_present, &
-                                                            sgp_potential_present, &
-                                                            skip_load_balance_distributed
-      LOGICAL, ALLOCATABLE, DIMENSION(:)                 :: default_present, orb_present, &
-                                                            ppl_present, ppnl_present
+      INTEGER                                            :: handle, ikind, nimages, nkind, zat
+      LOGICAL :: all_potential_present, gth_potential_present, paw_atom, paw_atom_present, &
+         sgp_potential_present, skip_load_balance_distributed
+      LOGICAL, ALLOCATABLE, DIMENSION(:)                 :: all_present, default_present, &
+                                                            oce_present, orb_present, ppl_present, &
+                                                            ppnl_present
       REAL(dp)                                           :: subcells
-      REAL(dp), ALLOCATABLE, DIMENSION(:)                :: c_radius, orb_radius, ppl_radius, &
-                                                            ppnl_radius
+      REAL(dp), ALLOCATABLE, DIMENSION(:)                :: all_radius, c_radius, oce_radius, &
+                                                            orb_radius, ppl_radius, ppnl_radius
       REAL(dp), ALLOCATABLE, DIMENSION(:, :)             :: pair_radius
+      TYPE(all_potential_type), POINTER                  :: all_potential
       TYPE(atomic_kind_type), DIMENSION(:), POINTER      :: atomic_kind_set
       TYPE(cell_type), POINTER                           :: cell
       TYPE(dft_control_type), POINTER                    :: dft_control
@@ -2861,9 +3078,11 @@ CONTAINS
       TYPE(gto_basis_set_type), POINTER                  :: basis_set
       TYPE(local_atoms_type), ALLOCATABLE, DIMENSION(:)  :: atom2d
       TYPE(molecule_type), DIMENSION(:), POINTER         :: molecule_set
+      TYPE(mp_para_env_type), POINTER                    :: para_env
       TYPE(neighbor_list_set_p_type), DIMENSION(:), &
          POINTER                                         :: sab_cn, sab_vdw
       TYPE(particle_type), DIMENSION(:), POINTER         :: particle_set
+      TYPE(paw_proj_set_type), POINTER                   :: paw_proj
       TYPE(qs_dispersion_type), POINTER                  :: dispersion_env
       TYPE(qs_kind_type), DIMENSION(:), POINTER          :: qs_kind_set
       TYPE(qs_kind_type), POINTER                        :: qs_kind
@@ -2873,12 +3092,15 @@ CONTAINS
       CALL timeset(routineN, handle)
 
       CALL get_qs_env(qs_env=qs_env, qs_kind_set=qs_kind_set)
-      CALL get_qs_kind_set(qs_kind_set, gth_potential_present=gth_potential_present, &
+      CALL get_qs_kind_set(qs_kind_set, &
+                           paw_atom_present=paw_atom_present, &
+                           all_potential_present=all_potential_present, &
+                           gth_potential_present=gth_potential_present, &
                            sgp_potential_present=sgp_potential_present)
       nkind = SIZE(qs_kind_set)
       ALLOCATE (c_radius(nkind), default_present(nkind))
-      ALLOCATE (orb_radius(nkind), ppl_radius(nkind), ppnl_radius(nkind))
-      ALLOCATE (orb_present(nkind), ppl_present(nkind), ppnl_present(nkind))
+      ALLOCATE (orb_radius(nkind), all_radius(nkind), ppl_radius(nkind), ppnl_radius(nkind))
+      ALLOCATE (orb_present(nkind), all_present(nkind), ppl_present(nkind), ppnl_present(nkind))
       ALLOCATE (pair_radius(nkind, nkind))
       ALLOCATE (atom2d(nkind))
 
@@ -2904,7 +3126,8 @@ CONTAINS
             orb_present(ikind) = .FALSE.
             orb_radius(ikind) = 0.0_dp
          END IF
-         CALL get_qs_kind(qs_kind, gth_potential=gth_potential, sgp_potential=sgp_potential)
+         CALL get_qs_kind(qs_kind, all_potential=all_potential, &
+                          gth_potential=gth_potential, sgp_potential=sgp_potential)
          IF (gth_potential_present .OR. sgp_potential_present) THEN
             IF (ASSOCIATED(gth_potential)) THEN
                CALL get_potential(potential=gth_potential, &
@@ -2925,6 +3148,20 @@ CONTAINS
                ppnl_radius(ikind) = 0.0_dp
             END IF
          END IF
+         ! Check the presence of an all electron potential or ERFC potential
+         IF (all_potential_present .OR. sgp_potential_present) THEN
+            all_present(ikind) = .FALSE.
+            all_radius(ikind) = 0.0_dp
+            IF (ASSOCIATED(all_potential)) THEN
+               all_present(ikind) = .TRUE.
+               CALL get_potential(potential=all_potential, core_charge_radius=all_radius(ikind))
+            ELSE IF (ASSOCIATED(sgp_potential)) THEN
+               IF (sgp_potential%ecp_local) THEN
+                  all_present(ikind) = .TRUE.
+                  CALL get_potential(potential=sgp_potential, core_charge_radius=all_radius(ikind))
+               END IF
+            END IF
+         END IF
       END DO
 
       CALL section_vals_val_get(qs_env%input, "DFT%SUBCELLS", r_val=subcells)
@@ -2933,7 +3170,28 @@ CONTAINS
       CALL pair_radius_setup(orb_present, orb_present, orb_radius, orb_radius, pair_radius)
       CALL build_neighbor_lists(ec_env%sab_orb, particle_set, atom2d, cell, pair_radius, &
                                 subcells=subcells, nlname="sab_orb")
-      ! pseudopotential
+      ! kpoints
+      IF (ec_env%do_kpoints) THEN
+         ! pair_radius maybe needs adjustment for HFX?
+         CALL build_neighbor_lists(ec_env%sab_kp, particle_set, atom2d, cell, pair_radius, &
+                                   subcells=subcells, nlname="sab_kp")
+         IF (ec_env%do_ec_hfx) THEN
+            CALL build_neighbor_lists(ec_env%sab_kp_nosym, particle_set, atom2d, cell, pair_radius, &
+                                      subcells=subcells, nlname="sab_kp_nosym", symmetric=.FALSE.)
+         END IF
+         CALL get_qs_env(qs_env=qs_env, para_env=para_env)
+         CALL kpoint_init_cell_index(ec_env%kpoints, ec_env%sab_kp, para_env, nimages)
+      END IF
+
+      ! pseudopotential/AE
+      IF (all_potential_present .OR. sgp_potential_present) THEN
+         IF (ANY(all_present)) THEN
+            CALL pair_radius_setup(orb_present, all_present, orb_radius, all_radius, pair_radius)
+            CALL build_neighbor_lists(ec_env%sac_ae, particle_set, atom2d, cell, pair_radius, &
+                                      subcells=subcells, operator_type="ABC", nlname="sac_ae")
+         END IF
+      END IF
+
       IF (gth_potential_present .OR. sgp_potential_present) THEN
          IF (ANY(ppl_present)) THEN
             CALL pair_radius_setup(orb_present, ppl_present, orb_radius, ppl_radius, pair_radius)
@@ -2974,11 +3232,37 @@ CONTAINS
          END IF
       END IF
 
+      ! PAW
+      IF (paw_atom_present) THEN
+         IF (paw_atom_present) THEN
+            ALLOCATE (oce_present(nkind), oce_radius(nkind))
+            oce_radius = 0.0_dp
+         END IF
+         DO ikind = 1, nkind
+            ! Warning: we use the same paw_proj_set as for the reference method
+            CALL get_qs_kind(qs_kind_set(ikind), paw_proj_set=paw_proj, paw_atom=paw_atom)
+            IF (paw_atom) THEN
+               oce_present(ikind) = .TRUE.
+               CALL get_paw_proj_set(paw_proj_set=paw_proj, rcprj=oce_radius(ikind))
+            ELSE
+               oce_present(ikind) = .FALSE.
+            END IF
+         END DO
+
+         ! Build orbital-GAPW projector overlap list
+         IF (ANY(oce_present)) THEN
+            CALL pair_radius_setup(orb_present, oce_present, orb_radius, oce_radius, pair_radius)
+            CALL build_neighbor_lists(ec_env%sap_oce, particle_set, atom2d, cell, pair_radius, &
+                                      subcells=subcells, operator_type="ABBA", nlname="sap_oce")
+         END IF
+         DEALLOCATE (oce_present, oce_radius)
+      END IF
+
       ! Release work storage
       CALL atom2d_cleanup(atom2d)
       DEALLOCATE (atom2d)
-      DEALLOCATE (orb_present, default_present, ppl_present, ppnl_present)
-      DEALLOCATE (orb_radius, ppl_radius, ppnl_radius, c_radius)
+      DEALLOCATE (orb_present, default_present, all_present, ppl_present, ppnl_present)
+      DEALLOCATE (orb_radius, all_radius, ppl_radius, ppnl_radius, c_radius)
       DEALLOCATE (pair_radius)
 
       ! Task list
@@ -2986,10 +3270,21 @@ CONTAINS
       skip_load_balance_distributed = dft_control%qs_control%skip_load_balance_distributed
       IF (ASSOCIATED(ec_env%task_list)) CALL deallocate_task_list(ec_env%task_list)
       CALL allocate_task_list(ec_env%task_list)
-      CALL generate_qs_task_list(ks_env, ec_env%task_list, &
-                                 reorder_rs_grid_ranks=.FALSE., soft_valid=.FALSE., &
+      CALL generate_qs_task_list(ks_env, ec_env%task_list, basis_type="HARRIS", &
+                                 reorder_rs_grid_ranks=.FALSE., &
                                  skip_load_balance_distributed=skip_load_balance_distributed, &
-                                 basis_type="HARRIS", sab_orb_external=ec_env%sab_orb)
+                                 sab_orb_external=ec_env%sab_orb, &
+                                 ext_kpoints=ec_env%kpoints)
+      ! Task list soft
+      IF (dft_control%qs_control%gapw .OR. dft_control%qs_control%gapw_xc) THEN
+         IF (ASSOCIATED(ec_env%task_list_soft)) CALL deallocate_task_list(ec_env%task_list_soft)
+         CALL allocate_task_list(ec_env%task_list_soft)
+         CALL generate_qs_task_list(ks_env, ec_env%task_list_soft, basis_type="HARRIS_SOFT", &
+                                    reorder_rs_grid_ranks=.FALSE., &
+                                    skip_load_balance_distributed=skip_load_balance_distributed, &
+                                    sab_orb_external=ec_env%sab_orb, &
+                                    ext_kpoints=ec_env%kpoints)
+      END IF
 
       CALL timestop(handle)
 
@@ -3040,11 +3335,7 @@ CONTAINS
       rlab(3) = "Z"
 
       logger => cp_get_default_logger()
-      IF (logger%para_env%is_source()) THEN
-         iounit = cp_logger_get_default_unit_nr(logger, local=.TRUE.)
-      ELSE
-         iounit = -1
-      END IF
+      iounit = cp_logger_get_default_unit_nr(logger, local=.FALSE.)
 
       NULLIFY (dft_control)
       CALL get_qs_env(qs_env, dft_control=dft_control)
@@ -3055,6 +3346,10 @@ CONTAINS
                                               subsection_name="PRINT%MOMENTS")
 
       IF (BTEST(cp_print_key_should_output(logger%iter_info, print_key), cp_p_file)) THEN
+
+         IF (dft_control%qs_control%gapw .OR. dft_control%qs_control%gapw_xc) THEN
+            CPABORT("Properties for GAPW in EC NYA")
+         END IF
 
          maxmom = section_get_ival(section_vals=ec_section, &
                                    keyword_name="PRINT%MOMENTS%MAX_MOMENT")
@@ -3176,6 +3471,10 @@ CONTAINS
       END IF
       IF ((should_print_voro /= 0) .OR. (should_print_bqb /= 0)) THEN
 
+         IF (dft_control%qs_control%gapw .OR. dft_control%qs_control%gapw_xc) THEN
+            CPABORT("Properties for GAPW in EC NYA")
+         END IF
+
          CALL get_qs_env(qs_env=qs_env, &
                          pw_env=pw_env)
          CALL pw_env_get(pw_env=pw_env, &
@@ -3229,454 +3528,551 @@ CONTAINS
       CALL timestop(handle)
 
    END SUBROUTINE ec_properties
-
 ! **************************************************************************************************
-!> \brief Solve the Harris functional by linear scaling density purification scheme,
-!>        instead of the diagonalization performed in ec_diag_solver
-!>
-!> \param qs_env ...
-!> \param matrix_ks Harris Kohn-Sham matrix
-!> \param matrix_s Overlap matrix in Harris functional basis
-!> \par History
-!>       09.2020 created
-!> \author F.Belleflamme
-! **************************************************************************************************
-   SUBROUTINE ec_ls_init(qs_env, matrix_ks, matrix_s)
-      TYPE(qs_environment_type), POINTER                 :: qs_env
-      TYPE(dbcsr_p_type), DIMENSION(:, :), POINTER       :: matrix_ks, matrix_s
-
-      CHARACTER(len=*), PARAMETER                        :: routineN = 'ec_ls_init'
-
-      INTEGER                                            :: handle, ispin, nspins
-      TYPE(dft_control_type), POINTER                    :: dft_control
-      TYPE(energy_correction_type), POINTER              :: ec_env
-      TYPE(ls_scf_env_type), POINTER                     :: ls_env
-
-      CALL timeset(routineN, handle)
-
-      CALL get_qs_env(qs_env=qs_env, &
-                      dft_control=dft_control, &
-                      ec_env=ec_env)
-      nspins = dft_control%nspins
-      ls_env => ec_env%ls_env
-
-      ! create the matrix template for use in the ls procedures
-      CALL matrix_ls_create(matrix_ls=ls_env%matrix_s, matrix_qs=matrix_s(1, 1)%matrix, &
-                            ls_mstruct=ls_env%ls_mstruct)
-
-      IF (ALLOCATED(ls_env%matrix_p)) THEN
-         DO ispin = 1, SIZE(ls_env%matrix_p)
-            CALL dbcsr_release(ls_env%matrix_p(ispin))
-         END DO
-      ELSE
-         ALLOCATE (ls_env%matrix_p(nspins))
-      END IF
-
-      DO ispin = 1, nspins
-         CALL dbcsr_create(ls_env%matrix_p(ispin), template=ls_env%matrix_s, &
-                           matrix_type=dbcsr_type_no_symmetry)
-      END DO
-
-      ALLOCATE (ls_env%matrix_ks(nspins))
-      DO ispin = 1, nspins
-         CALL dbcsr_create(ls_env%matrix_ks(ispin), template=ls_env%matrix_s, &
-                           matrix_type=dbcsr_type_no_symmetry)
-      END DO
-
-      ! Set up S matrix and needed functions of S
-      CALL ls_scf_init_matrix_s(matrix_s(1, 1)%matrix, ls_env)
-
-      ! Bring KS matrix from QS to LS form
-      ! EC KS-matrix already calculated
-      DO ispin = 1, nspins
-         CALL matrix_qs_to_ls(matrix_ls=ls_env%matrix_ks(ispin), &
-                              matrix_qs=matrix_ks(ispin, 1)%matrix, &
-                              ls_mstruct=ls_env%ls_mstruct, &
-                              covariant=.TRUE.)
-      END DO
-
-      CALL timestop(handle)
-
-   END SUBROUTINE ec_ls_init
-
-! **************************************************************************************************
-!> \brief Solve the Harris functional by linear scaling density purification scheme,
-!>        instead of the diagonalization performed in ec_diag_solver
-!>
-!> \param qs_env ...
-!> \param matrix_p Harris dentiy matrix, calculated here
-!> \param matrix_w Harris energy weighted density matrix, calculated here
-!> \param ec_ls_method which purification scheme should be used
-!> \par History
-!>      12.2019 created [JGH]
-!>      08.2020 refactoring [fbelle]
-!> \author Fabian Belleflamme
-! **************************************************************************************************
-
-   SUBROUTINE ec_ls_solver(qs_env, matrix_p, matrix_w, ec_ls_method)
-      TYPE(qs_environment_type), POINTER                 :: qs_env
-      TYPE(dbcsr_p_type), DIMENSION(:, :), POINTER       :: matrix_p, matrix_w
-      INTEGER, INTENT(IN)                                :: ec_ls_method
-
-      CHARACTER(LEN=*), PARAMETER                        :: routineN = 'ec_ls_solver'
-
-      INTEGER                                            :: handle, ispin, nelectron_spin_real, &
-                                                            nspins
-      INTEGER, DIMENSION(2)                              :: nmo
-      TYPE(dbcsr_p_type), DIMENSION(:), POINTER          :: wmat
-      TYPE(dbcsr_type), ALLOCATABLE, DIMENSION(:)        :: matrix_ks_deviation
-      TYPE(dft_control_type), POINTER                    :: dft_control
-      TYPE(energy_correction_type), POINTER              :: ec_env
-      TYPE(ls_scf_env_type), POINTER                     :: ls_env
-      TYPE(mp_para_env_type), POINTER                    :: para_env
-
-      CALL timeset(routineN, handle)
-
-      NULLIFY (para_env)
-      CALL get_qs_env(qs_env, &
-                      dft_control=dft_control, &
-                      para_env=para_env)
-      nspins = dft_control%nspins
-      ec_env => qs_env%ec_env
-      ls_env => ec_env%ls_env
-
-      nmo = 0
-      CALL get_qs_env(qs_env=qs_env, nelectron_spin=nmo)
-      IF (nspins == 1) nmo(1) = nmo(1)/2
-      ls_env%homo_spin(:) = 0.0_dp
-      ls_env%lumo_spin(:) = 0.0_dp
-
-      ALLOCATE (matrix_ks_deviation(nspins))
-      DO ispin = 1, nspins
-         CALL dbcsr_create(matrix_ks_deviation(ispin), template=ls_env%matrix_ks(ispin))
-         CALL dbcsr_set(matrix_ks_deviation(ispin), 0.0_dp)
-      END DO
-
-      ! F = S^-1/2 * F * S^-1/2
-      IF (ls_env%has_s_preconditioner) THEN
-         DO ispin = 1, nspins
-            CALL apply_matrix_preconditioner(ls_env%matrix_ks(ispin), "forward", &
-                                             ls_env%matrix_bs_sqrt, ls_env%matrix_bs_sqrt_inv)
-
-            CALL dbcsr_filter(ls_env%matrix_ks(ispin), ls_env%eps_filter)
-         END DO
-      END IF
-
-      DO ispin = 1, nspins
-         nelectron_spin_real = ls_env%nelectron_spin(ispin)
-         IF (ls_env%nspins == 1) nelectron_spin_real = nelectron_spin_real/2
-
-         SELECT CASE (ec_ls_method)
-         CASE (ec_matrix_sign)
-            CALL density_matrix_sign(ls_env%matrix_p(ispin), &
-                                     ls_env%mu_spin(ispin), &
-                                     ls_env%fixed_mu, &
-                                     ls_env%sign_method, &
-                                     ls_env%sign_order, &
-                                     ls_env%matrix_ks(ispin), &
-                                     ls_env%matrix_s, &
-                                     ls_env%matrix_s_inv, &
-                                     nelectron_spin_real, &
-                                     ec_env%eps_default)
-
-         CASE (ec_matrix_trs4)
-            CALL density_matrix_trs4( &
-               ls_env%matrix_p(ispin), &
-               ls_env%matrix_ks(ispin), &
-               ls_env%matrix_s_sqrt_inv, &
-               nelectron_spin_real, &
-               ec_env%eps_default, &
-               ls_env%homo_spin(ispin), &
-               ls_env%lumo_spin(ispin), &
-               ls_env%mu_spin(ispin), &
-               matrix_ks_deviation=matrix_ks_deviation(ispin), &
-               dynamic_threshold=ls_env%dynamic_threshold, &
-               eps_lanczos=ls_env%eps_lanczos, &
-               max_iter_lanczos=ls_env%max_iter_lanczos)
-
-         CASE (ec_matrix_tc2)
-            CALL density_matrix_tc2( &
-               ls_env%matrix_p(ispin), &
-               ls_env%matrix_ks(ispin), &
-               ls_env%matrix_s_sqrt_inv, &
-               nelectron_spin_real, &
-               ec_env%eps_default, &
-               ls_env%homo_spin(ispin), &
-               ls_env%lumo_spin(ispin), &
-               non_monotonic=ls_env%non_monotonic, &
-               eps_lanczos=ls_env%eps_lanczos, &
-               max_iter_lanczos=ls_env%max_iter_lanczos)
-
-         END SELECT
-
-      END DO
-
-      ! de-orthonormalize
-      IF (ls_env%has_s_preconditioner) THEN
-         DO ispin = 1, nspins
-            ! P = S^-1/2 * P_tilde * S^-1/2 (forward)
-            CALL apply_matrix_preconditioner(ls_env%matrix_p(ispin), "forward", &
-                                             ls_env%matrix_bs_sqrt, ls_env%matrix_bs_sqrt_inv)
-
-            CALL dbcsr_filter(ls_env%matrix_p(ispin), ls_env%eps_filter)
-         END DO
-      END IF
-
-      ! Closed-shell
-      IF (nspins == 1) CALL dbcsr_scale(ls_env%matrix_p(1), 2.0_dp)
-
-      IF (ls_env%report_all_sparsities) CALL post_scf_sparsities(ls_env)
-
-      ! ls_scf_dm_to_ks
-      ! Density matrix from LS to EC
-      DO ispin = 1, nspins
-         CALL matrix_ls_to_qs(matrix_qs=matrix_p(ispin, 1)%matrix, &
-                              matrix_ls=ls_env%matrix_p(ispin), &
-                              ls_mstruct=ls_env%ls_mstruct, &
-                              covariant=.FALSE.)
-      END DO
-
-      wmat => matrix_w(:, 1)
-      CALL calculate_w_matrix_ls(wmat, ec_env%ls_env)
-
-      ! clean up
-      CALL dbcsr_release(ls_env%matrix_s)
-      IF (ls_env%has_s_preconditioner) THEN
-         CALL dbcsr_release(ls_env%matrix_bs_sqrt)
-         CALL dbcsr_release(ls_env%matrix_bs_sqrt_inv)
-      END IF
-      IF (ls_env%needs_s_inv) THEN
-         CALL dbcsr_release(ls_env%matrix_s_inv)
-      END IF
-      IF (ls_env%use_s_sqrt) THEN
-         CALL dbcsr_release(ls_env%matrix_s_sqrt)
-         CALL dbcsr_release(ls_env%matrix_s_sqrt_inv)
-      END IF
-
-      DO ispin = 1, SIZE(ls_env%matrix_ks)
-         CALL dbcsr_release(ls_env%matrix_ks(ispin))
-      END DO
-      DEALLOCATE (ls_env%matrix_ks)
-
-      DO ispin = 1, nspins
-         CALL dbcsr_release(matrix_ks_deviation(ispin))
-      END DO
-      DEALLOCATE (matrix_ks_deviation)
-
-      CALL timestop(handle)
-
-   END SUBROUTINE ec_ls_solver
-
-! **************************************************************************************************
-!> \brief Use OT-diagonalziation to obtain density matrix from Harris Kohn-Sham matrix
-!>        Initial guess of density matrix is either the atomic block initial guess from SCF
-!>        or the ground-state density matrix. The latter only works if the same basis is used
-!>
+!> \brief ...
 !> \param qs_env ...
 !> \param ec_env ...
-!> \param matrix_ks Harris Kohn-Sham matrix
-!> \param matrix_s Overlap matrix in Harris functional basis
-!> \param matrix_p Harris dentiy matrix, calculated here
-!> \param matrix_w Harris energy weighted density matrix, calculated here
-!>
-!> \par History
-!>       09.2020 created
-!> \author F.Belleflamme
+!> \param unit_nr ...
 ! **************************************************************************************************
-   SUBROUTINE ec_ot_diag_solver(qs_env, ec_env, matrix_ks, matrix_s, matrix_p, matrix_w)
+   SUBROUTINE harris_wfn_output(qs_env, ec_env, unit_nr)
       TYPE(qs_environment_type), POINTER                 :: qs_env
       TYPE(energy_correction_type), POINTER              :: ec_env
-      TYPE(dbcsr_p_type), DIMENSION(:, :), INTENT(IN), &
-         POINTER                                         :: matrix_ks, matrix_s
-      TYPE(dbcsr_p_type), DIMENSION(:, :), &
-         INTENT(INOUT), POINTER                          :: matrix_p, matrix_w
+      INTEGER, INTENT(IN)                                :: unit_nr
 
-      CHARACTER(len=*), PARAMETER                        :: routineN = 'ec_ot_diag_solver'
+      CHARACTER(LEN=*), PARAMETER                        :: routineN = 'harris_wfn_output'
 
-      INTEGER                                            :: handle, homo, ikind, iounit, ispin, &
-                                                            max_iter, nao, nkind, nmo, nspins
-      INTEGER, DIMENSION(2)                              :: nelectron_spin
-      REAL(KIND=dp), DIMENSION(:), POINTER               :: eigenvalues
-      TYPE(atomic_kind_type), DIMENSION(:), POINTER      :: atomic_kind_set
+      INTEGER                                            :: handle, ic, ires, ispin, nimages, nsize, &
+                                                            nspin
+      INTEGER, DIMENSION(3)                              :: cell
+      INTEGER, DIMENSION(:, :, :), POINTER               :: cell_to_index
       TYPE(cp_blacs_env_type), POINTER                   :: blacs_env
-      TYPE(cp_fm_type)                                   :: sv
-      TYPE(cp_fm_type), POINTER                          :: mo_coeff
+      TYPE(cp_fm_struct_type), POINTER                   :: fm_struct
+      TYPE(cp_fm_type)                                   :: fmat
       TYPE(cp_logger_type), POINTER                      :: logger
-      TYPE(dbcsr_p_type), DIMENSION(:), POINTER          :: p_rmpv
-      TYPE(dbcsr_p_type), DIMENSION(:, :), POINTER       :: rho_ao
-      TYPE(dft_control_type), POINTER                    :: dft_control
-      TYPE(gto_basis_set_type), POINTER                  :: basis_set, harris_basis
-      TYPE(mo_set_type), DIMENSION(:), POINTER           :: mos
+      TYPE(dbcsr_p_type), DIMENSION(:, :), POINTER       :: denmat
       TYPE(mp_para_env_type), POINTER                    :: para_env
       TYPE(particle_type), DIMENSION(:), POINTER         :: particle_set
-      TYPE(preconditioner_type), POINTER                 :: local_preconditioner
       TYPE(qs_kind_type), DIMENSION(:), POINTER          :: qs_kind_set
-      TYPE(qs_kind_type), POINTER                        :: qs_kind
-      TYPE(qs_rho_type), POINTER                         :: rho
+      TYPE(section_vals_type), POINTER                   :: ec_section
+
+      MARK_USED(unit_nr)
 
       CALL timeset(routineN, handle)
 
       logger => cp_get_default_logger()
-      iounit = cp_logger_get_default_unit_nr(logger)
 
-      CPASSERT(ASSOCIATED(qs_env))
-      CPASSERT(ASSOCIATED(ec_env))
-      CPASSERT(ASSOCIATED(matrix_ks))
-      CPASSERT(ASSOCIATED(matrix_s))
-      CPASSERT(ASSOCIATED(matrix_p))
-      CPASSERT(ASSOCIATED(matrix_w))
+      ec_section => section_vals_get_subs_vals(qs_env%input, "DFT%ENERGY_CORRECTION")
+      CALL get_qs_env(qs_env, qs_kind_set=qs_kind_set, particle_set=particle_set)
 
-      CALL get_qs_env(qs_env=qs_env, &
-                      atomic_kind_set=atomic_kind_set, &
-                      blacs_env=blacs_env, &
-                      dft_control=dft_control, &
-                      nelectron_spin=nelectron_spin, &
-                      para_env=para_env, &
-                      particle_set=particle_set, &
-                      qs_kind_set=qs_kind_set)
-      nspins = dft_control%nspins
+      IF (ec_env%do_kpoints) THEN
+         ires = cp_print_key_unit_nr(logger, ec_section, "PRINT%HARRIS_OUTPUT_WFN", &
+                                     extension=".kp", file_status="REPLACE", file_action="WRITE", &
+                                     file_form="UNFORMATTED", middle_name="Harris")
 
-      ! Maximum number of OT iterations for diagonalization
-      max_iter = 200
+         CALL write_kpoints_file_header(qs_kind_set, particle_set, ires, basis_type="HARRIS")
 
-      ! If linear scaling, need to allocate and init MO set
-      ! set it to qs_env%mos
-      IF (dft_control%qs_control%do_ls_scf) THEN
-         CALL ec_mos_init(qs_env, matrix_s(1, 1)%matrix)
-      END IF
-
-      CALL get_qs_env(qs_env, mos=mos)
-
-      ! Inital guess to use
-      NULLIFY (p_rmpv)
-
-      ! Using ether ground-state DM or ATOMIC GUESS requires
-      ! Harris functional to use the same basis set
-      CALL get_qs_env(qs_env, qs_kind_set=qs_kind_set, nkind=nkind)
-      CALL uppercase(ec_env%basis)
-      ! Harris basis only differs from ground-state basis if explicitly added
-      ! thus only two cases that need to be tested
-      ! 1) explicit Harris basis present?
-      IF (ec_env%basis == "HARRIS") THEN
-         DO ikind = 1, nkind
-            qs_kind => qs_kind_set(ikind)
-            ! Basis sets of ground-state
-            CALL get_qs_kind(qs_kind=qs_kind, basis_set=basis_set, basis_type="ORB")
-            ! Basis sets of energy correction
-            CALL get_qs_kind(qs_kind=qs_kind, basis_set=harris_basis, basis_type="HARRIS")
-
-            IF (basis_set%name .NE. harris_basis%name) THEN
-               CPABORT("OT-Diag initial guess: Harris and ground state need to use the same basis")
-            END IF
-         END DO
-      END IF
-      ! 2) Harris uses MAOs
-      IF (ec_env%mao) THEN
-         CPABORT("OT-Diag initial guess: not implemented for MAOs")
-      END IF
-
-      ! Initital guess obtained for OT Diagonalization
-      SELECT CASE (ec_env%ec_initial_guess)
-      CASE (ec_ot_atomic)
-
-         p_rmpv => matrix_p(:, 1)
-
-         CALL calculate_atomic_block_dm(p_rmpv, matrix_s(1, 1)%matrix, atomic_kind_set, qs_kind_set, &
-                                        nspins, nelectron_spin, iounit, para_env)
-
-      CASE (ec_ot_gs)
-
-         CALL get_qs_env(qs_env, rho=rho)
-         CALL qs_rho_get(rho, rho_ao_kp=rho_ao)
-         p_rmpv => rho_ao(:, 1)
-
-      CASE DEFAULT
-         CPABORT("Unknown inital guess for OT-Diagonalization (Harris functional)")
-      END SELECT
-
-      DO ispin = 1, nspins
-         CALL get_mo_set(mo_set=mos(ispin), &
-                         mo_coeff=mo_coeff, &
-                         nmo=nmo, &
-                         nao=nao, &
-                         homo=homo)
-
-         ! Calculate first MOs
-         CALL cp_fm_set_all(mo_coeff, 0.0_dp)
-         CALL cp_fm_init_random(mo_coeff, nmo)
-
-         CALL cp_fm_create(sv, mo_coeff%matrix_struct, "SV")
-         ! multiply times PS
-         ! PS*C(:,1:nomo)+C(:,nomo+1:nmo) (nomo=NINT(nelectron/maxocc))
-         CALL cp_dbcsr_sm_fm_multiply(matrix_s(1, 1)%matrix, mo_coeff, sv, nmo)
-         CALL cp_dbcsr_sm_fm_multiply(p_rmpv(ispin)%matrix, sv, mo_coeff, homo)
-         CALL cp_fm_release(sv)
-         ! and ortho the result
-         ! If DFBT or SE, then needs has_unit_metrix option
-         CALL make_basis_sm(mo_coeff, nmo, matrix_s(1, 1)%matrix)
-      END DO
-
-      ! Preconditioner
-      NULLIFY (local_preconditioner)
-      ALLOCATE (local_preconditioner)
-      CALL init_preconditioner(local_preconditioner, para_env=para_env, &
-                               blacs_env=blacs_env)
-      DO ispin = 1, nspins
-         CALL make_preconditioner(local_preconditioner, &
-                                  precon_type=ot_precond_full_single_inverse, &
-                                  solver_type=ot_precond_solver_default, &
-                                  matrix_h=matrix_ks(ispin, 1)%matrix, &
-                                  matrix_s=matrix_s(ispin, 1)%matrix, &
-                                  convert_precond_to_dbcsr=.TRUE., &
-                                  mo_set=mos(ispin), energy_gap=0.2_dp)
-
-         CALL get_mo_set(mos(ispin), &
-                         mo_coeff=mo_coeff, &
-                         eigenvalues=eigenvalues, &
-                         nmo=nmo, &
-                         homo=homo)
-         CALL ot_eigensolver(matrix_h=matrix_ks(ispin, 1)%matrix, &
-                             matrix_s=matrix_s(1, 1)%matrix, &
-                             matrix_c_fm=mo_coeff, &
-                             preconditioner=local_preconditioner, &
-                             eps_gradient=ec_env%eps_default, &
-                             iter_max=max_iter, &
-                             silent=.FALSE.)
-         CALL calculate_subspace_eigenvalues(mo_coeff, matrix_ks(ispin, 1)%matrix, &
-                                             evals_arg=eigenvalues, do_rotation=.TRUE.)
-
-         ! Deallocate preconditioner
-         CALL destroy_preconditioner(local_preconditioner)
-         DEALLOCATE (local_preconditioner)
-
-         !fm->dbcsr
-         CALL copy_fm_to_dbcsr(mos(ispin)%mo_coeff, &
-                               mos(ispin)%mo_coeff_b)
-      END DO
-
-      ! Calculate density matrix from MOs
-      DO ispin = 1, nspins
-         CALL calculate_density_matrix(mos(ispin), matrix_p(ispin, 1)%matrix)
-
-         CALL calculate_w_matrix(mos(ispin), matrix_w(ispin, 1)%matrix)
-      END DO
-
-      ! Get rid of MO environment again
-      IF (dft_control%qs_control%do_ls_scf) THEN
-         DO ispin = 1, nspins
-            CALL deallocate_mo_set(mos(ispin))
-         END DO
-         IF (ASSOCIATED(qs_env%mos)) THEN
-            DO ispin = 1, SIZE(qs_env%mos)
-               CALL deallocate_mo_set(qs_env%mos(ispin))
-            END DO
-            DEALLOCATE (qs_env%mos)
+         denmat => ec_env%matrix_p
+         nspin = SIZE(denmat, 1)
+         nimages = SIZE(denmat, 2)
+         NULLIFY (cell_to_index)
+         IF (nimages > 1) THEN
+            CALL get_kpoint_info(kpoint=ec_env%kpoints, cell_to_index=cell_to_index)
          END IF
+         CALL dbcsr_get_info(denmat(1, 1)%matrix, nfullrows_total=nsize)
+         NULLIFY (blacs_env, para_env)
+         CALL get_qs_env(qs_env=qs_env, blacs_env=blacs_env, para_env=para_env)
+         NULLIFY (fm_struct)
+         CALL cp_fm_struct_create(fm_struct, context=blacs_env, nrow_global=nsize, &
+                                  ncol_global=nsize, para_env=para_env)
+         CALL cp_fm_create(fmat, fm_struct)
+         CALL cp_fm_struct_release(fm_struct)
+
+         DO ispin = 1, nspin
+            IF (ires > 0) WRITE (ires) ispin, nspin, nimages
+            DO ic = 1, nimages
+               IF (nimages > 1) THEN
+                  cell = get_cell(ic, cell_to_index)
+               ELSE
+                  cell = 0
+               END IF
+               IF (ires > 0) WRITE (ires) ic, cell
+               CALL copy_dbcsr_to_fm(denmat(ispin, ic)%matrix, fmat)
+               CALL cp_fm_write_unformatted(fmat, ires)
+            END DO
+         END DO
+
+         CALL cp_print_key_finished_output(ires, logger, ec_section, "PRINT%HARRIS_OUTPUT_WFN")
+         CALL cp_fm_release(fmat)
+      ELSE
+         CALL cp_warn(__LOCATION__, &
+                      "Orbital energy correction potential is an experimental feature. "// &
+                      "Use it with extreme care")
       END IF
 
       CALL timestop(handle)
 
-   END SUBROUTINE ec_ot_diag_solver
+   END SUBROUTINE harris_wfn_output
+
+! **************************************************************************************************
+!> \brief ...
+!> \param qs_env ...
+!> \param ec_env ...
+!> \param unit_nr ...
+! **************************************************************************************************
+   SUBROUTINE response_force_error(qs_env, ec_env, unit_nr)
+      TYPE(qs_environment_type), POINTER                 :: qs_env
+      TYPE(energy_correction_type), POINTER              :: ec_env
+      INTEGER, INTENT(IN)                                :: unit_nr
+
+      CHARACTER(LEN=10)                                  :: eformat
+      INTEGER                                            :: feunit, funit, i, ia, ib, ispin, mref, &
+                                                            na, nao, natom, nb, norb, nref, &
+                                                            nsample, nspins
+      INTEGER, ALLOCATABLE, DIMENSION(:)                 :: natom_of_kind, rlist, t2cind
+      LOGICAL                                            :: debug_f, do_resp, is_source
+      REAL(KIND=dp)                                      :: focc, rfac, vres
+      REAL(KIND=dp), ALLOCATABLE, DIMENSION(:)           :: tvec, yvec
+      REAL(KIND=dp), ALLOCATABLE, DIMENSION(:, :)        :: eforce, fmlocal, fmreord, smat
+      REAL(KIND=dp), ALLOCATABLE, DIMENSION(:, :, :)     :: smpforce
+      TYPE(atomic_kind_type), DIMENSION(:), POINTER      :: atomic_kind_set
+      TYPE(cp_fm_struct_type), POINTER                   :: fm_struct, fm_struct_mat
+      TYPE(cp_fm_type)                                   :: hmats
+      TYPE(cp_fm_type), DIMENSION(:, :), POINTER         :: rpmos, Spmos
+      TYPE(dbcsr_p_type), DIMENSION(:), POINTER          :: matrix_s
+      TYPE(dbcsr_type), POINTER                          :: mats
+      TYPE(mp_para_env_type), POINTER                    :: para_env
+      TYPE(qs_force_type), DIMENSION(:), POINTER         :: ks_force, res_force
+      TYPE(virial_type)                                  :: res_virial
+      TYPE(virial_type), POINTER                         :: ks_virial
+
+      IF (unit_nr > 0) THEN
+         WRITE (unit_nr, '(/,T2,A,A,A,A,A)') "!", REPEAT("-", 25), &
+            " Response Force Error Est. ", REPEAT("-", 25), "!"
+         SELECT CASE (ec_env%error_method)
+         CASE ("F")
+            WRITE (unit_nr, '(T2,A)') " Response Force Error Est. using full RHS"
+         CASE ("D")
+            WRITE (unit_nr, '(T2,A)') " Response Force Error Est. using delta RHS"
+         CASE ("E")
+            WRITE (unit_nr, '(T2,A)') " Response Force Error Est. using extrapolated RHS"
+            WRITE (unit_nr, '(T2,A,E20.10)') " Extrapolation cutoff:", ec_env%error_cutoff
+            WRITE (unit_nr, '(T2,A,I10)') " Max. extrapolation size:", ec_env%error_subspace
+         CASE DEFAULT
+            CPABORT("Unknown Error Estimation Method")
+         END SELECT
+      END IF
+
+      IF (ABS(ec_env%orbrot_index) > 1.E-8_dp .OR. ec_env%phase_index > 1.E-8_dp) THEN
+         CPABORT("Response error calculation for rotated orbital sets not implemented")
+      END IF
+
+      SELECT CASE (ec_env%energy_functional)
+      CASE (ec_functional_harris)
+         CPWARN('Response force error calculation not possible for Harris functional.')
+      CASE (ec_functional_dc)
+         CPWARN('Response force error calculation not possible for DCDFT.')
+      CASE (ec_functional_ext)
+
+         ! backup force array
+         CALL get_qs_env(qs_env, force=ks_force, virial=ks_virial, &
+                         atomic_kind_set=atomic_kind_set)
+         CALL get_atomic_kind_set(atomic_kind_set=atomic_kind_set, natom_of_kind=natom_of_kind)
+         NULLIFY (res_force)
+         CALL allocate_qs_force(res_force, natom_of_kind)
+         DEALLOCATE (natom_of_kind)
+         CALL zero_qs_force(res_force)
+         res_virial = ks_virial
+         CALL zero_virial(ks_virial, reset=.FALSE.)
+         CALL set_qs_env(qs_env, force=res_force)
+         !
+         CALL get_qs_env(qs_env, natom=natom)
+         ALLOCATE (eforce(3, natom))
+         !
+         CALL get_qs_env(qs_env, para_env=para_env)
+         is_source = para_env%is_source()
+         !
+         nspins = SIZE(ec_env%mo_occ)
+         CALL cp_fm_get_info(ec_env%mo_occ(1), nrow_global=nao)
+         !
+         IF (is_source) THEN
+            CALL open_file(ec_env%exresperr_fn, file_status="OLD", file_action="READ", &
+                           file_form="FORMATTED", unit_number=funit)
+            READ (funit, '(A)') eformat
+            CALL uppercase(eformat)
+            READ (funit, *) nsample
+         END IF
+         CALL para_env%bcast(nsample, para_env%source)
+         CALL para_env%bcast(eformat, para_env%source)
+         !
+         CALL cp_fm_get_info(ec_env%mo_occ(1), matrix_struct=fm_struct)
+         CALL cp_fm_struct_create(fm_struct_mat, template_fmstruct=fm_struct, &
+                                  nrow_global=nao, ncol_global=nao)
+         ALLOCATE (fmlocal(nao, nao))
+         IF (ADJUSTL(TRIM(eformat)) == "TREXIO") THEN
+            ALLOCATE (fmreord(nao, nao))
+            CALL get_t2cindex(qs_env, t2cind)
+         END IF
+         ALLOCATE (rpmos(nsample, nspins))
+         ALLOCATE (smpforce(3, natom, nsample))
+         smpforce = 0.0_dp
+         !
+         focc = 2.0_dp
+         IF (nspins == 1) focc = 4.0_dp
+         CALL cp_fm_create(hmats, fm_struct_mat)
+         !
+         DO i = 1, nsample
+            DO ispin = 1, nspins
+               CALL cp_fm_create(rpmos(i, ispin), fm_struct)
+               IF (is_source) THEN
+                  READ (funit, *) na, nb
+                  CPASSERT(na == nao .AND. nb == nao)
+                  READ (funit, *) fmlocal
+               ELSE
+                  fmlocal = 0.0_dp
+               END IF
+               CALL para_env%bcast(fmlocal)
+               !
+               SELECT CASE (ADJUSTL(TRIM(eformat)))
+               CASE ("CP2K")
+                  ! nothing to do
+               CASE ("TREXIO")
+                  ! reshuffel indices
+                  DO ia = 1, nao
+                     DO ib = 1, nao
+                        fmreord(ia, ib) = fmlocal(t2cind(ia), t2cind(ib))
+                     END DO
+                  END DO
+                  fmlocal(1:nao, 1:nao) = fmreord(1:nao, 1:nao)
+               CASE DEFAULT
+                  CPABORT("Error file dE/dC: unknown format")
+               END SELECT
+               !
+               CALL cp_fm_set_submatrix(hmats, fmlocal, 1, 1, nao, nao)
+               CALL cp_fm_get_info(rpmos(i, ispin), ncol_global=norb)
+               CALL parallel_gemm('N', 'N', nao, norb, nao, focc, hmats, &
+                                  ec_env%mo_occ(ispin), 0.0_dp, rpmos(i, ispin))
+               IF (ec_env%error_method == "D" .OR. ec_env%error_method == "E") THEN
+                  CALL cp_fm_scale_and_add(1.0_dp, rpmos(i, ispin), -1.0_dp, ec_env%cpref(ispin))
+               END IF
+            END DO
+         END DO
+         CALL cp_fm_struct_release(fm_struct_mat)
+         IF (ADJUSTL(TRIM(eformat)) == "TREXIO") THEN
+            DEALLOCATE (fmreord, t2cind)
+         END IF
+
+         IF (is_source) THEN
+            CALL close_file(funit)
+         END IF
+
+         IF (unit_nr > 0) THEN
+            CALL open_file(ec_env%exresult_fn, file_status="OLD", file_form="FORMATTED", &
+                           file_action="WRITE", file_position="APPEND", unit_number=feunit)
+            WRITE (feunit, "(/,6X,A)") " Response Forces from error sampling [Hartree/Bohr]"
+            i = 0
+            WRITE (feunit, "(5X,I8)") i
+            DO ia = 1, natom
+               WRITE (feunit, "(5X,3F20.12)") ec_env%rf(1:3, ia)
+            END DO
+         END IF
+
+         debug_f = ec_env%debug_forces .OR. ec_env%debug_stress
+
+         IF (ec_env%error_method == "E") THEN
+            CALL get_qs_env(qs_env, matrix_s=matrix_s)
+            mats => matrix_s(1)%matrix
+            ALLOCATE (Spmos(nsample, nspins))
+            DO i = 1, nsample
+               DO ispin = 1, nspins
+                  CALL cp_fm_create(Spmos(i, ispin), fm_struct, set_zero=.TRUE.)
+                  CALL cp_dbcsr_sm_fm_multiply(mats, rpmos(i, ispin), Spmos(i, ispin), norb)
+               END DO
+            END DO
+         END IF
+
+         mref = ec_env%error_subspace
+         mref = MIN(mref, nsample)
+         nref = 0
+         ALLOCATE (smat(mref, mref), tvec(mref), yvec(mref), rlist(mref))
+         rlist = 0
+
+         CALL cp_fm_release(ec_env%cpmos)
+
+         DO i = 1, nsample
+            IF (unit_nr > 0) THEN
+               WRITE (unit_nr, '(T2,A,I6)') " Response Force Number ", i
+            END IF
+            !
+            CALL zero_qs_force(res_force)
+            CALL zero_virial(ks_virial, reset=.FALSE.)
+            DO ispin = 1, nspins
+               CALL dbcsr_set(ec_env%matrix_hz(ispin)%matrix, 0.0_dp)
+            END DO
+            !
+            ALLOCATE (ec_env%cpmos(nspins))
+            DO ispin = 1, nspins
+               CALL cp_fm_create(ec_env%cpmos(ispin), fm_struct)
+            END DO
+            !
+            do_resp = .TRUE.
+            IF (ec_env%error_method == "F" .OR. ec_env%error_method == "D") THEN
+               DO ispin = 1, nspins
+                  CALL cp_fm_to_fm(rpmos(i, ispin), ec_env%cpmos(ispin))
+               END DO
+            ELSE IF (ec_env%error_method == "E") THEN
+               CALL cp_extrapolate(rpmos, Spmos, i, nref, rlist, smat, tvec, yvec, vres)
+               IF (vres > ec_env%error_cutoff .OR. nref < MIN(5, mref)) THEN
+                  DO ispin = 1, nspins
+                     CALL cp_fm_to_fm(rpmos(i, ispin), ec_env%cpmos(ispin))
+                  END DO
+                  DO ib = 1, nref
+                     ia = rlist(ib)
+                     rfac = -yvec(ib)
+                     DO ispin = 1, nspins
+                        CALL cp_fm_scale_and_add(1.0_dp, ec_env%cpmos(ispin), &
+                                                 rfac, rpmos(ia, ispin))
+                     END DO
+                  END DO
+               ELSE
+                  do_resp = .FALSE.
+               END IF
+               IF (unit_nr > 0) THEN
+                  WRITE (unit_nr, '(T2,A,T60,I4,T69,F12.8)') &
+                     " Response Vector Extrapolation [nref|delta] = ", nref, vres
+               END IF
+            ELSE
+               CPABORT("Unknown Error Estimation Method")
+            END IF
+
+            IF (do_resp) THEN
+               CALL matrix_r_forces(qs_env, ec_env%cpmos, ec_env%mo_occ, &
+                                    ec_env%matrix_w(1, 1)%matrix, unit_nr, &
+                                    ec_env%debug_forces, ec_env%debug_stress)
+
+               CALL response_calculation(qs_env, ec_env, silent=.TRUE.)
+
+               CALL response_force(qs_env, &
+                                   vh_rspace=ec_env%vh_rspace, &
+                                   vxc_rspace=ec_env%vxc_rspace, &
+                                   vtau_rspace=ec_env%vtau_rspace, &
+                                   vadmm_rspace=ec_env%vadmm_rspace, &
+                                   vadmm_tau_rspace=ec_env%vadmm_tau_rspace, &
+                                   matrix_hz=ec_env%matrix_hz, &
+                                   matrix_pz=ec_env%matrix_z, &
+                                   matrix_pz_admm=ec_env%z_admm, &
+                                   matrix_wz=ec_env%matrix_wz, &
+                                   rhopz_r=ec_env%rhoz_r, &
+                                   zehartree=ec_env%ehartree, &
+                                   zexc=ec_env%exc, &
+                                   zexc_aux_fit=ec_env%exc_aux_fit, &
+                                   p_env=ec_env%p_env, &
+                                   debug=debug_f)
+               CALL total_qs_force(eforce, res_force, atomic_kind_set)
+               CALL para_env%sum(eforce)
+            ELSE
+               IF (unit_nr > 0) THEN
+                  WRITE (unit_nr, '(T2,A)') " Response Force Calculation is skipped. "
+               END IF
+               eforce = 0.0_dp
+            END IF
+            !
+            IF (ec_env%error_method == "D") THEN
+               eforce(1:3, 1:natom) = eforce(1:3, 1:natom) + ec_env%rf(1:3, 1:natom)
+               smpforce(1:3, 1:natom, i) = eforce(1:3, 1:natom)
+            ELSE IF (ec_env%error_method == "E") THEN
+               DO ib = 1, nref
+                  ia = rlist(ib)
+                  rfac = yvec(ib)
+                  eforce(1:3, 1:natom) = eforce(1:3, 1:natom) + rfac*smpforce(1:3, 1:natom, ia)
+               END DO
+               smpforce(1:3, 1:natom, i) = eforce(1:3, 1:natom)
+               eforce(1:3, 1:natom) = eforce(1:3, 1:natom) + ec_env%rf(1:3, 1:natom)
+               IF (do_resp .AND. nref < mref) THEN
+                  nref = nref + 1
+                  rlist(nref) = i
+               END IF
+            ELSE
+               smpforce(1:3, 1:natom, i) = eforce(1:3, 1:natom)
+            END IF
+
+            IF (unit_nr > 0) THEN
+               WRITE (unit_nr, *) " FORCES"
+               DO ia = 1, natom
+                  WRITE (unit_nr, "(i7,3F11.6,6X,3F11.6)") ia, eforce(1:3, ia), &
+                     (eforce(1:3, ia) - ec_env%rf(1:3, ia))
+               END DO
+               WRITE (unit_nr, *)
+               ! force file
+               WRITE (feunit, "(5X,I8)") i
+               DO ia = 1, natom
+                  WRITE (feunit, "(5X,3F20.12)") eforce(1:3, ia)
+               END DO
+            END IF
+
+            CALL cp_fm_release(ec_env%cpmos)
+
+         END DO
+
+         IF (unit_nr > 0) THEN
+            CALL close_file(feunit)
+         END IF
+
+         DEALLOCATE (smat, tvec, yvec, rlist)
+
+         CALL cp_fm_release(hmats)
+         CALL cp_fm_release(rpmos)
+         IF (ec_env%error_method == "E") THEN
+            CALL cp_fm_release(Spmos)
+         END IF
+
+         DEALLOCATE (eforce, smpforce)
+
+         ! reset force array
+         CALL get_qs_env(qs_env, force=res_force, virial=ks_virial)
+         CALL set_qs_env(qs_env, force=ks_force)
+         CALL deallocate_qs_force(res_force)
+         ks_virial = res_virial
+
+      CASE DEFAULT
+         CPABORT("unknown energy correction")
+      END SELECT
+
+   END SUBROUTINE response_force_error
+
+! **************************************************************************************************
+!> \brief ...
+!> \param rpmos ...
+!> \param Spmos ...
+!> \param ip ...
+!> \param nref ...
+!> \param rlist ...
+!> \param smat ...
+!> \param tvec ...
+!> \param yvec ...
+!> \param vres ...
+! **************************************************************************************************
+   SUBROUTINE cp_extrapolate(rpmos, Spmos, ip, nref, rlist, smat, tvec, yvec, vres)
+      TYPE(cp_fm_type), DIMENSION(:, :), POINTER         :: rpmos, Spmos
+      INTEGER, INTENT(IN)                                :: ip, nref
+      INTEGER, DIMENSION(:), INTENT(IN)                  :: rlist
+      REAL(KIND=dp), DIMENSION(:, :), INTENT(INOUT)      :: smat
+      REAL(KIND=dp), DIMENSION(:), INTENT(INOUT)         :: tvec, yvec
+      REAL(KIND=dp), INTENT(OUT)                         :: vres
+
+      INTEGER                                            :: i, ia, j, ja
+      REAL(KIND=dp)                                      :: aval
+      REAL(KIND=dp), ALLOCATABLE, DIMENSION(:, :)        :: sinv
+
+      smat = 0.0_dp
+      tvec = 0.0_dp
+      yvec = 0.0_dp
+      aval = 0.0_dp
+
+      IF (nref > 0) THEN
+         ALLOCATE (sinv(nref, nref))
+         !
+         DO i = 1, nref
+            ia = rlist(i)
+            tvec(i) = ctrace(rpmos(ip, :), Spmos(ia, :))
+            DO j = i + 1, nref
+               ja = rlist(j)
+               smat(j, i) = ctrace(rpmos(ja, :), Spmos(ia, :))
+               smat(i, j) = smat(j, i)
+            END DO
+            smat(i, i) = ctrace(rpmos(ia, :), Spmos(ia, :))
+         END DO
+         aval = ctrace(rpmos(ip, :), Spmos(ip, :))
+         !
+         sinv(1:nref, 1:nref) = smat(1:nref, 1:nref)
+         CALL invmat_symm(sinv(1:nref, 1:nref))
+         !
+         yvec(1:nref) = MATMUL(sinv(1:nref, 1:nref), tvec(1:nref))
+         !
+         vres = aval - SUM(yvec(1:nref)*tvec(1:nref))
+         vres = SQRT(ABS(vres))
+         !
+         DEALLOCATE (sinv)
+      ELSE
+         vres = 1.0_dp
+      END IF
+
+   END SUBROUTINE cp_extrapolate
+
+! **************************************************************************************************
+!> \brief ...
+!> \param ca ...
+!> \param cb ...
+!> \return ...
+! **************************************************************************************************
+   FUNCTION ctrace(ca, cb)
+      TYPE(cp_fm_type), DIMENSION(:)                     :: ca, cb
+      REAL(KIND=dp)                                      :: ctrace
+
+      INTEGER                                            :: is, ns
+      REAL(KIND=dp)                                      :: trace
+
+      ns = SIZE(ca)
+      ctrace = 0.0_dp
+      DO is = 1, ns
+         trace = 0.0_dp
+         CALL cp_fm_trace(ca(is), cb(is), trace)
+         ctrace = ctrace + trace
+      END DO
+
+   END FUNCTION ctrace
+
+! **************************************************************************************************
+!> \brief ...
+!> \param qs_env ...
+!> \param t2cind ...
+! **************************************************************************************************
+   SUBROUTINE get_t2cindex(qs_env, t2cind)
+      TYPE(qs_environment_type), POINTER                 :: qs_env
+      INTEGER, ALLOCATABLE, DIMENSION(:)                 :: t2cind
+
+      INTEGER                                            :: i, iatom, ikind, is, iset, ishell, k, l, &
+                                                            m, natom, nset, nsgf, numshell
+      INTEGER, ALLOCATABLE, DIMENSION(:)                 :: lshell
+      INTEGER, DIMENSION(:), POINTER                     :: nshell
+      INTEGER, DIMENSION(:, :), POINTER                  :: lval
+      TYPE(gto_basis_set_type), POINTER                  :: basis_set
+      TYPE(particle_type), DIMENSION(:), POINTER         :: particle_set
+      TYPE(qs_kind_type), DIMENSION(:), POINTER          :: qs_kind_set
+
+      ! Reorder index for basis functions from TREXIO to CP2K
+
+      CALL get_qs_env(qs_env, qs_kind_set=qs_kind_set, particle_set=particle_set, natom=natom)
+      CALL get_qs_kind_set(qs_kind_set, nshell=numshell, nsgf=nsgf)
+
+      ALLOCATE (t2cind(nsgf))
+      ALLOCATE (lshell(numshell))
+
+      ishell = 0
+      DO iatom = 1, natom
+         CALL get_atomic_kind(particle_set(iatom)%atomic_kind, kind_number=ikind)
+         CALL get_qs_kind(qs_kind_set(ikind), basis_set=basis_set, basis_type="ORB")
+         CALL get_gto_basis_set(basis_set, nset=nset, nshell=nshell, l=lval)
+         DO iset = 1, nset
+            DO is = 1, nshell(iset)
+               ishell = ishell + 1
+               l = lval(is, iset)
+               lshell(ishell) = l
+            END DO
+         END DO
+      END DO
+
+      i = 0
+      DO ishell = 1, numshell
+         l = lshell(ishell)
+         DO k = 1, 2*l + 1
+            m = (-1)**k*FLOOR(REAL(k, KIND=dp)/2.0_dp)
+            t2cind(i + l + 1 + m) = i + k
+         END DO
+         i = i + 2*l + 1
+      END DO
+
+      DEALLOCATE (lshell)
+
+   END SUBROUTINE get_t2cindex
 
 END MODULE energy_corrections
-

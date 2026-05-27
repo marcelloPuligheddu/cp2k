@@ -1,5 +1,7 @@
 # Real-Time Bethe-Salpeter Propagation
 
+**References** : [](#Marek2025)
+
 Instead of solving the Casida equation in the linear response regime, an explicit time-integration
 of the equation of motion of electrons can be carried out to determine the excitation frequencies.
 In the real-time Bethe-Salpeter propagation (RTBSE) method, the equation of motion is the von
@@ -73,9 +75,10 @@ polarizability element.
 ## Running the Propagation
 
 To run the RTBSE propagation, include the
-[REAL_TIME_PROPAGATION](#CP2K_INPUT.FORCE_EVAL.DFT.REAL_TIME_PROPAGATION) section in the input file
-and set the [RTP_METHOD](#CP2K_INPUT.FORCE_EVAL.DFT.REAL_TIME_PROPAGATION.RTP_METHOD) to `RTBSE` -
-otherwise, the standard TDDFT propagation is employed.
+[RTBSE](#CP2K_INPUT.FORCE_EVAL.DFT.REAL_TIME_PROPAGATION.RTBSE) section in the input file.
+[SECTION_PARAMETERS](#CP2K_INPUT.FORCE_EVAL.DFT.REAL_TIME_PROPAGATION.RTBSE.SECTION_PARAMETERS) can
+be used to choose TDDFT method as a debug method, but including the section alone leads to a RTBSE
+run.
 
 Furthermore, the [TIMESTEP](#CP2K_INPUT.MOTION.MD.TIMESTEP) and [STEPS](#CP2K_INPUT.MOTION.MD.STEPS)
 influence the size of each timestep and the total time of propagation. From the properties of the
@@ -129,9 +132,6 @@ For inexact methods, a threshold for the cutoff of exponential series is provide
 the [MAX_ITER](#CP2K_INPUT.FORCE_EVAL.DFT.REAL_TIME_PROPAGATION.MAX_ITER) keyword also sets the
 maximum number of iterations before the program is stopped and non-convergence is reported.
 
-Use [RTP_METHOD](#CP2K_INPUT.FORCE_EVAL.DFT.REAL_TIME_PROPAGATION.RTP_METHOD) to start the
-calculation by setting it to TDAGW.
-
 ### Excitation Method
 
 The real time pulse can be specified in the [EFIELD](#CP2K_INPUT.FORCE_EVAL.DFT.EFIELD) section.
@@ -166,17 +166,68 @@ absorption spectrum. The printing of all available properties is controlled in t
 RTBSE propagation are listed here
 
 - [DENSITY_MATRIX](#CP2K_INPUT.FORCE_EVAL.DFT.REAL_TIME_PROPAGATION.PRINT.DENSITY_MATRIX) - Prints
-  the elements of the density matrix in the MO basis into a file at every timestep
+  the elements of the density matrix in the MO basis into a file at every timestep.
 - [FIELD](#CP2K_INPUT.FORCE_EVAL.DFT.REAL_TIME_PROPAGATION.PRINT.FIELD) - Prints the elements of the
-  electric field applied at every time step
+  electric field applied at every time step. By default, the file name contains `FIELD` in its name
+  (rest is given by the name of the project). The example of the output follows
+
+```
+#          Time [fs]     field x [at.u.]     field y [at.u.]     field z [at.u.]
+     0.00000000E+000     0.00000000E+000     0.00000000E+000     0.00000000E+000
+     0.20000000E-002     0.16409233E-025     0.00000000E+000     0.00000000E+000
+     0.40000000E-002     0.70473572E-024     0.00000000E+000     0.00000000E+000
+     0.60000000E-002     0.25791168E-022     0.00000000E+000     0.00000000E+000
+```
+
 - [MOMENTS](#CP2K_INPUT.FORCE_EVAL.DFT.REAL_TIME_PROPAGATION.PRINT.MOMENTS) - Prints the electric
-  dipole moment elements reported at every time step
+  dipole moment elements reported at every time step. By default, prints both real and imaginary
+  components into the standard output, as follows. When a filename is specified, the real and
+  imaginary components are saved to separate files.
+
+```
+ MOMENTS_TRACE_RE|#          Time [fs] re(mom_t) x [at.u.] re(mom_t) y [at.u.] re(mom_t) z [at.u.]
+ MOMENTS_TRACE_RE|     0.00000000E+000     0.29242549E-007     0.00000000E+000     0.00000000E+000
+ MOMENTS_TRACE_IM|#          Time [fs] im(mom_t) x [at.u.] im(mom_t) y [at.u.] im(mom_t) z [at.u.]
+ MOMENTS_TRACE_IM|     0.00000000E+000     0.00000000E+000     0.00000000E+000     0.00000000E+000
+ MOMENTS_TRACE_RE|     0.20000000E-002     0.19484725E-002     0.00000000E+000     0.00000000E+000
+ MOMENTS_TRACE_IM|     0.20000000E-002     0.20709485E-020     0.00000000E+000     0.00000000E+000
+ MOMENTS_TRACE_RE|     0.40000000E-002     0.38810614E-002     0.00000000E+000     0.00000000E+000
+ MOMENTS_TRACE_IM|     0.40000000E-002     0.12130849E-017     0.00000000E+000     0.00000000E+000
+```
+
 - [MOMENTS_FT](#CP2K_INPUT.FORCE_EVAL.DFT.REAL_TIME_PROPAGATION.PRINT.MOMENTS_FT) - Prints the
-  Fourier transform of the dipole moment elements time series
+  Fourier transform of the dipole moment elements time series. By default, the output file includes
+  `MOMENTS_FT` in its name, with example below
+
+```
+#      omega [at.u.]      x,real [at.u.]      x,imag [at.u.]      y,real [at.u.]      y,imag [at.u.]      z,real [at.u.]      z,imag [at.u.]
+    -0.37995746E+002     0.00000000E+000    -0.00000000E+000    -0.00000000E+000     0.00000000E+000    -0.00000000E+000     0.00000000E+000
+    -0.37235831E+002     0.00000000E+000     0.00000000E+000    -0.00000000E+000     0.00000000E+000    -0.00000000E+000     0.00000000E+000
+    -0.36475916E+002     0.00000000E+000    -0.00000000E+000    -0.00000000E+000     0.00000000E+000    -0.00000000E+000     0.00000000E+000
+    -0.35716001E+002     0.00000000E+000     0.00000000E+000    -0.00000000E+000     0.00000000E+000    -0.00000000E+000     0.00000000E+000
+```
+
 - [POLARIZABILITY](#CP2K_INPUT.FORCE_EVAL.DFT.REAL_TIME_PROPAGATION.PRINT.POLARIZABILITY) - Prints
-  an element of the Fourier transform of polarizability.
+  elements of the Fourier transform of polarizability. Elements may be specified, but a reasonable
+  guess is made if not specified. The output filename contains `POLARIZABILITY` by default. Example
+  output is shown below
+
+```
+#      omega [at.u.] real pol. elem. 1 1 imag pol. elem. 1 1 real pol. elem. 2 1 imag pol. elem. 2 1 real pol. elem. 3 1 imag pol. elem. 3 1
+    -0.37995746E+002    -0.68121670E+011    -0.18127288E+010     0.00000000E+000     0.00000000E+000     0.00000000E+000     0.00000000E+000
+    -0.36475916E+002     0.60890185E+010     0.55419866E+009    -0.00000000E+000    -0.00000000E+000    -0.00000000E+000    -0.00000000E+000
+    -0.34956086E+002    -0.65208145E+009    -0.10855213E+009     0.00000000E+000     0.00000000E+000     0.00000000E+000     0.00000000E+000
+    -0.33436257E+002     0.77398877E+008     0.17348325E+008    -0.00000000E+000    -0.00000000E+000    -0.00000000E+000    -0.00000000E+000
+```
+
 - [RESTART](#CP2K_INPUT.FORCE_EVAL.DFT.REAL_TIME_PROPAGATION.PRINT.RESTART) - Controls the name of
-  the restart file
+  the restart files. Three files are produced -- real and imaginary parts of the instantaneous
+  density `matrix` at the last converged timestep, in binary format, and an `info` file, storing the
+  index of the last timestep.
+  - note that for RT-BSE calculations, the
+    [EACH](#CP2K_INPUT.FORCE_EVAL.DFT.REAL_TIME_PROPAGATION.PRINT.RESTART.EACH) section should have
+    [MD](#CP2K_INPUT.FORCE_EVAL.DFT.REAL_TIME_PROPAGATION.PRINT.RESTART.EACH.MD) keyword set to 1 to
+    enable restarts at arbitrary number of iteration steps, default is 20
 
 When [RESTART](#CP2K_INPUT.FORCE_EVAL.DFT.REAL_TIME_PROPAGATION.PRINT.RESTART),
 [MOMENTS](#CP2K_INPUT.FORCE_EVAL.DFT.REAL_TIME_PROPAGATION.PRINT.MOMENTS) and
@@ -184,6 +235,42 @@ When [RESTART](#CP2K_INPUT.FORCE_EVAL.DFT.REAL_TIME_PROPAGATION.PRINT.RESTART),
 continue running the calculation in the same directory for longer time without rerunning the already
 calculated time steps. Note that total length of the propagation time controls the energy/frequency
 precision, while timestep size controls the energy/frequency range.
+
+For applied field pulse not centered at zero in time, one can use
+[START_TIME](#CP2K_INPUT.FORCE_EVAL.DFT.REAL_TIME_PROPAGATION.FT.START_TIME) to set the center of
+Fourier transforms to a provided time $t_0$. Furthermore, the damping $\gamma$ in the Fourier
+transform is controlled by [DAMPING](#CP2K_INPUT.FORCE_EVAL.DFT.REAL_TIME_PROPAGATION.FT.DAMPING)
+parameter. Explicilty, in such case, the Fourier transform of function $f(t)$ is
+
+$$ f(\omega) = \int dt e^{i (\omega + i \gamma) t } f(t + t_0)
+$$
+
+### Padé Interpolation
+
+It is possible to apply Padé interpolation to the Fourier transformed observables
+([MOMENTS_FT](#CP2K_INPUT.FORCE_EVAL.DFT.REAL_TIME_PROPAGATION.PRINT.MOMENTS_FT) and
+[POLARIZABILITY](#CP2K_INPUT.FORCE_EVAL.DFT.REAL_TIME_PROPAGATION.PRINT.POLARIZABILITY)) to increase
+the point density in the energy space, which is otherwise limited by the total time of propagation
+($\Delta \omega \approx (2 \pi)/T$, where $T$ is the total time of propagation). The Padé
+interpolation is implemented via interface to the
+[GreenX library](https://github.com/nomad-coe/greenX)\[[Mattiat2018](https://doi.org/10.1063/1.5051250)\],
+specifically the analytic continuation component. In order to use it, CP2K has to be compiled with
+GreenX support (`-DCP2K_USE_GREENX=ON` in `cmake` build).
+
+The parameters of the interpolation are set via
+[PADE](#CP2K_INPUT.FORCE_EVAL.DFT.REAL_TIME_PROPAGATION.FT.PADE) section, whose presence also
+triggers the evaluation of the interpolation. Available parameters are
+
+- [E_MIN](#CP2K_INPUT.FORCE_EVAL.DFT.REAL_TIME_PROPAGATION.FT.PADE.E_MIN) - start of the energy
+  interval for which the interpolation of FT observables is done
+- [E_MAX](#CP2K_INPUT.FORCE_EVAL.DFT.REAL_TIME_PROPAGATION.FT.PADE.E_MAX) - end of the energy
+  interval for which the interpolation of FT observables is done
+- [E_STEP](#CP2K_INPUT.FORCE_EVAL.DFT.REAL_TIME_PROPAGATION.FT.PADE.E_STEP) - required resolution of
+  the interpolation (smaller `E_STEP` means more interpolation evaluation points)
+- [FIT_E_MIN](#CP2K_INPUT.FORCE_EVAL.DFT.REAL_TIME_PROPAGATION.FT.PADE.FIT_E_MIN) - start of the
+  energy interval used to fit the interpolation parameters
+- [FIT_E_MAX](#CP2K_INPUT.FORCE_EVAL.DFT.REAL_TIME_PROPAGATION.FT.PADE.FIT_E_MAX) - end of the
+  energy interval used to fit the interpolation parameters
 
 ### Example Input
 
@@ -193,7 +280,8 @@ one
 
 ```
 &REAL_TIME_PROPAGATION
-    RTP_METHOD RTBSE ! Start the RTBSE method
+    &RTBSE ! Start the RTBSE method
+    &END RTBSE
     EPS_ITER 1.0E-8 ! Check convergence
     MAT_EXP BCH
     EXP_ACCURACY 1.0E-14 ! Less than EPS_ITER
@@ -201,14 +289,21 @@ one
     APPLY_DELTA_PULSE
     DELTA_PULSE_DIRECTION 1 0 0
     DELTA_PULSE_SCALE 0.0001 ! Small
+    &FT
+        &PADE
+            E_MIN [eV] 0.0
+            E_MAX [eV] 100.0
+            E_STEP [eV] 0.02
+            FIT_E_MIN [eV] 0.0
+            FIT_E_MAX [eV] 300.0
+        &END PADE
+    &END FT
     &PRINT
         &MOMENTS
             FILENAME MOMENTS
         &END MOMENTS
         &MOMENTS_FT
             FILENAME MOMENTS-FT
-            DAMPING 0.1 ! Exponential damping
-            START_TIME ! Fourier transform offset
         &END MOMENTS_FT
         &FIELD
             FILENAME FIELD
@@ -216,7 +311,13 @@ one
         &POLARIZABILITY
             FILENAME POLARIZABILITY
             ELEMENT 1 1
+            ELEMENT 2 2 ! print two different elements of tensor
         &END POLARIZABILITY
+        &RESTART
+            &EACH
+                MD 1
+            &END EACH
+        &END RESTART
     &END PRINT
 &END REAL_TIME_PROPAGATION
 ```

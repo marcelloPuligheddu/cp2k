@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2025 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2026 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -14,11 +14,11 @@
 ! **************************************************************************************************
 MODULE qs_linres_methods
    USE cp_control_types,                ONLY: dft_control_type
-   USE cp_dbcsr_api,                    ONLY: dbcsr_checksum,&
-                                              dbcsr_copy,&
+   USE cp_dbcsr_api,                    ONLY: dbcsr_copy,&
                                               dbcsr_p_type,&
                                               dbcsr_set,&
                                               dbcsr_type
+   USE cp_dbcsr_contrib,                ONLY: dbcsr_checksum
    USE cp_dbcsr_operations,             ONLY: cp_dbcsr_sm_fm_multiply
    USE cp_external_control,             ONLY: external_control
    USE cp_files,                        ONLY: close_file,&
@@ -208,22 +208,25 @@ CONTAINS
 !> \param psi0_order ...
 !> \param iounit ...
 !> \param should_stop ...
+!> \param silent ...
 !> \par History
 !>      07.2005 created [MI]
 !> \author MI
 ! **************************************************************************************************
-   SUBROUTINE linres_solver(p_env, qs_env, psi1, h1_psi0, psi0_order, iounit, should_stop)
+   SUBROUTINE linres_solver(p_env, qs_env, psi1, h1_psi0, psi0_order, iounit, &
+                            should_stop, silent)
       TYPE(qs_p_env_type)                                :: p_env
       TYPE(qs_environment_type), POINTER                 :: qs_env
       TYPE(cp_fm_type), DIMENSION(:), INTENT(IN)         :: psi1, h1_psi0, psi0_order
       INTEGER, INTENT(IN)                                :: iounit
       LOGICAL, INTENT(OUT)                               :: should_stop
+      LOGICAL, INTENT(IN), OPTIONAL                      :: silent
 
       CHARACTER(LEN=*), PARAMETER                        :: routineN = 'linres_solver'
 
       INTEGER                                            :: handle, ispin, iter, maxnmo, nao, ncol, &
                                                             nmo, nocc, nspins
-      LOGICAL                                            :: restart
+      LOGICAL                                            :: my_silent, restart
       REAL(dp)                                           :: alpha, beta, norm_res, t1, t2
       REAL(dp), DIMENSION(:), POINTER                    :: tr_pAp, tr_rz0, tr_rz00, tr_rz1
       TYPE(cp_fm_struct_type), POINTER                   :: tmp_fm_struct
@@ -239,6 +242,9 @@ CONTAINS
       TYPE(mp_para_env_type), POINTER                    :: para_env
 
       CALL timeset(routineN, handle)
+
+      my_silent = .FALSE.
+      IF (PRESENT(silent)) my_silent = silent
 
       NULLIFY (dft_control, linres_control, matrix_s, matrix_t, matrix_ks, para_env)
       NULLIFY (mos, tmp_fm_struct, mo_coeff)
@@ -297,7 +303,7 @@ CONTAINS
          CALL cp_fm_struct_create(tmp_fm_struct, nrow_global=nmo, &
                                   ncol_global=nmo, para_env=para_env, &
                                   context=mo_coeff%matrix_struct%context)
-         CALL cp_fm_create(chc(ispin), tmp_fm_struct)
+         CALL cp_fm_create(chc(ispin), tmp_fm_struct, set_zero=.TRUE.)
          CALL cp_fm_struct_release(tmp_fm_struct)
       END DO
       !
@@ -318,7 +324,7 @@ CONTAINS
       END DO
       !
       ! header
-      IF (iounit > 0) THEN
+      IF (iounit > 0 .AND. .NOT. my_silent) THEN
          WRITE (iounit, "(/,T3,A,T16,A,T25,A,T38,A,T52,A,T72,A,/,T3,A)") &
             "Iteration", "Method", "Restart", "Stepsize", "Convergence", "Time", &
             REPEAT("-", 78)
@@ -365,7 +371,7 @@ CONTAINS
       !
       ! preconditioner
       linres_control%flag = ""
-      IF (linres_control%preconditioner_type .EQ. ot_precond_none) THEN
+      IF (linres_control%preconditioner_type == ot_precond_none) THEN
          !
          ! z_0 = r_0
          DO ispin = 1, nspins
@@ -400,14 +406,14 @@ CONTAINS
          !
          ! check convergence
          linres_control%converged = .FALSE.
-         IF (norm_res .LT. linres_control%eps) THEN
+         IF (norm_res < linres_control%eps) THEN
             linres_control%converged = .TRUE.
          END IF
          !
          t2 = m_walltime()
-         IF (iter .EQ. 1 .OR. MOD(iter, 1) .EQ. 0 .OR. linres_control%converged &
+         IF (iter == 1 .OR. MOD(iter, 1) == 0 .OR. linres_control%converged &
              .OR. restart .OR. should_stop) THEN
-            IF (iounit > 0) THEN
+            IF (iounit > 0 .AND. .NOT. my_silent) THEN
                WRITE (iounit, "(T5,I5,T18,A3,T28,L1,T38,1E8.2,T48,F16.10,T68,F8.2)") &
                   iter, linres_control%flag, restart, alpha, norm_res, t2 - t1
                CALL m_flush(iounit)
@@ -416,7 +422,8 @@ CONTAINS
          !
          IF (linres_control%converged) THEN
             IF (iounit > 0) THEN
-               WRITE (iounit, "(T3,A,I4,A)") "The linear solver converged in ", iter, " iterations."
+               WRITE (iounit, "(T3,A,I4,A,T73,F8.2)") "The linear solver converged in ", &
+                  iter, " iterations.", t2 - t1
                CALL m_flush(iounit)
             END IF
             EXIT iteration
@@ -464,7 +471,7 @@ CONTAINS
          !
          ! need to recompute the residue
          restart = .FALSE.
-         IF (MOD(iter, linres_control%restart_every) .EQ. 0) THEN
+         IF (MOD(iter, linres_control%restart_every) == 0) THEN
             !
             ! r_j+1 = b - A * x_j+1
             CALL apply_op(qs_env, p_env, psi0_order, psi1, Ap, chc)
@@ -489,7 +496,7 @@ CONTAINS
          !
          ! preconditioner
          linres_control%flag = ""
-         IF (linres_control%preconditioner_type .EQ. ot_precond_none) THEN
+         IF (linres_control%preconditioner_type == ot_precond_none) THEN
             !
             ! z_j+1 = r_j+1
             DO ispin = 1, nspins
@@ -567,7 +574,9 @@ CONTAINS
       !
       TYPE(qs_environment_type), INTENT(IN), POINTER     :: qs_env
       TYPE(qs_p_env_type)                                :: p_env
-      TYPE(cp_fm_type), DIMENSION(:), INTENT(IN)         :: c0, v, Av, chc
+      TYPE(cp_fm_type), DIMENSION(:), INTENT(IN)         :: c0, v
+      TYPE(cp_fm_type), DIMENSION(:), INTENT(INOUT)      :: Av
+      TYPE(cp_fm_type), DIMENSION(:), INTENT(IN)         :: chc
 
       CHARACTER(LEN=*), PARAMETER                        :: routineN = 'apply_op'
 
@@ -623,7 +632,7 @@ CONTAINS
          END DO
 
          ! skip the kernel if the DM is very small
-         IF (chksum .GT. 1.0E-14_dp) THEN
+         IF (chksum > 1.0E-14_dp) THEN
 
             CALL p_env_check_i_alloc(p_env, qs_env)
 
@@ -662,7 +671,8 @@ CONTAINS
 ! **************************************************************************************************
    SUBROUTINE apply_op_1(v, Av, matrix_ks, matrix_s, chc)
       !
-      TYPE(cp_fm_type), INTENT(IN)                       :: v, Av
+      TYPE(cp_fm_type), INTENT(IN)                       :: v
+      TYPE(cp_fm_type), INTENT(INOUT)                    :: Av
       TYPE(dbcsr_type), INTENT(IN)                       :: matrix_ks, matrix_s
       TYPE(cp_fm_type), INTENT(IN)                       :: chc
 
@@ -1023,15 +1033,15 @@ CONTAINS
                CALL para_env%bcast(iostat)
             END IF
 
-            IF (iostat .NE. 0) EXIT
+            IF (iostat /= 0) EXIT
             CALL para_env%bcast(ivec_tmp)
             CALL para_env%bcast(nspins_tmp)
             CALL para_env%bcast(nao_tmp)
 
             ! check that the number nao, nmo and nspins are
             ! the same as in the current mos
-            IF (nspins_tmp .NE. nspins) CPABORT("nspins not consistent")
-            IF (nao_tmp .NE. nao) CPABORT("nao not consistent")
+            IF (nspins_tmp /= nspins) CPABORT("nspins not consistent")
+            IF (nao_tmp /= nao) CPABORT("nao not consistent")
             !
             DO ispin = 1, nspins
                CALL get_mo_set(mos(ispin), mo_coeff=mo_coeff)
@@ -1039,7 +1049,7 @@ CONTAINS
                !
                IF (rst_unit > 0) READ (rst_unit) nmo_tmp
                CALL para_env%bcast(nmo_tmp)
-               IF (nmo_tmp .NE. nmo) CPABORT("nmo not consistent")
+               IF (nmo_tmp /= nmo) CPABORT("nmo not consistent")
                !
                ! read the response
                DO i = 1, nmo, MAX(max_block, 1)
@@ -1047,13 +1057,13 @@ CONTAINS
                   DO j = 1, i_block
                      IF (rst_unit > 0) READ (rst_unit) vecbuffer(1:nao, j)
                   END DO
-                  IF (iv .EQ. ivec_tmp) THEN
+                  IF (iv == ivec_tmp) THEN
                      CALL para_env%bcast(vecbuffer)
                      CALL cp_fm_set_submatrix(vec(ispin), vecbuffer, 1, i, nao, i_block)
                   END IF
                END DO
             END DO
-            IF (ivec .EQ. ivec_tmp) EXIT
+            IF (ivec == ivec_tmp) EXIT
          END DO
 
          IF (iostat /= 0) THEN

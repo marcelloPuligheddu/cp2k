@@ -30,12 +30,7 @@ case "${with_libvori:=__INSTALL__}" in
     if verify_checksums "${install_lock_file}"; then
       echo "libvori-${libvori_ver} is already installed, skipping it."
     else
-      if [ -f libvori-${libvori_ver}.tar.gz ]; then
-        echo "libvori-${libvori_ver}.tar.gz is found"
-      else
-        download_pkg_from_cp2k_org "${libvori_sha256}" "libvori-${libvori_ver}.tar.gz"
-      fi
-
+      retrieve_package "${libvori_sha256}" "libvori-${libvori_ver}.tar.gz"
       echo "Installing from scratch into ${pkg_install_dir}"
       [ -d libvori-${libvori_ver} ] && rm -rf libvori-${libvori_ver}
       tar -xzf libvori-${libvori_ver}.tar.gz
@@ -48,10 +43,10 @@ case "${with_libvori:=__INSTALL__}" in
         -DCMAKE_INSTALL_LIBDIR=lib \
         -DCMAKE_INSTALL_RPATH_USE_LINK_PATH=ON \
         -DCMAKE_VERBOSE_MAKEFILE=ON \
-        .. > cmake.log 2>&1 || tail -n ${LOG_LINES} cmake.log
-      CMAKE_BUILD_PARALLEL_LEVEL="$(get_nprocs)" cmake --build . > build.log 2>&1 || tail -n ${LOG_LINES} build.log
-      CMAKE_BUILD_PARALLEL_LEVEL="$(get_nprocs)" cmake --build . --target test > test.log 2>&1 || tail -n ${LOG_LINES} test.log
-      CMAKE_BUILD_PARALLEL_LEVEL="$(get_nprocs)" cmake --build . --target install > install.log 2>&1 || tail -n ${LOG_LINES} install.log
+        .. > cmake.log 2>&1 || tail_excerpt cmake.log
+      CMAKE_BUILD_PARALLEL_LEVEL="$(get_nprocs)" cmake --build . > build.log 2>&1 || tail_excerpt build.log
+      CMAKE_BUILD_PARALLEL_LEVEL="$(get_nprocs)" cmake --build . --target test > test.log 2>&1 || tail_excerpt test.log
+      CMAKE_BUILD_PARALLEL_LEVEL="$(get_nprocs)" cmake --build . --target install > install.log 2>&1 || tail_excerpt install.log
 
       write_checksums "${install_lock_file}" "${SCRIPT_DIR}/stage7/$(basename "${SCRIPT_NAME}")"
     fi
@@ -85,7 +80,6 @@ prepend_path LD_LIBRARY_PATH "${pkg_install_dir}/lib"
 prepend_path LD_RUN_PATH "${pkg_install_dir}/lib"
 prepend_path LIBRARY_PATH "${pkg_install_dir}/lib"
 export LIBVORI_LIBS="${LIBVORI_LIBS}"
-export LIBVORI_ROOT="${pkg_install_dir}"
 prepend_path PKG_CONFIG_PATH "$pkg_install_dir/lib/pkgconfig"
 prepend_path CMAKE_PREFIX_PATH "$pkg_install_dir"
 EOF
@@ -99,7 +93,7 @@ export CP_DFLAGS="\${CP_DFLAGS} -D__LIBVORI"
 export CP_LDFLAGS="\${CP_LDFLAGS} ${LIBVORI_LDFLAGS}"
 export CP_LIBS="\${CP_LIBS} ${LIBVORI_LIBS}"
 EOF
-  cat "${BUILDDIR}/setup_libvori" >> "${SETUPFILE}"
+  filter_setup "${BUILDDIR}/setup_libvori" "${SETUPFILE}"
 fi
 
 load "${BUILDDIR}/setup_libvori"

@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2025 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2026 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -17,8 +17,8 @@ MODULE minbas_methods
    USE cp_dbcsr_api,                    ONLY: &
         dbcsr_create, dbcsr_distribution_type, dbcsr_filter, dbcsr_iterator_blocks_left, &
         dbcsr_iterator_next_block, dbcsr_iterator_start, dbcsr_iterator_stop, dbcsr_iterator_type, &
-        dbcsr_multiply, dbcsr_p_type, dbcsr_release, dbcsr_reserve_diag_blocks, dbcsr_type, &
-        dbcsr_type_no_symmetry
+        dbcsr_multiply, dbcsr_p_type, dbcsr_release, dbcsr_type, dbcsr_type_no_symmetry
+   USE cp_dbcsr_contrib,                ONLY: dbcsr_reserve_diag_blocks
    USE cp_dbcsr_operations,             ONLY: copy_dbcsr_to_fm,&
                                               copy_fm_to_dbcsr,&
                                               dbcsr_allocate_matrix_set,&
@@ -190,7 +190,7 @@ CONTAINS
             ALLOCATE (quambo(ispin)%matrix)
             CALL dbcsr_create(matrix=quambo(ispin)%matrix, &
                               name="QUAMBO", dist=dbcsr_dist, matrix_type=dbcsr_type_no_symmetry, &
-                              row_blk_size=row_blk_sizes, col_blk_size=col_blk_sizes, nze=0)
+                              row_blk_size=row_blk_sizes, col_blk_size=col_blk_sizes)
          END DO
 
          ! initialize MAOs
@@ -199,7 +199,7 @@ CONTAINS
 
          ! sortho (nmao x nmao)
          CALL dbcsr_create(sortho, name="SORTHO", dist=dbcsr_dist, matrix_type=dbcsr_type_no_symmetry, &
-                           row_blk_size=col_blk_sizes, col_blk_size=col_blk_sizes, nze=0)
+                           row_blk_size=col_blk_sizes, col_blk_size=col_blk_sizes)
          CALL dbcsr_reserve_diag_blocks(matrix=sortho)
 
          DEALLOCATE (row_blk_sizes, col_blk_sizes)

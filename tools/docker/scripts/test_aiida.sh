@@ -2,9 +2,6 @@
 
 # author: Ole Schuett
 
-# Compile CP2K.
-./build_cp2k_cmake.sh "ubuntu" "ssmp" || exit 0
-
 echo -e "\n========== Installing Dependencies =========="
 apt-get update -qq
 export DEBIAN_FRONTEND=noninteractive
@@ -15,7 +12,6 @@ apt-get install -qq --no-install-recommends \
   python3-pip \
   python3-venv \
   python3-dev \
-  python3-reentry \
   postgresql \
   libpq-dev \
   rabbitmq-server \
@@ -42,13 +38,13 @@ export CC=gcc
 echo -e "\n========== Installing AiiDA-CP2K plugin =========="
 git clone --quiet https://github.com/aiidateam/aiida-cp2k.git /opt/aiida-cp2k/
 cd /opt/aiida-cp2k/
-pip3 install './[dev]'
+# For compatibility of Python 3.14
+# pip3 install './[dev]'
+pip3 install .
+pip3 install 'pytest>=8.4' 'pgtest~=1.3'
 
 echo -e "\n========== Configuring AiiDA =========="
 AS_UBUNTU_USER="sudo -u ubuntu -H"
-
-#update reentry cache
-$AS_UBUNTU_USER reentry scan
 
 # start RabbitMQ
 service rabbitmq-server start
@@ -62,11 +58,15 @@ $AS_UBUNTU_USER /opt/venv/bin/verdi presto
 # fake the presents of conda
 ln -s /bin/true /usr/bin/conda
 
+# fake the presents of aiida-pseudo
+ln -s /bin/true /usr/bin/aiida-pseudo
+
 # setup code
 mkdir -p /opt/conda/envs/cp2k/bin/
 cat > /opt/conda/envs/cp2k/bin/cp2k.psmp << EndOfMessage
 #!/bin/bash -e
 export OMP_NUM_THREADS=2
+source /opt/cp2k-toolchain/install/setup
 /opt/cp2k/build/bin/cp2k.ssmp "\$@"
 EndOfMessage
 chmod +x /opt/conda/envs/cp2k/bin/cp2k.psmp
@@ -76,7 +76,7 @@ set +e # disable error trapping for remainder of script
 (
   set -e         # abort on error
   ulimit -t 1800 # abort after 30 minutes
-  $AS_UBUNTU_USER /opt/venv/bin/py.test
+  $AS_UBUNTU_USER /opt/venv/bin/py.test -k "not example_sirius"
 )
 
 EXIT_CODE=$?

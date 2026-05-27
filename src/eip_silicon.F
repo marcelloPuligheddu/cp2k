@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2025 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2026 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -12,7 +12,7 @@
 !>      empirical interatomic potentials for Silicon.
 !> \par History
 !>      03.2006 initial create [tdk]
-!> \author Thomas D. Kuehne (tkuehne@phys.chem.ethz.ch)
+!> \author Thomas D. Kuehne (tkuehne@cp2k.org)
 ! **************************************************************************************************
 MODULE eip_silicon
    USE atomic_kind_list_types,          ONLY: atomic_kind_list_type
@@ -48,7 +48,7 @@ MODULE eip_silicon
    CHARACTER(len=*), PARAMETER, PRIVATE :: moduleN = 'eip_silicon'
 
    ! *** Public subroutines ***
-   PUBLIC :: eip_bazant, eip_lenosky
+   PUBLIC :: eip_bazant, eip_lenosky, eip_stillinger_weber, eip_tersoff
 
 !***
 
@@ -69,7 +69,7 @@ CONTAINS
 !>                    using OpenMP; CPC 148, 1 (2002)
 !> \par History
 !>      03.2006 initial create [tdk]
-!> \author Thomas D. Kuehne (tkuehne@phys.chem.ethz.ch)
+!> \author Thomas D. Kuehne (tkuehne@cp2k.org)
 ! **************************************************************************************************
    SUBROUTINE eip_bazant(eip_env)
       TYPE(eip_environment_type), POINTER                :: eip_env
@@ -235,7 +235,7 @@ CONTAINS
 !>                    using OpenMP; CPC 148, 1 (2002)
 !> \par History
 !>      03.2006 initial create [tdk]
-!> \author Thomas D. Kuehne (tkuehne@phys.chem.ethz.ch)
+!> \author Thomas D. Kuehne (tkuehne@cp2k.org)
 ! **************************************************************************************************
    SUBROUTINE eip_lenosky(eip_env)
       TYPE(eip_environment_type), POINTER                :: eip_env
@@ -392,12 +392,333 @@ CONTAINS
    END SUBROUTINE eip_lenosky
 
 ! **************************************************************************************************
+!> \brief Interface routine of the Stillinger-Weber force field to CP2K
+!> \param eip_env ...
+!> \par Literature
+!>      F.H. Stillinger and T.A. Weber:
+!>      Computer simulation of local order in condensed phases of silicon;
+!>      Phys. Rev. B 31, 5262 (1985)
+!> \par History
+!>      04.2026 added [Thomas D. Kuehne, tkuehne@cp2k.org]
+! **************************************************************************************************
+   SUBROUTINE eip_stillinger_weber(eip_env)
+      TYPE(eip_environment_type), POINTER                :: eip_env
+
+      CHARACTER(len=*), PARAMETER :: routineN = 'eip_stillinger_weber'
+
+      INTEGER                                            :: handle, i, iparticle, iparticle_kind, &
+                                                            iparticle_local, iw, natom, &
+                                                            nparticle_kind, nparticle_local
+      REAL(KIND=dp)                                      :: ekin, ener, mass
+      REAL(KIND=dp), ALLOCATABLE, DIMENSION(:, :)        :: rxyz
+      REAL(KIND=dp), DIMENSION(3)                        :: abc
+      TYPE(atomic_kind_list_type), POINTER               :: atomic_kinds
+      TYPE(atomic_kind_type), DIMENSION(:), POINTER      :: atomic_kind_set
+      TYPE(atomic_kind_type), POINTER                    :: atomic_kind
+      TYPE(cell_type), POINTER                           :: cell
+      TYPE(cp_logger_type), POINTER                      :: logger
+      TYPE(cp_subsys_type), POINTER                      :: subsys
+      TYPE(distribution_1d_type), POINTER                :: local_particles
+      TYPE(mp_para_env_type), POINTER                    :: para_env
+      TYPE(particle_type), DIMENSION(:), POINTER         :: particle_set
+      TYPE(section_vals_type), POINTER                   :: eip_section
+
+      CALL timeset(routineN, handle)
+
+      NULLIFY (cell, particle_set, eip_section, logger, atomic_kinds, &
+               atomic_kind, local_particles, subsys, atomic_kind_set, para_env)
+
+      ekin = 0.0_dp
+
+      logger => cp_get_default_logger()
+
+      CPASSERT(ASSOCIATED(eip_env))
+
+      CALL eip_env_get(eip_env=eip_env, cell=cell, particle_set=particle_set, &
+                       subsys=subsys, local_particles=local_particles, &
+                       atomic_kind_set=atomic_kind_set)
+      CALL get_cell(cell=cell, abc=abc)
+
+      eip_section => section_vals_get_subs_vals(eip_env%force_env_input, "EIP")
+      natom = SIZE(particle_set)
+
+      ALLOCATE (rxyz(3, natom))
+
+      DO i = 1, natom
+         rxyz(:, i) = particle_set(i)%r(:)*angstrom
+      END DO
+
+      CALL eip_stillinger_weber_silicon(nat=natom, alat=abc*angstrom, &
+                                        rxyz0=rxyz, fxyz=eip_env%eip_forces, &
+                                        etot=ener, count=eip_env%count)
+
+      eip_env%coord_avg = 0.0_dp
+      eip_env%coord_var = 0.0_dp
+
+      CALL cp_subsys_get(subsys=subsys, atomic_kinds=atomic_kinds)
+
+      nparticle_kind = atomic_kinds%n_els
+
+      DO iparticle_kind = 1, nparticle_kind
+         atomic_kind => atomic_kind_set(iparticle_kind)
+         CALL get_atomic_kind(atomic_kind=atomic_kind, mass=mass)
+         nparticle_local = local_particles%n_el(iparticle_kind)
+         DO iparticle_local = 1, nparticle_local
+            iparticle = local_particles%list(iparticle_kind)%array(iparticle_local)
+            ekin = ekin + 0.5_dp*mass* &
+                   (particle_set(iparticle)%v(1)*particle_set(iparticle)%v(1) &
+                    + particle_set(iparticle)%v(2)*particle_set(iparticle)%v(2) &
+                    + particle_set(iparticle)%v(3)*particle_set(iparticle)%v(3))
+         END DO
+      END DO
+
+      CALL cp_subsys_get(subsys=subsys, para_env=para_env)
+      CALL para_env%sum(ekin)
+      eip_env%eip_kinetic_energy = ekin
+
+      eip_env%eip_potential_energy = ener/evolt
+      eip_env%eip_energy = eip_env%eip_kinetic_energy + eip_env%eip_potential_energy
+      eip_env%eip_energy_var = 0.0_dp
+
+      DO i = 1, natom
+         particle_set(i)%f(:) = eip_env%eip_forces(:, i)/evolt*angstrom
+      END DO
+
+      DEALLOCATE (rxyz)
+
+      IF (BTEST(cp_print_key_should_output(logger%iter_info, &
+                                           eip_section, "PRINT%ENERGIES"), cp_p_file)) THEN
+         iw = cp_print_key_unit_nr(logger, eip_section, "PRINT%ENERGIES", &
+                                   extension=".mmLog")
+
+         CALL eip_print_energies(eip_env=eip_env, output_unit=iw)
+         CALL cp_print_key_finished_output(iw, logger, eip_section, &
+                                           "PRINT%ENERGIES")
+      END IF
+
+      IF (BTEST(cp_print_key_should_output(logger%iter_info, &
+                                           eip_section, "PRINT%ENERGIES_VAR"), cp_p_file)) THEN
+         iw = cp_print_key_unit_nr(logger, eip_section, "PRINT%ENERGIES_VAR", &
+                                   extension=".mmLog")
+
+         CALL eip_print_energy_var(eip_env=eip_env, output_unit=iw)
+         CALL cp_print_key_finished_output(iw, logger, eip_section, &
+                                           "PRINT%ENERGIES_VAR")
+      END IF
+
+      IF (BTEST(cp_print_key_should_output(logger%iter_info, &
+                                           eip_section, "PRINT%FORCES"), cp_p_file)) THEN
+         iw = cp_print_key_unit_nr(logger, eip_section, "PRINT%FORCES", &
+                                   extension=".mmLog")
+
+         CALL eip_print_forces(eip_env=eip_env, output_unit=iw)
+         CALL cp_print_key_finished_output(iw, logger, eip_section, &
+                                           "PRINT%FORCES")
+      END IF
+
+      IF (BTEST(cp_print_key_should_output(logger%iter_info, &
+                                           eip_section, "PRINT%COORD_AVG"), cp_p_file)) THEN
+         iw = cp_print_key_unit_nr(logger, eip_section, "PRINT%COORD_AVG", &
+                                   extension=".mmLog")
+
+         CALL eip_print_coord_avg(eip_env=eip_env, output_unit=iw)
+         CALL cp_print_key_finished_output(iw, logger, eip_section, &
+                                           "PRINT%COORD_AVG")
+      END IF
+
+      IF (BTEST(cp_print_key_should_output(logger%iter_info, &
+                                           eip_section, "PRINT%COORD_VAR"), cp_p_file)) THEN
+         iw = cp_print_key_unit_nr(logger, eip_section, "PRINT%COORD_VAR", &
+                                   extension=".mmLog")
+
+         CALL eip_print_coord_var(eip_env=eip_env, output_unit=iw)
+         CALL cp_print_key_finished_output(iw, logger, eip_section, &
+                                           "PRINT%COORD_VAR")
+      END IF
+
+      IF (BTEST(cp_print_key_should_output(logger%iter_info, &
+                                           eip_section, "PRINT%COUNT"), cp_p_file)) THEN
+         iw = cp_print_key_unit_nr(logger, eip_section, "PRINT%COUNT", &
+                                   extension=".mmLog")
+
+         CALL eip_print_count(eip_env=eip_env, output_unit=iw)
+         CALL cp_print_key_finished_output(iw, logger, eip_section, &
+                                           "PRINT%COUNT")
+      END IF
+
+      CALL timestop(handle)
+
+   END SUBROUTINE eip_stillinger_weber
+
+! **************************************************************************************************
+!> \brief Interface routine of the Tersoff force field to CP2K
+!> \param eip_env ...
+!> \par Literature
+!>      J. Tersoff:
+!>      New empirical approach for the structure and energy of covalent systems;
+!>      Phys. Rev. Lett. 61, 2879 (1988)
+!>      J. Tersoff:
+!>      Modeling solid-state chemistry: Interatomic potentials for multicomponent systems;
+!>      Phys. Rev. B 39, 5566 (1989)
+!> \par History
+!>      04.2026 added [Thomas D. Kuehne, tkuehne@cp2k.org]
+! **************************************************************************************************
+   SUBROUTINE eip_tersoff(eip_env)
+      TYPE(eip_environment_type), POINTER                :: eip_env
+
+      CHARACTER(len=*), PARAMETER                        :: routineN = 'eip_tersoff'
+
+      INTEGER                                            :: handle, i, iparticle, iparticle_kind, &
+                                                            iparticle_local, iw, natom, &
+                                                            nparticle_kind, nparticle_local
+      REAL(KIND=dp)                                      :: ekin, ener, mass
+      REAL(KIND=dp), ALLOCATABLE, DIMENSION(:, :)        :: rxyz
+      REAL(KIND=dp), DIMENSION(3)                        :: abc
+      TYPE(atomic_kind_list_type), POINTER               :: atomic_kinds
+      TYPE(atomic_kind_type), DIMENSION(:), POINTER      :: atomic_kind_set
+      TYPE(atomic_kind_type), POINTER                    :: atomic_kind
+      TYPE(cell_type), POINTER                           :: cell
+      TYPE(cp_logger_type), POINTER                      :: logger
+      TYPE(cp_subsys_type), POINTER                      :: subsys
+      TYPE(distribution_1d_type), POINTER                :: local_particles
+      TYPE(mp_para_env_type), POINTER                    :: para_env
+      TYPE(particle_type), DIMENSION(:), POINTER         :: particle_set
+      TYPE(section_vals_type), POINTER                   :: eip_section
+
+      CALL timeset(routineN, handle)
+
+      NULLIFY (cell, particle_set, eip_section, logger, atomic_kinds, &
+               atomic_kind, local_particles, subsys, atomic_kind_set, para_env)
+
+      ekin = 0.0_dp
+
+      logger => cp_get_default_logger()
+
+      CPASSERT(ASSOCIATED(eip_env))
+
+      CALL eip_env_get(eip_env=eip_env, cell=cell, particle_set=particle_set, &
+                       subsys=subsys, local_particles=local_particles, &
+                       atomic_kind_set=atomic_kind_set)
+      CALL get_cell(cell=cell, abc=abc)
+
+      eip_section => section_vals_get_subs_vals(eip_env%force_env_input, "EIP")
+      natom = SIZE(particle_set)
+
+      ALLOCATE (rxyz(3, natom))
+
+      DO i = 1, natom
+         rxyz(:, i) = particle_set(i)%r(:)*angstrom
+      END DO
+
+      CALL eip_tersoff_silicon(nat=natom, alat=abc*angstrom, rxyz=rxyz, &
+                               fxyz=eip_env%eip_forces, etot=ener, &
+                               count=eip_env%count)
+
+      eip_env%coord_avg = 0.0_dp
+      eip_env%coord_var = 0.0_dp
+
+      CALL cp_subsys_get(subsys=subsys, atomic_kinds=atomic_kinds)
+
+      nparticle_kind = atomic_kinds%n_els
+
+      DO iparticle_kind = 1, nparticle_kind
+         atomic_kind => atomic_kind_set(iparticle_kind)
+         CALL get_atomic_kind(atomic_kind=atomic_kind, mass=mass)
+         nparticle_local = local_particles%n_el(iparticle_kind)
+         DO iparticle_local = 1, nparticle_local
+            iparticle = local_particles%list(iparticle_kind)%array(iparticle_local)
+            ekin = ekin + 0.5_dp*mass* &
+                   (particle_set(iparticle)%v(1)*particle_set(iparticle)%v(1) &
+                    + particle_set(iparticle)%v(2)*particle_set(iparticle)%v(2) &
+                    + particle_set(iparticle)%v(3)*particle_set(iparticle)%v(3))
+         END DO
+      END DO
+
+      CALL cp_subsys_get(subsys=subsys, para_env=para_env)
+      CALL para_env%sum(ekin)
+      eip_env%eip_kinetic_energy = ekin
+
+      eip_env%eip_potential_energy = ener/evolt
+      eip_env%eip_energy = eip_env%eip_kinetic_energy + eip_env%eip_potential_energy
+      eip_env%eip_energy_var = 0.0_dp
+
+      DO i = 1, natom
+         particle_set(i)%f(:) = eip_env%eip_forces(:, i)/evolt*angstrom
+      END DO
+
+      DEALLOCATE (rxyz)
+
+      IF (BTEST(cp_print_key_should_output(logger%iter_info, &
+                                           eip_section, "PRINT%ENERGIES"), cp_p_file)) THEN
+         iw = cp_print_key_unit_nr(logger, eip_section, "PRINT%ENERGIES", &
+                                   extension=".mmLog")
+
+         CALL eip_print_energies(eip_env=eip_env, output_unit=iw)
+         CALL cp_print_key_finished_output(iw, logger, eip_section, &
+                                           "PRINT%ENERGIES")
+      END IF
+
+      IF (BTEST(cp_print_key_should_output(logger%iter_info, &
+                                           eip_section, "PRINT%ENERGIES_VAR"), cp_p_file)) THEN
+         iw = cp_print_key_unit_nr(logger, eip_section, "PRINT%ENERGIES_VAR", &
+                                   extension=".mmLog")
+
+         CALL eip_print_energy_var(eip_env=eip_env, output_unit=iw)
+         CALL cp_print_key_finished_output(iw, logger, eip_section, &
+                                           "PRINT%ENERGIES_VAR")
+      END IF
+
+      IF (BTEST(cp_print_key_should_output(logger%iter_info, &
+                                           eip_section, "PRINT%FORCES"), cp_p_file)) THEN
+         iw = cp_print_key_unit_nr(logger, eip_section, "PRINT%FORCES", &
+                                   extension=".mmLog")
+
+         CALL eip_print_forces(eip_env=eip_env, output_unit=iw)
+         CALL cp_print_key_finished_output(iw, logger, eip_section, &
+                                           "PRINT%FORCES")
+      END IF
+
+      IF (BTEST(cp_print_key_should_output(logger%iter_info, &
+                                           eip_section, "PRINT%COORD_AVG"), cp_p_file)) THEN
+         iw = cp_print_key_unit_nr(logger, eip_section, "PRINT%COORD_AVG", &
+                                   extension=".mmLog")
+
+         CALL eip_print_coord_avg(eip_env=eip_env, output_unit=iw)
+         CALL cp_print_key_finished_output(iw, logger, eip_section, &
+                                           "PRINT%COORD_AVG")
+      END IF
+
+      IF (BTEST(cp_print_key_should_output(logger%iter_info, &
+                                           eip_section, "PRINT%COORD_VAR"), cp_p_file)) THEN
+         iw = cp_print_key_unit_nr(logger, eip_section, "PRINT%COORD_VAR", &
+                                   extension=".mmLog")
+
+         CALL eip_print_coord_var(eip_env=eip_env, output_unit=iw)
+         CALL cp_print_key_finished_output(iw, logger, eip_section, &
+                                           "PRINT%COORD_VAR")
+      END IF
+
+      IF (BTEST(cp_print_key_should_output(logger%iter_info, &
+                                           eip_section, "PRINT%COUNT"), cp_p_file)) THEN
+         iw = cp_print_key_unit_nr(logger, eip_section, "PRINT%COUNT", &
+                                   extension=".mmLog")
+
+         CALL eip_print_count(eip_env=eip_env, output_unit=iw)
+         CALL cp_print_key_finished_output(iw, logger, eip_section, &
+                                           "PRINT%COUNT")
+      END IF
+
+      CALL timestop(handle)
+
+   END SUBROUTINE eip_tersoff
+
+! **************************************************************************************************
 !> \brief Print routine for the EIP energies
 !> \param eip_env The eip environment of matter
 !> \param output_unit The output unit
 !> \par History
 !>      03.2006 initial create [tdk]
-!> \author Thomas D. Kuehne (tkuehne@phys.chem.ethz.ch)
+!> \author Thomas D. Kuehne (tkuehne@cp2k.org)
 !> \note
 !>      As usual the EIP energies differ from the DFT energies!
 !>      Only the relative energy differences are correctly reproduced.
@@ -423,7 +744,7 @@ CONTAINS
 !> \param output_unit The output unit
 !> \par History
 !>      03.2006 initial create [tdk]
-!> \author Thomas D. Kuehne (tkuehne@phys.chem.ethz.ch)
+!> \author Thomas D. Kuehne (tkuehne@cp2k.org)
 ! **************************************************************************************************
    SUBROUTINE eip_print_energy_var(eip_env, output_unit)
       TYPE(eip_environment_type), POINTER                :: eip_env
@@ -452,7 +773,7 @@ CONTAINS
 !> \param output_unit The output unit
 !> \par History
 !>      03.2006 initial create [tdk]
-!> \author Thomas D. Kuehne (tkuehne@phys.chem.ethz.ch)
+!> \author Thomas D. Kuehne (tkuehne@cp2k.org)
 ! **************************************************************************************************
    SUBROUTINE eip_print_forces(eip_env, output_unit)
       TYPE(eip_environment_type), POINTER                :: eip_env
@@ -491,7 +812,7 @@ CONTAINS
 !> \param output_unit The output unit
 !> \par History
 !>      03.2006 initial create [tdk]
-!> \author Thomas D. Kuehne (tkuehne@phys.chem.ethz.ch)
+!> \author Thomas D. Kuehne (tkuehne@cp2k.org)
 ! **************************************************************************************************
    SUBROUTINE eip_print_coord_avg(eip_env, output_unit)
       TYPE(eip_environment_type), POINTER                :: eip_env
@@ -520,7 +841,7 @@ CONTAINS
 !> \param output_unit The output unit
 !> \par History
 !>      03.2006 initial create [tdk]
-!> \author Thomas D. Kuehne (tkuehne@phys.chem.ethz.ch)
+!> \author Thomas D. Kuehne (tkuehne@cp2k.org)
 ! **************************************************************************************************
    SUBROUTINE eip_print_coord_var(eip_env, output_unit)
       TYPE(eip_environment_type), POINTER                :: eip_env
@@ -549,7 +870,7 @@ CONTAINS
 !> \param output_unit The output unit
 !> \par History
 !>      03.2006 initial create [tdk]
-!> \author Thomas D. Kuehne (tkuehne@phys.chem.ethz.ch)
+!> \author Thomas D. Kuehne (tkuehne@cp2k.org)
 ! **************************************************************************************************
    SUBROUTINE eip_print_count(eip_env, output_unit)
       TYPE(eip_environment_type), POINTER                :: eip_env
@@ -599,7 +920,7 @@ CONTAINS
 !>                    using OpenMP; CPC 148, 1 (2002)
 !> \par History
 !>      03.2006 initial create [tdk]
-!> \author Thomas D. Kuehne (tkuehne@phys.chem.ethz.ch)
+!> \author Thomas D. Kuehne (tkuehne@cp2k.org)
 ! **************************************************************************************************
    SUBROUTINE eip_bazant_silicon(nat, alat, rxyz0, fxyz, ener, coord, ener_var, &
                                  coord_var, count)
@@ -628,16 +949,16 @@ CONTAINS
 !        cut=par_a
       cut = 3.1213820e0_dp + 1.e-14_dp
 
-      IF (count .EQ. 0) OPEN (unit=10, file='bazant.mon', status='unknown')
+      IF (count == 0) OPEN (unit=10, file='bazant.mon', status='unknown')
       count = count + 1.e0_dp
 
 ! linear scaling calculation of verlet list
       ll1 = INT(alat(1)/cut)
-      IF (ll1 .LT. 1) CPABORT("alat(1) too small")
+      IF (ll1 < 1) CPABORT("alat(1) too small")
       ll2 = INT(alat(2)/cut)
-      IF (ll2 .LT. 1) CPABORT("alat(2) too small")
+      IF (ll2 < 1) CPABORT("alat(2) too small")
       ll3 = INT(alat(3)/cut)
-      IF (ll3 .LT. 1) CPABORT("alat(3) too small")
+      IF (ll3 < 1) CPABORT("alat(3) too small")
 
 ! determine number of threads
       npr = 1
@@ -648,7 +969,7 @@ CONTAINS
 
 ! linear scaling calculation of verlet list
 
-      IF (npr .LE. 1) THEN !serial if too few processors to gain by parallelizing
+      IF (npr <= 1) THEN !serial if too few processors to gain by parallelizing
 
 ! set ncx for serial case, ncx for parallel case set below
          ncx = 16
@@ -670,7 +991,7 @@ CONTAINS
                ii = icell(0, l1, l2, l3)
                ii = ii + 1
                icell(0, l1, l2, l3) = ii
-               IF (ii .GT. ncx) THEN
+               IF (ii > ncx) THEN
                   WRITE (10, *) count, 'NCX too small', ncx
                   DEALLOCATE (icell)
                   ncx = ncx*2
@@ -710,7 +1031,7 @@ CONTAINS
                ii = icell(0, l1, l2, l3)
                ii = ii + 1
                icell(0, l1, l2, l3) = ii
-               IF (ii .GT. ncx) THEN
+               IF (ii > ncx) THEN
                   WRITE (10, *) count, 'NCX too small', ncx
                   DEALLOCATE (icell)
                   ncx = ncx*2
@@ -743,7 +1064,7 @@ CONTAINS
          DO ii = 1, in
             i = icell(ii, l1, l2, 0)
             il = il + 1
-            IF (il .GT. nn) CPABORT("enlarge laymx")
+            IF (il > nn) CPABORT("enlarge laymx")
             lay(il) = i
             icell(ii, l1, l2, ll3) = il
             rxyz(1, il) = rxyz(1, i)
@@ -756,7 +1077,7 @@ CONTAINS
          DO ii = 1, in
             i = icell(ii, l1, l2, ll3 - 1)
             il = il + 1
-            IF (il .GT. nn) CPABORT("enlarge laymx")
+            IF (il > nn) CPABORT("enlarge laymx")
             lay(il) = i
             icell(ii, l1, l2, -1) = il
             rxyz(1, il) = rxyz(1, i)
@@ -776,7 +1097,7 @@ CONTAINS
          DO ii = 1, in
             i = icell(ii, 0, l2, l3)
             il = il + 1
-            IF (il .GT. nn) CPABORT("enlarge laymx")
+            IF (il > nn) CPABORT("enlarge laymx")
             lay(il) = i
             icell(ii, ll1, l2, l3) = il
             rxyz(1, il) = rxyz(1, i) + alat(1)
@@ -789,7 +1110,7 @@ CONTAINS
          DO ii = 1, in
             i = icell(ii, ll1 - 1, l2, l3)
             il = il + 1
-            IF (il .GT. nn) CPABORT("enlarge laymx")
+            IF (il > nn) CPABORT("enlarge laymx")
             lay(il) = i
             icell(ii, -1, l2, l3) = il
             rxyz(1, il) = rxyz(1, i) - alat(1)
@@ -809,7 +1130,7 @@ CONTAINS
          DO ii = 1, in
             i = icell(ii, l1, 0, l3)
             il = il + 1
-            IF (il .GT. nn) CPABORT("enlarge laymx")
+            IF (il > nn) CPABORT("enlarge laymx")
             lay(il) = i
             icell(ii, l1, ll2, l3) = il
             rxyz(1, il) = rxyz(1, i)
@@ -822,7 +1143,7 @@ CONTAINS
          DO ii = 1, in
             i = icell(ii, l1, ll2 - 1, l3)
             il = il + 1
-            IF (il .GT. nn) CPABORT("enlarge laymx")
+            IF (il > nn) CPABORT("enlarge laymx")
             lay(il) = i
             icell(ii, l1, -1, l3) = il
             rxyz(1, il) = rxyz(1, i)
@@ -841,7 +1162,7 @@ CONTAINS
          DO ii = 1, in
             i = icell(ii, l1, 0, 0)
             il = il + 1
-            IF (il .GT. nn) CPABORT("enlarge laymx")
+            IF (il > nn) CPABORT("enlarge laymx")
             lay(il) = i
             icell(ii, l1, ll2, ll3) = il
             rxyz(1, il) = rxyz(1, i)
@@ -854,7 +1175,7 @@ CONTAINS
          DO ii = 1, in
             i = icell(ii, l1, 0, ll3 - 1)
             il = il + 1
-            IF (il .GT. nn) CPABORT("enlarge laymx")
+            IF (il > nn) CPABORT("enlarge laymx")
             lay(il) = i
             icell(ii, l1, ll2, -1) = il
             rxyz(1, il) = rxyz(1, i)
@@ -867,7 +1188,7 @@ CONTAINS
          DO ii = 1, in
             i = icell(ii, l1, ll2 - 1, 0)
             il = il + 1
-            IF (il .GT. nn) CPABORT("enlarge laymx")
+            IF (il > nn) CPABORT("enlarge laymx")
             lay(il) = i
             icell(ii, l1, -1, ll3) = il
             rxyz(1, il) = rxyz(1, i)
@@ -880,7 +1201,7 @@ CONTAINS
          DO ii = 1, in
             i = icell(ii, l1, ll2 - 1, ll3 - 1)
             il = il + 1
-            IF (il .GT. nn) CPABORT("enlarge laymx")
+            IF (il > nn) CPABORT("enlarge laymx")
             lay(il) = i
             icell(ii, l1, -1, -1) = il
             rxyz(1, il) = rxyz(1, i)
@@ -898,7 +1219,7 @@ CONTAINS
          DO ii = 1, in
             i = icell(ii, 0, l2, 0)
             il = il + 1
-            IF (il .GT. nn) CPABORT("enlarge laymx")
+            IF (il > nn) CPABORT("enlarge laymx")
             lay(il) = i
             icell(ii, ll1, l2, ll3) = il
             rxyz(1, il) = rxyz(1, i) + alat(1)
@@ -911,7 +1232,7 @@ CONTAINS
          DO ii = 1, in
             i = icell(ii, 0, l2, ll3 - 1)
             il = il + 1
-            IF (il .GT. nn) CPABORT("enlarge laymx")
+            IF (il > nn) CPABORT("enlarge laymx")
             lay(il) = i
             icell(ii, ll1, l2, -1) = il
             rxyz(1, il) = rxyz(1, i) + alat(1)
@@ -924,7 +1245,7 @@ CONTAINS
          DO ii = 1, in
             i = icell(ii, ll1 - 1, l2, 0)
             il = il + 1
-            IF (il .GT. nn) CPABORT("enlarge laymx")
+            IF (il > nn) CPABORT("enlarge laymx")
             lay(il) = i
             icell(ii, -1, l2, ll3) = il
             rxyz(1, il) = rxyz(1, i) - alat(1)
@@ -937,7 +1258,7 @@ CONTAINS
          DO ii = 1, in
             i = icell(ii, ll1 - 1, l2, ll3 - 1)
             il = il + 1
-            IF (il .GT. nn) CPABORT("enlarge laymx")
+            IF (il > nn) CPABORT("enlarge laymx")
             lay(il) = i
             icell(ii, -1, l2, -1) = il
             rxyz(1, il) = rxyz(1, i) - alat(1)
@@ -955,7 +1276,7 @@ CONTAINS
          DO ii = 1, in
             i = icell(ii, 0, 0, l3)
             il = il + 1
-            IF (il .GT. nn) CPABORT("enlarge laymx")
+            IF (il > nn) CPABORT("enlarge laymx")
             lay(il) = i
             icell(ii, ll1, ll2, l3) = il
             rxyz(1, il) = rxyz(1, i) + alat(1)
@@ -968,7 +1289,7 @@ CONTAINS
          DO ii = 1, in
             i = icell(ii, ll1 - 1, 0, l3)
             il = il + 1
-            IF (il .GT. nn) CPABORT("enlarge laymx")
+            IF (il > nn) CPABORT("enlarge laymx")
             lay(il) = i
             icell(ii, -1, ll2, l3) = il
             rxyz(1, il) = rxyz(1, i) - alat(1)
@@ -981,7 +1302,7 @@ CONTAINS
          DO ii = 1, in
             i = icell(ii, 0, ll2 - 1, l3)
             il = il + 1
-            IF (il .GT. nn) CPABORT("enlarge laymx")
+            IF (il > nn) CPABORT("enlarge laymx")
             lay(il) = i
             icell(ii, ll1, -1, l3) = il
             rxyz(1, il) = rxyz(1, i) + alat(1)
@@ -994,7 +1315,7 @@ CONTAINS
          DO ii = 1, in
             i = icell(ii, ll1 - 1, ll2 - 1, l3)
             il = il + 1
-            IF (il .GT. nn) CPABORT("enlarge laymx")
+            IF (il > nn) CPABORT("enlarge laymx")
             lay(il) = i
             icell(ii, -1, -1, l3) = il
             rxyz(1, il) = rxyz(1, i) - alat(1)
@@ -1010,7 +1331,7 @@ CONTAINS
       DO ii = 1, in
          i = icell(ii, 0, 0, 0)
          il = il + 1
-         IF (il .GT. nn) CPABORT("enlarge laymx")
+         IF (il > nn) CPABORT("enlarge laymx")
          lay(il) = i
          icell(ii, ll1, ll2, ll3) = il
          rxyz(1, il) = rxyz(1, i) + alat(1)
@@ -1023,7 +1344,7 @@ CONTAINS
       DO ii = 1, in
          i = icell(ii, ll1 - 1, 0, 0)
          il = il + 1
-         IF (il .GT. nn) CPABORT("enlarge laymx")
+         IF (il > nn) CPABORT("enlarge laymx")
          lay(il) = i
          icell(ii, -1, ll2, ll3) = il
          rxyz(1, il) = rxyz(1, i) - alat(1)
@@ -1036,7 +1357,7 @@ CONTAINS
       DO ii = 1, in
          i = icell(ii, 0, ll2 - 1, 0)
          il = il + 1
-         IF (il .GT. nn) CPABORT("enlarge laymx")
+         IF (il > nn) CPABORT("enlarge laymx")
          lay(il) = i
          icell(ii, ll1, -1, ll3) = il
          rxyz(1, il) = rxyz(1, i) + alat(1)
@@ -1049,7 +1370,7 @@ CONTAINS
       DO ii = 1, in
          i = icell(ii, ll1 - 1, ll2 - 1, 0)
          il = il + 1
-         IF (il .GT. nn) CPABORT("enlarge laymx")
+         IF (il > nn) CPABORT("enlarge laymx")
          lay(il) = i
          icell(ii, -1, -1, ll3) = il
          rxyz(1, il) = rxyz(1, i) - alat(1)
@@ -1062,7 +1383,7 @@ CONTAINS
       DO ii = 1, in
          i = icell(ii, 0, 0, ll3 - 1)
          il = il + 1
-         IF (il .GT. nn) CPABORT("enlarge laymx")
+         IF (il > nn) CPABORT("enlarge laymx")
          lay(il) = i
          icell(ii, ll1, ll2, -1) = il
          rxyz(1, il) = rxyz(1, i) + alat(1)
@@ -1075,7 +1396,7 @@ CONTAINS
       DO ii = 1, in
          i = icell(ii, ll1 - 1, 0, ll3 - 1)
          il = il + 1
-         IF (il .GT. nn) CPABORT("enlarge laymx")
+         IF (il > nn) CPABORT("enlarge laymx")
          lay(il) = i
          icell(ii, -1, ll2, -1) = il
          rxyz(1, il) = rxyz(1, i) - alat(1)
@@ -1088,7 +1409,7 @@ CONTAINS
       DO ii = 1, in
          i = icell(ii, 0, ll2 - 1, ll3 - 1)
          il = il + 1
-         IF (il .GT. nn) CPABORT("enlarge laymx")
+         IF (il > nn) CPABORT("enlarge laymx")
          lay(il) = i
          icell(ii, ll1, -1, -1) = il
          rxyz(1, il) = rxyz(1, i) + alat(1)
@@ -1101,7 +1422,7 @@ CONTAINS
       DO ii = 1, in
          i = icell(ii, ll1 - 1, ll2 - 1, ll3 - 1)
          il = il + 1
-         IF (il .GT. nn) CPABORT("enlarge laymx")
+         IF (il > nn) CPABORT("enlarge laymx")
          lay(il) = i
          icell(ii, -1, -1, -1) = il
          rxyz(1, il) = rxyz(1, i) - alat(1)
@@ -1129,7 +1450,7 @@ CONTAINS
          cut2 = cut**2
 ! assign contiguous portions of the arrays lstb and rel to the threads
          myspace = (nat*nnbrx)/npr
-         IF (iam .EQ. 0) myspaceout = myspace
+         IF (iam == 0) myspaceout = myspace
 ! Verlet list, relative positions
          indlst = 0
          loop_l3: DO l3 = 0, ll3 - 1
@@ -1137,7 +1458,7 @@ CONTAINS
                loop_l1: DO l1 = 0, ll1 - 1
                   loop_ii: DO ii = 1, icell(0, l1, l2, l3)
                      iat = icell(ii, l1, l2, l3)
-                     IF (((iat - 1)*npr)/nat .EQ. iam) THEN
+                     IF (((iat - 1)*npr)/nat == iam) THEN
 !                          write(*,*) 'sublstiat:iam,iat',iam,iat
                         lsta(1, iat) = iam*myspace + indlst + 1
                         CALL sublstiat_b(iat, nn, ncx, ll1, ll2, ll3, l1, l2, l3, myspace, &
@@ -1152,12 +1473,12 @@ CONTAINS
                END DO loop_l1
             END DO loop_l2
          END DO loop_l3
-!$OMP CRITICAL
+!$OMP ATOMIC UPDATE
          indlstx = MAX(indlstx, indlst)
-!$OMP END CRITICAL
+!$OMP END ATOMIC
 !$OMP END PARALLEL
 
-         IF (indlstx .GE. myspaceout) THEN
+         IF (indlstx >= myspaceout) THEN
             WRITE (10, *) count, 'NNBRX too small', nnbrx
             DEALLOCATE (lstb, rel)
             nnbrx = 3*nnbrx/2
@@ -1180,15 +1501,15 @@ CONTAINS
 
       max_nbrs = 30
 
-      IF (npr .NE. 1) THEN
+      IF (npr /= 1) THEN
 ! PARALLEL CASE
 ! create temporary private scalars for reduction sum on energies and
 !        temporary private array for reduction sum on forces
-!$OMP CRITICAL
+!$OMP CRITICAL(omp_eip_bazant_silicon)
          ALLOCATE (txyz(3, nat), s2(max_nbrs, 8), s3(max_nbrs, 7), sz(max_nbrs, 6), &
                    num2(max_nbrs), num3(max_nbrs), numz(max_nbrs))
-!$OMP END CRITICAL
-         IF (iam .EQ. 0) THEN
+!$OMP END CRITICAL(omp_eip_bazant_silicon)
+         IF (iam == 0) THEN
             ener = 0.e0_dp
             ener2 = 0.e0_dp
             coord = 0.e0_dp
@@ -1213,7 +1534,7 @@ CONTAINS
                           num2, s3(1, 1), s3(1, 2), s3(1, 3), s3(1, 4), s3(1, 5), s3(1, 6), s3(1, 7), &
                           num3, sz(1, 1), sz(1, 2), sz(1, 3), sz(1, 4), sz(1, 5), sz(1, 6), numz)
 
-!$OMP CRITICAL
+!$OMP CRITICAL(omp_eip_bazant_silicon)
          ener = ener + tener
          ener2 = ener2 + tener2
          coord = coord + tcoord
@@ -1225,7 +1546,7 @@ CONTAINS
             fxyz(3, iat) = fxyz(3, iat) + txyz(3, iat)
          END DO
          DEALLOCATE (txyz, s2, s3, sz, num2, num3, numz)
-!$OMP END CRITICAL
+!$OMP END CRITICAL(omp_eip_bazant_silicon)
 
       ELSE
 ! SERIAL CASE
@@ -1245,7 +1566,7 @@ CONTAINS
 
 !         write(*,*) 'ener,norm force', &
 !                    ener,DNRM2(3*nat,fxyz,1)
-      IF (istopg .GT. 0) CPABORT("DIMENSION ERROR (see WARNING above)")
+      IF (istopg > 0) CPABORT("DIMENSION ERROR (see WARNING above)")
       ener_var = ener2/nat - (ener/nat)**2
       coord = coord/nat
       coord_var = coord2/nat - coord**2
@@ -1424,7 +1745,7 @@ CONTAINS
             s2_dz(n2) = dz
             s2_r(n2) = r
             n2 = n2 + 1
-            IF (n2 .GT. max_nbrs) THEN
+            IF (n2 > max_nbrs) THEN
                WRITE (*, *) 'WARNING enlarge max_nbrs'
                istop = 1
                RETURN
@@ -1432,9 +1753,9 @@ CONTAINS
 
 ! coordination number calculated with soft cutoff between first
 ! nearest neighbor and midpoint of first and second nearest neighbor
-            IF (r .LE. 2.36e0_dp) THEN
+            IF (r <= 2.36e0_dp) THEN
                coord_iat = coord_iat + 1.e0_dp
-            ELSE IF (r .GE. 3.12e0_dp) THEN
+            ELSE IF (r >= 3.12e0_dp) THEN
             ELSE
                xarg = (r - 2.36e0_dp)*(1.e0_dp/(3.12e0_dp - 2.36e0_dp))
                coord_iat = coord_iat + (2*xarg + 1.e0_dp)*(xarg - 1.e0_dp)**2
@@ -1442,7 +1763,7 @@ CONTAINS
 
 !   RADIAL PARTS OF THREE-BODY INTERACTION r<par_b
 
-            IF (r .LT. par_bg) THEN
+            IF (r < par_bg) THEN
 
                num3(n3) = j
                rmbinv = 1.e0_dp/(r - par_bg)
@@ -1456,7 +1777,7 @@ CONTAINS
                s3_rinv(n3) = rinv
                s3_r(n3) = r
                n3 = n3 + 1
-               IF (n3 .GT. max_nbrs) THEN
+               IF (n3 > max_nbrs) THEN
                   WRITE (*, *) 'WARNING enlarge max_nbrs'
                   istop = 1
                   RETURN
@@ -1464,8 +1785,8 @@ CONTAINS
 
 !   COORDINATION AND NEIGHBOR FUNCTION par_c<r<par_b
 
-               IF (r .LT. par_b) THEN
-                  IF (r .LT. par_c) THEN
+               IF (r < par_b) THEN
+                  IF (r < par_c) THEN
                      Z = Z + 1.e0_dp
                   ELSE
                      xinv = bmc/(r - par_c)
@@ -1482,7 +1803,7 @@ CONTAINS
                      sz_dz(nz) = dz
                      sz_r(nz) = r
                      nz = nz + 1
-                     IF (nz .GT. max_nbrs) THEN
+                     IF (nz > max_nbrs) THEN
                         WRITE (*, *) 'WARNING enlarge max_nbrs'
                         istop = 1
                         RETURN
@@ -1716,12 +2037,12 @@ CONTAINS
       DO k1 = l1 - 1, l1 + 1
       DO jj = 1, icell(0, k1, k2, k3)
          jat = icell(jj, k1, k2, k3)
-         IF (jat .EQ. iat) CYCLE
+         IF (jat == iat) CYCLE
          xrel = rxyz(1, iat) - rxyz(1, jat)
          yrel = rxyz(2, iat) - rxyz(2, jat)
          zrel = rxyz(3, iat) - rxyz(3, jat)
          rr2 = xrel**2 + yrel**2 + zrel**2
-         IF (rr2 .LE. cut2) THEN
+         IF (rr2 <= cut2) THEN
             indlst = MIN(indlst, myspace - 1)
             lstb(indlst) = lay(jat)
 !        write(*,*) 'iat,indlst,lay(jat)',iat,indlst,lay(jat)
@@ -1764,7 +2085,7 @@ CONTAINS
 !>                    using OpenMP; CPC 148, 1 (2002)
 !> \par History
 !>      03.2006 initial create [tdk]
-!> \author Thomas D. Kuehne (tkuehne@phys.chem.ethz.ch)
+!> \author Thomas D. Kuehne (tkuehne@cp2k.org)
 ! **************************************************************************************************
    SUBROUTINE eip_lenosky_silicon(nat, alat, rxyz0, fxyz, ener, coord, ener_var, &
                                   coord_var, count)
@@ -1794,16 +2115,16 @@ CONTAINS
 !        cut=tmax_phi
       cut = 0.4500000e+01_dp
 
-      IF (count .EQ. 0) OPEN (unit=10, file='lenosky.mon', status='unknown')
+      IF (count == 0) OPEN (unit=10, file='lenosky.mon', status='unknown')
       count = count + 1.e0_dp
 
 ! linear scaling calculation of verlet list
       ll1 = INT(alat(1)/cut)
-      IF (ll1 .LT. 1) CPABORT("alat(1) too small")
+      IF (ll1 < 1) CPABORT("alat(1) too small")
       ll2 = INT(alat(2)/cut)
-      IF (ll2 .LT. 1) CPABORT("alat(2) too small")
+      IF (ll2 < 1) CPABORT("alat(2) too small")
       ll3 = INT(alat(3)/cut)
-      IF (ll3 .LT. 1) CPABORT("alat(3) too small")
+      IF (ll3 < 1) CPABORT("alat(3) too small")
 
 ! determine number of threads
       npr = 1
@@ -1814,7 +2135,7 @@ CONTAINS
 
 ! linear scaling calculation of verlet list
 
-      IF (npr .LE. 1) THEN !serial if too few processors to gain by parallelizing
+      IF (npr <= 1) THEN !serial if too few processors to gain by parallelizing
 
 ! set ncx for serial case, ncx for parallel case set below
          ncx = 16
@@ -1836,7 +2157,7 @@ CONTAINS
                ii = icell(0, l1, l2, l3)
                ii = ii + 1
                icell(0, l1, l2, l3) = ii
-               IF (ii .GT. ncx) THEN
+               IF (ii > ncx) THEN
                   WRITE (10, *) count, 'NCX too small', ncx
                   DEALLOCATE (icell)
                   ncx = ncx*2
@@ -1875,7 +2196,7 @@ CONTAINS
                ii = icell(0, l1, l2, l3)
                ii = ii + 1
                icell(0, l1, l2, l3) = ii
-               IF (ii .GT. ncx) THEN
+               IF (ii > ncx) THEN
                   WRITE (10, *) count, 'NCX too small', ncx
                   DEALLOCATE (icell)
                   ncx = ncx*2
@@ -1908,7 +2229,7 @@ CONTAINS
          DO ii = 1, in
             i = icell(ii, l1, l2, 0)
             il = il + 1
-            IF (il .GT. nn) CPABORT("enlarge laymx")
+            IF (il > nn) CPABORT("enlarge laymx")
             lay(il) = i
             icell(ii, l1, l2, ll3) = il
             rxyz(1, il) = rxyz(1, i)
@@ -1921,7 +2242,7 @@ CONTAINS
          DO ii = 1, in
             i = icell(ii, l1, l2, ll3 - 1)
             il = il + 1
-            IF (il .GT. nn) CPABORT("enlarge laymx")
+            IF (il > nn) CPABORT("enlarge laymx")
             lay(il) = i
             icell(ii, l1, l2, -1) = il
             rxyz(1, il) = rxyz(1, i)
@@ -1941,7 +2262,7 @@ CONTAINS
          DO ii = 1, in
             i = icell(ii, 0, l2, l3)
             il = il + 1
-            IF (il .GT. nn) CPABORT("enlarge laymx")
+            IF (il > nn) CPABORT("enlarge laymx")
             lay(il) = i
             icell(ii, ll1, l2, l3) = il
             rxyz(1, il) = rxyz(1, i) + alat(1)
@@ -1954,7 +2275,7 @@ CONTAINS
          DO ii = 1, in
             i = icell(ii, ll1 - 1, l2, l3)
             il = il + 1
-            IF (il .GT. nn) CPABORT("enlarge laymx")
+            IF (il > nn) CPABORT("enlarge laymx")
             lay(il) = i
             icell(ii, -1, l2, l3) = il
             rxyz(1, il) = rxyz(1, i) - alat(1)
@@ -1974,7 +2295,7 @@ CONTAINS
          DO ii = 1, in
             i = icell(ii, l1, 0, l3)
             il = il + 1
-            IF (il .GT. nn) CPABORT("enlarge laymx")
+            IF (il > nn) CPABORT("enlarge laymx")
             lay(il) = i
             icell(ii, l1, ll2, l3) = il
             rxyz(1, il) = rxyz(1, i)
@@ -1987,7 +2308,7 @@ CONTAINS
          DO ii = 1, in
             i = icell(ii, l1, ll2 - 1, l3)
             il = il + 1
-            IF (il .GT. nn) CPABORT("enlarge laymx")
+            IF (il > nn) CPABORT("enlarge laymx")
             lay(il) = i
             icell(ii, l1, -1, l3) = il
             rxyz(1, il) = rxyz(1, i)
@@ -2006,7 +2327,7 @@ CONTAINS
          DO ii = 1, in
             i = icell(ii, l1, 0, 0)
             il = il + 1
-            IF (il .GT. nn) CPABORT("enlarge laymx")
+            IF (il > nn) CPABORT("enlarge laymx")
             lay(il) = i
             icell(ii, l1, ll2, ll3) = il
             rxyz(1, il) = rxyz(1, i)
@@ -2019,7 +2340,7 @@ CONTAINS
          DO ii = 1, in
             i = icell(ii, l1, 0, ll3 - 1)
             il = il + 1
-            IF (il .GT. nn) CPABORT("enlarge laymx")
+            IF (il > nn) CPABORT("enlarge laymx")
             lay(il) = i
             icell(ii, l1, ll2, -1) = il
             rxyz(1, il) = rxyz(1, i)
@@ -2032,7 +2353,7 @@ CONTAINS
          DO ii = 1, in
             i = icell(ii, l1, ll2 - 1, 0)
             il = il + 1
-            IF (il .GT. nn) CPABORT("enlarge laymx")
+            IF (il > nn) CPABORT("enlarge laymx")
             lay(il) = i
             icell(ii, l1, -1, ll3) = il
             rxyz(1, il) = rxyz(1, i)
@@ -2045,7 +2366,7 @@ CONTAINS
          DO ii = 1, in
             i = icell(ii, l1, ll2 - 1, ll3 - 1)
             il = il + 1
-            IF (il .GT. nn) CPABORT("enlarge laymx")
+            IF (il > nn) CPABORT("enlarge laymx")
             lay(il) = i
             icell(ii, l1, -1, -1) = il
             rxyz(1, il) = rxyz(1, i)
@@ -2063,7 +2384,7 @@ CONTAINS
          DO ii = 1, in
             i = icell(ii, 0, l2, 0)
             il = il + 1
-            IF (il .GT. nn) CPABORT("enlarge laymx")
+            IF (il > nn) CPABORT("enlarge laymx")
             lay(il) = i
             icell(ii, ll1, l2, ll3) = il
             rxyz(1, il) = rxyz(1, i) + alat(1)
@@ -2076,7 +2397,7 @@ CONTAINS
          DO ii = 1, in
             i = icell(ii, 0, l2, ll3 - 1)
             il = il + 1
-            IF (il .GT. nn) CPABORT("enlarge laymx")
+            IF (il > nn) CPABORT("enlarge laymx")
             lay(il) = i
             icell(ii, ll1, l2, -1) = il
             rxyz(1, il) = rxyz(1, i) + alat(1)
@@ -2089,7 +2410,7 @@ CONTAINS
          DO ii = 1, in
             i = icell(ii, ll1 - 1, l2, 0)
             il = il + 1
-            IF (il .GT. nn) CPABORT("enlarge laymx")
+            IF (il > nn) CPABORT("enlarge laymx")
             lay(il) = i
             icell(ii, -1, l2, ll3) = il
             rxyz(1, il) = rxyz(1, i) - alat(1)
@@ -2102,7 +2423,7 @@ CONTAINS
          DO ii = 1, in
             i = icell(ii, ll1 - 1, l2, ll3 - 1)
             il = il + 1
-            IF (il .GT. nn) CPABORT("enlarge laymx")
+            IF (il > nn) CPABORT("enlarge laymx")
             lay(il) = i
             icell(ii, -1, l2, -1) = il
             rxyz(1, il) = rxyz(1, i) - alat(1)
@@ -2120,7 +2441,7 @@ CONTAINS
          DO ii = 1, in
             i = icell(ii, 0, 0, l3)
             il = il + 1
-            IF (il .GT. nn) CPABORT("enlarge laymx")
+            IF (il > nn) CPABORT("enlarge laymx")
             lay(il) = i
             icell(ii, ll1, ll2, l3) = il
             rxyz(1, il) = rxyz(1, i) + alat(1)
@@ -2133,7 +2454,7 @@ CONTAINS
          DO ii = 1, in
             i = icell(ii, ll1 - 1, 0, l3)
             il = il + 1
-            IF (il .GT. nn) CPABORT("enlarge laymx")
+            IF (il > nn) CPABORT("enlarge laymx")
             lay(il) = i
             icell(ii, -1, ll2, l3) = il
             rxyz(1, il) = rxyz(1, i) - alat(1)
@@ -2146,7 +2467,7 @@ CONTAINS
          DO ii = 1, in
             i = icell(ii, 0, ll2 - 1, l3)
             il = il + 1
-            IF (il .GT. nn) CPABORT("enlarge laymx")
+            IF (il > nn) CPABORT("enlarge laymx")
             lay(il) = i
             icell(ii, ll1, -1, l3) = il
             rxyz(1, il) = rxyz(1, i) + alat(1)
@@ -2159,7 +2480,7 @@ CONTAINS
          DO ii = 1, in
             i = icell(ii, ll1 - 1, ll2 - 1, l3)
             il = il + 1
-            IF (il .GT. nn) CPABORT("enlarge laymx")
+            IF (il > nn) CPABORT("enlarge laymx")
             lay(il) = i
             icell(ii, -1, -1, l3) = il
             rxyz(1, il) = rxyz(1, i) - alat(1)
@@ -2175,7 +2496,7 @@ CONTAINS
       DO ii = 1, in
          i = icell(ii, 0, 0, 0)
          il = il + 1
-         IF (il .GT. nn) CPABORT("enlarge laymx")
+         IF (il > nn) CPABORT("enlarge laymx")
          lay(il) = i
          icell(ii, ll1, ll2, ll3) = il
          rxyz(1, il) = rxyz(1, i) + alat(1)
@@ -2188,7 +2509,7 @@ CONTAINS
       DO ii = 1, in
          i = icell(ii, ll1 - 1, 0, 0)
          il = il + 1
-         IF (il .GT. nn) CPABORT("enlarge laymx")
+         IF (il > nn) CPABORT("enlarge laymx")
          lay(il) = i
          icell(ii, -1, ll2, ll3) = il
          rxyz(1, il) = rxyz(1, i) - alat(1)
@@ -2201,7 +2522,7 @@ CONTAINS
       DO ii = 1, in
          i = icell(ii, 0, ll2 - 1, 0)
          il = il + 1
-         IF (il .GT. nn) CPABORT("enlarge laymx")
+         IF (il > nn) CPABORT("enlarge laymx")
          lay(il) = i
          icell(ii, ll1, -1, ll3) = il
          rxyz(1, il) = rxyz(1, i) + alat(1)
@@ -2214,7 +2535,7 @@ CONTAINS
       DO ii = 1, in
          i = icell(ii, ll1 - 1, ll2 - 1, 0)
          il = il + 1
-         IF (il .GT. nn) CPABORT("enlarge laymx")
+         IF (il > nn) CPABORT("enlarge laymx")
          lay(il) = i
          icell(ii, -1, -1, ll3) = il
          rxyz(1, il) = rxyz(1, i) - alat(1)
@@ -2227,7 +2548,7 @@ CONTAINS
       DO ii = 1, in
          i = icell(ii, 0, 0, ll3 - 1)
          il = il + 1
-         IF (il .GT. nn) CPABORT("enlarge laymx")
+         IF (il > nn) CPABORT("enlarge laymx")
          lay(il) = i
          icell(ii, ll1, ll2, -1) = il
          rxyz(1, il) = rxyz(1, i) + alat(1)
@@ -2240,7 +2561,7 @@ CONTAINS
       DO ii = 1, in
          i = icell(ii, ll1 - 1, 0, ll3 - 1)
          il = il + 1
-         IF (il .GT. nn) CPABORT("enlarge laymx")
+         IF (il > nn) CPABORT("enlarge laymx")
          lay(il) = i
          icell(ii, -1, ll2, -1) = il
          rxyz(1, il) = rxyz(1, i) - alat(1)
@@ -2253,7 +2574,7 @@ CONTAINS
       DO ii = 1, in
          i = icell(ii, 0, ll2 - 1, ll3 - 1)
          il = il + 1
-         IF (il .GT. nn) CPABORT("enlarge laymx")
+         IF (il > nn) CPABORT("enlarge laymx")
          lay(il) = i
          icell(ii, ll1, -1, -1) = il
          rxyz(1, il) = rxyz(1, i) + alat(1)
@@ -2266,7 +2587,7 @@ CONTAINS
       DO ii = 1, in
          i = icell(ii, ll1 - 1, ll2 - 1, ll3 - 1)
          il = il + 1
-         IF (il .GT. nn) CPABORT("enlarge laymx")
+         IF (il > nn) CPABORT("enlarge laymx")
          lay(il) = i
          icell(ii, -1, -1, -1) = il
          rxyz(1, il) = rxyz(1, i) - alat(1)
@@ -2294,7 +2615,7 @@ CONTAINS
          cut2 = cut**2
 ! assign contiguous portions of the arrays lstb and rel to the threads
          myspace = (nat*nnbrx)/npr
-         IF (iam .EQ. 0) myspaceout = myspace
+         IF (iam == 0) myspaceout = myspace
 ! Verlet list, relative positions
          indlst = 0
          loop_l3: DO l3 = 0, ll3 - 1
@@ -2302,7 +2623,7 @@ CONTAINS
                loop_l1: DO l1 = 0, ll1 - 1
                   loop_ii: DO ii = 1, icell(0, l1, l2, l3)
                      iat = icell(ii, l1, l2, l3)
-                     IF (((iat - 1)*npr)/nat .EQ. iam) THEN
+                     IF (((iat - 1)*npr)/nat == iam) THEN
 !                          write(*,*) 'sublstiat:iam,iat',iam,iat
                         lsta(1, iat) = iam*myspace + indlst + 1
                         CALL sublstiat_l(iat, nn, ncx, ll1, ll2, ll3, l1, l2, l3, myspace, &
@@ -2318,12 +2639,12 @@ CONTAINS
             END DO loop_l2
          END DO loop_l3
 
-!$OMP CRITICAL
+!$OMP ATOMIC UPDATE
          indlstx = MAX(indlstx, indlst)
-!$OMP END CRITICAL
+!$OMP END ATOMIC
 !$OMP END PARALLEL
 
-         IF (indlstx .GE. myspaceout) THEN
+         IF (indlstx >= myspaceout) THEN
             WRITE (10, *) count, 'NNBRX too  small', nnbrx
             DEALLOCATE (lstb, rel)
             nnbrx = 3*nnbrx/2
@@ -2345,14 +2666,14 @@ CONTAINS
 
       npjx = 300; npjkx = 6000
 
-      IF (npr .NE. 1) THEN
+      IF (npr /= 1) THEN
 ! PARALLEL CASE
 ! create temporary private scalars for reduction sum on energies and
 !        temporary private array for reduction sum on forces
-!$OMP CRITICAL
+!$OMP CRITICAL(omp_eip_lenosky_silicon)
          ALLOCATE (txyz(3, nat), f2ij(3, npjx), f3ij(3, npjkx), f3ik(3, npjkx))
-!$OMP END CRITICAL
-         IF (iam .EQ. 0) THEN
+!$OMP END CRITICAL(omp_eip_lenosky_silicon)
+         IF (iam == 0) THEN
             ener = 0.e0_dp
             ener2 = 0.e0_dp
             coord = 0.e0_dp
@@ -2373,7 +2694,7 @@ CONTAINS
 !       write(*,*) 'subfeniat:iat1,iat2,iam',iat1,iat2,iam
          CALL subfeniat_l(iat1, iat2, nat, lsta, lstb, rel, tener, tener2, &
                           tcoord, tcoord2, nnbrx, txyz, f2ij, npjx, f3ij, npjkx, f3ik, istop)
-!$OMP CRITICAL
+!$OMP CRITICAL(omp_eip_lenosky_silicon)
          ener = ener + tener
          ener2 = ener2 + tener2
          coord = coord + tcoord
@@ -2385,7 +2706,7 @@ CONTAINS
             fxyz(3, iat) = fxyz(3, iat) + txyz(3, iat)
          END DO
          DEALLOCATE (txyz, f2ij, f3ij, f3ik)
-!$OMP END CRITICAL
+!$OMP END CRITICAL(omp_eip_lenosky_silicon)
 
       ELSE
 ! SERIAL CASE
@@ -2401,7 +2722,7 @@ CONTAINS
 
 !         write(*,*) 'ener,norm force', &
 !                    ener,DNRM2(3*nat,fxyz,1)
-      IF (istopg .GT. 0) CPABORT("DIMENSION ERROR (see WARNING above)")
+      IF (istopg > 0) CPABORT("DIMENSION ERROR (see WARNING above)")
       ener_var = ener2/nat - (ener/nat)**2
       coord = coord/nat
       coord_var = coord2/nat - coord**2
@@ -2456,83 +2777,83 @@ CONTAINS
       REAL(KIND=dp), PARAMETER :: hsixth_phi = 5.55555555555556e-002_dp
       REAL(KIND=dp), PARAMETER :: h2sixth_phi = 1.85185185185185e-002_dp
       REAL(KIND=dp), PARAMETER, DIMENSION(0:9) :: cof_phi = &
-                                                  (/0.69299400000000e+01_dp, -0.43995000000000e+00_dp, &
-                                                    -0.17012300000000e+01_dp, -0.16247300000000e+01_dp, &
-                                                    -0.99696000000000e+00_dp, -0.27391000000000e+00_dp, &
-                                                    -0.24990000000000e-01_dp, -0.17840000000000e-01_dp, &
-                                                    -0.96100000000000e-02_dp, 0.00000000000000e+00_dp/)
+                                                  [0.69299400000000e+01_dp, -0.43995000000000e+00_dp, &
+                                                   -0.17012300000000e+01_dp, -0.16247300000000e+01_dp, &
+                                                   -0.99696000000000e+00_dp, -0.27391000000000e+00_dp, &
+                                                   -0.24990000000000e-01_dp, -0.17840000000000e-01_dp, &
+                                                   -0.96100000000000e-02_dp, 0.00000000000000e+00_dp]
       REAL(KIND=dp), PARAMETER, DIMENSION(0:9) :: dof_phi = &
-                                                  (/0.16533229480429e+03_dp, 0.39415410391417e+02_dp, &
-                                                    0.68710036300407e+01_dp, 0.53406950884203e+01_dp, &
-                                                    0.15347960162782e+01_dp, -0.63347591535331e+01_dp, &
-                                                    -0.17987794021458e+01_dp, 0.47429676211617e+00_dp, &
-                                                    -0.40087646318907e-01_dp, -0.23942617684055e+00_dp/)
+                                                  [0.16533229480429e+03_dp, 0.39415410391417e+02_dp, &
+                                                   0.68710036300407e+01_dp, 0.53406950884203e+01_dp, &
+                                                   0.15347960162782e+01_dp, -0.63347591535331e+01_dp, &
+                                                   -0.17987794021458e+01_dp, 0.47429676211617e+00_dp, &
+                                                   -0.40087646318907e-01_dp, -0.23942617684055e+00_dp]
       REAL(KIND=dp), PARAMETER :: tmin_rho = 0.1500000e+01_dp
       REAL(KIND=dp), PARAMETER :: tmax_rho = 0.3500000e+01_dp
       REAL(KIND=dp), PARAMETER :: hi_rho = 5.00000000000e0_dp
       REAL(KIND=dp), PARAMETER :: hsixth_rho = 3.33333333333333e-002_dp
       REAL(KIND=dp), PARAMETER :: h2sixth_rho = 6.66666666666667e-003_dp
       REAL(KIND=dp), PARAMETER, DIMENSION(0:10) :: cof_rho = &
-                                                   (/0.13747000000000e+00_dp, -0.14831000000000e+00_dp, &
-                                                     -0.55972000000000e+00_dp, -0.73110000000000e+00_dp, &
-                                                     -0.76283000000000e+00_dp, -0.72918000000000e+00_dp, &
-                                                     -0.66620000000000e+00_dp, -0.57328000000000e+00_dp, &
-                                                     -0.40690000000000e+00_dp, -0.16662000000000e+00_dp, &
-                                                     0.00000000000000e+00_dp/)
+                                                   [0.13747000000000e+00_dp, -0.14831000000000e+00_dp, &
+                                                    -0.55972000000000e+00_dp, -0.73110000000000e+00_dp, &
+                                                    -0.76283000000000e+00_dp, -0.72918000000000e+00_dp, &
+                                                    -0.66620000000000e+00_dp, -0.57328000000000e+00_dp, &
+                                                    -0.40690000000000e+00_dp, -0.16662000000000e+00_dp, &
+                                                    0.00000000000000e+00_dp]
       REAL(KIND=dp), PARAMETER, DIMENSION(0:10) :: dof_rho = &
-                                                   (/-0.32275496741918e+01_dp, -0.64119006516165e+01_dp, &
-                                                     0.10030652280658e+02_dp, 0.22937915289857e+01_dp, &
-                                                     0.17416816033995e+01_dp, 0.54648205741626e+00_dp, &
-                                                     0.47189016693543e+00_dp, 0.20569572748420e+01_dp, &
-                                                     0.23192807336964e+01_dp, -0.24908020962757e+00_dp, &
-                                                     -0.12371959895186e+02_dp/)
+                                                   [-0.32275496741918e+01_dp, -0.64119006516165e+01_dp, &
+                                                    0.10030652280658e+02_dp, 0.22937915289857e+01_dp, &
+                                                    0.17416816033995e+01_dp, 0.54648205741626e+00_dp, &
+                                                    0.47189016693543e+00_dp, 0.20569572748420e+01_dp, &
+                                                    0.23192807336964e+01_dp, -0.24908020962757e+00_dp, &
+                                                    -0.12371959895186e+02_dp]
       REAL(KIND=dp), PARAMETER :: tmin_fff = 0.1500000e+01_dp
       REAL(KIND=dp), PARAMETER :: tmax_fff = 0.3500000e+01_dp
       REAL(KIND=dp), PARAMETER :: hi_fff = 4.50000000000e0_dp
       REAL(KIND=dp), PARAMETER :: hsixth_fff = 3.70370370370370e-002_dp
       REAL(KIND=dp), PARAMETER :: h2sixth_fff = 8.23045267489712e-003_dp
       REAL(KIND=dp), PARAMETER, DIMENSION(0:9) :: cof_fff = &
-                                                  (/0.12503100000000e+01_dp, 0.86821000000000e+00_dp, &
-                                                    0.60846000000000e+00_dp, 0.48756000000000e+00_dp, &
-                                                    0.44163000000000e+00_dp, 0.37610000000000e+00_dp, &
-                                                    0.27145000000000e+00_dp, 0.14814000000000e+00_dp, &
-                                                    0.48550000000000e-01_dp, 0.00000000000000e+00_dp/)
+                                                  [0.12503100000000e+01_dp, 0.86821000000000e+00_dp, &
+                                                   0.60846000000000e+00_dp, 0.48756000000000e+00_dp, &
+                                                   0.44163000000000e+00_dp, 0.37610000000000e+00_dp, &
+                                                   0.27145000000000e+00_dp, 0.14814000000000e+00_dp, &
+                                                   0.48550000000000e-01_dp, 0.00000000000000e+00_dp]
       REAL(KIND=dp), PARAMETER, DIMENSION(0:9) :: dof_fff = &
-                                                  (/0.27904652711432e+02_dp, -0.45230754228635e+01_dp, &
-                                                    0.50531739800222e+01_dp, 0.11806545027747e+01_dp, &
-                                                    -0.66693699112098e+00_dp, -0.89430653829079e+00_dp, &
-                                                    -0.50891685571587e+00_dp, 0.66278396115427e+00_dp, &
-                                                    0.73976101109878e+00_dp, 0.25795319944506e+01_dp/)
+                                                  [0.27904652711432e+02_dp, -0.45230754228635e+01_dp, &
+                                                   0.50531739800222e+01_dp, 0.11806545027747e+01_dp, &
+                                                   -0.66693699112098e+00_dp, -0.89430653829079e+00_dp, &
+                                                   -0.50891685571587e+00_dp, 0.66278396115427e+00_dp, &
+                                                   0.73976101109878e+00_dp, 0.25795319944506e+01_dp]
       REAL(KIND=dp), PARAMETER :: tmin_uuu = -0.1770930e+01_dp
       REAL(KIND=dp), PARAMETER :: tmax_uuu = 0.7908520e+01_dp
       REAL(KIND=dp), PARAMETER :: hi_uuu = 0.723181585730594e0_dp
       REAL(KIND=dp), PARAMETER :: hsixth_uuu = 0.230463095238095e0_dp
       REAL(KIND=dp), PARAMETER :: h2sixth_uuu = 0.318679429600340e0_dp
       REAL(KIND=dp), PARAMETER, DIMENSION(0:7) :: cof_uuu = &
-                                                  (/-0.10749300000000e+01_dp, -0.20045000000000e+00_dp, &
-                                                    0.41422000000000e+00_dp, 0.87939000000000e+00_dp, &
-                                                    0.12668900000000e+01_dp, 0.16299800000000e+01_dp, &
-                                                    0.19773800000000e+01_dp, 0.23961800000000e+01_dp/)
+                                                  [-0.10749300000000e+01_dp, -0.20045000000000e+00_dp, &
+                                                   0.41422000000000e+00_dp, 0.87939000000000e+00_dp, &
+                                                   0.12668900000000e+01_dp, 0.16299800000000e+01_dp, &
+                                                   0.19773800000000e+01_dp, 0.23961800000000e+01_dp]
       REAL(KIND=dp), PARAMETER, DIMENSION(0:7) :: dof_uuu = &
-                                                  (/-0.14827125747284e+00_dp, -0.14922155328475e+00_dp, &
-                                                    -0.70113224223509e-01_dp, -0.39449020349230e-01_dp, &
-                                                    -0.15815242579643e-01_dp, 0.26112640061855e-01_dp, &
-                                                    -0.13786974745095e+00_dp, 0.74941595372657e+00_dp/)
+                                                  [-0.14827125747284e+00_dp, -0.14922155328475e+00_dp, &
+                                                   -0.70113224223509e-01_dp, -0.39449020349230e-01_dp, &
+                                                   -0.15815242579643e-01_dp, 0.26112640061855e-01_dp, &
+                                                   -0.13786974745095e+00_dp, 0.74941595372657e+00_dp]
       REAL(KIND=dp), PARAMETER :: tmin_ggg = -0.1000000e+01_dp
       REAL(KIND=dp), PARAMETER :: tmax_ggg = 0.8001400e+00_dp
       REAL(KIND=dp), PARAMETER :: hi_ggg = 3.88858644327663e0_dp
       REAL(KIND=dp), PARAMETER :: hsixth_ggg = 4.28604761904762e-002_dp
       REAL(KIND=dp), PARAMETER :: h2sixth_ggg = 1.10221225156463e-002_dp
       REAL(KIND=dp), PARAMETER, DIMENSION(0:7) :: cof_ggg = &
-                                                  (/0.52541600000000e+01_dp, 0.23591500000000e+01_dp, &
-                                                    0.11959500000000e+01_dp, 0.12299500000000e+01_dp, &
-                                                    0.20356500000000e+01_dp, 0.34247400000000e+01_dp, &
-                                                    0.49485900000000e+01_dp, 0.56179900000000e+01_dp/)
+                                                  [0.52541600000000e+01_dp, 0.23591500000000e+01_dp, &
+                                                   0.11959500000000e+01_dp, 0.12299500000000e+01_dp, &
+                                                   0.20356500000000e+01_dp, 0.34247400000000e+01_dp, &
+                                                   0.49485900000000e+01_dp, 0.56179900000000e+01_dp]
       REAL(KIND=dp), PARAMETER, DIMENSION(0:7) :: dof_ggg = &
-                                                  (/0.15826876132396e+02_dp, 0.31176239377907e+02_dp, &
-                                                    0.16589446539683e+02_dp, 0.11083892500520e+02_dp, &
-                                                    0.90887216383860e+01_dp, 0.54902279653967e+01_dp, &
-                                                    -0.18823313223755e+02_dp, -0.77183416481005e+01_dp/)
+                                                  [0.15826876132396e+02_dp, 0.31176239377907e+02_dp, &
+                                                   0.16589446539683e+02_dp, 0.11083892500520e+02_dp, &
+                                                   0.90887216383860e+01_dp, 0.54902279653967e+01_dp, &
+                                                   -0.18823313223755e+02_dp, -0.77183416481005e+01_dp]
 
       REAL(KIND=dp) :: a2_fff, a2_ggg, a_fff, a_ggg, b2_fff, b2_ggg, b_fff, &
                        b_ggg, cof1_fff, cof1_ggg, cof2_fff, cof2_ggg, cof3_fff, &
@@ -2574,7 +2895,7 @@ CONTAINS
          calculate: DO jbr = lsta(1, iat), lsta(2, iat)
             jat = lstb(jbr)
             jcnt = jcnt + 1
-            IF (jcnt .GT. npjx) THEN
+            IF (jcnt > npjx) THEN
                WRITE (*, *) 'WARNING: enlarge npjx'
                istop = 1
                RETURN
@@ -2588,9 +2909,9 @@ CONTAINS
 
 ! coordination number calculated with soft cutoff between first
 ! nearest neighbor and midpoint of first and second nearest neighbor
-            IF (rij .LE. 2.36e0_dp) THEN
+            IF (rij <= 2.36e0_dp) THEN
                coord_iat = coord_iat + 1.e0_dp
-            ELSE IF (rij .GE. 3.12e0_dp) THEN
+            ELSE IF (rij >= 3.12e0_dp) THEN
             ELSE
                xarg = (rij - 2.36e0_dp)*(1.e0_dp/(3.12e0_dp - 2.36e0_dp))
                coord_iat = coord_iat + (2*xarg + 1.e0_dp)*(xarg - 1.e0_dp)**2
@@ -2621,9 +2942,9 @@ CONTAINS
 
             embed_3body: DO kbr = lsta(1, iat), lsta(2, iat)
                kat = lstb(kbr)
-               IF (kat .LT. jat) THEN
+               IF (kat < jat) THEN
                   jkcnt = jkcnt + 1
-                  IF (jkcnt .GT. npjkx) THEN
+                  IF (jkcnt > npjkx) THEN
                      WRITE (*, *) 'WARNING: enlarge npjkx', npjkx
                      istop = 1
                      RETURN
@@ -2645,11 +2966,11 @@ CONTAINS
 
 ! begin optimized version
                   rik = rel(4, kbr)
-                  IF (rik .GT. tmax_fff) THEN
+                  IF (rik > tmax_fff) THEN
                      fikp = 0.e0_dp; fik = 0.e0_dp
                      gjik = 0.e0_dp; gjikp = 0.e0_dp; sik = 0.e0_dp
                      costheta = 0.e0_dp; fxik = 0.e0_dp; fyik = 0.e0_dp; fzik = 0.e0_dp
-                  ELSE IF (rik .LT. tmin_fff) THEN
+                  ELSE IF (rik < tmin_fff) THEN
                      fxik = rel(1, kbr)
                      fyik = rel(2, kbr)
                      fzik = rel(3, kbr)
@@ -2659,7 +2980,7 @@ CONTAINS
                             (dof_fff(1) + 2.e0_dp*dof_fff(0))*hsixth_fff
                      fik = cof_fff(0) + (rik - tmin_fff)*fikp
                      tt_ggg = (costheta - tmin_ggg)*hi_ggg
-                     IF (costheta .GT. tmax_ggg) THEN
+                     IF (costheta > tmax_ggg) THEN
                         gjikp = hi_ggg*(cof_ggg(8 - 1) - cof_ggg(8 - 2)) + &
                                 (2.e0_dp*dof_ggg(8 - 1) + dof_ggg(8 - 2))*hsixth_ggg
                         gjik = cof_ggg(8 - 1) + (costheta - tmax_ggg)*gjikp
@@ -2705,7 +3026,7 @@ CONTAINS
                      costheta = costheta + fzij*fzik
                      sik = rel(5, kbr)
                      tt_ggg = (costheta - tmin_ggg)*hi_ggg
-                     IF (costheta .GT. tmax_ggg) THEN
+                     IF (costheta > tmax_ggg) THEN
                         gjikp = hi_ggg*(cof_ggg(8 - 1) - cof_ggg(8 - 2)) + &
                                 (2.e0_dp*dof_ggg(8 - 1) + dof_ggg(8 - 2))*hsixth_ggg
                         gjik = cof_ggg(8 - 1) + (costheta - tmax_ggg)*gjikp
@@ -2836,7 +3157,7 @@ CONTAINS
 ! 3 body embedding term
             DO kbr = lsta(1, iat), lsta(2, iat)
                kat = lstb(kbr)
-               IF (kat .LT. jat) THEN
+               IF (kat < jat) THEN
                   jkcnt = jkcnt + 1
 
                   txyz(1, iat) = txyz(1, iat) - ep_uuu*(f3ij(1, jkcnt) + f3ik(1, jkcnt))
@@ -2906,12 +3227,12 @@ CONTAINS
             loop_k1: DO k1 = l1 - 1, l1 + 1
                loop_jj: DO jj = 1, icell(0, k1, k2, k3)
                   jat = icell(jj, k1, k2, k3)
-                  IF (jat .EQ. iat) CYCLE loop_k3
+                  IF (jat == iat) CYCLE loop_k3
                   xrel = rxyz(1, iat) - rxyz(1, jat)
                   yrel = rxyz(2, iat) - rxyz(2, jat)
                   zrel = rxyz(3, iat) - rxyz(3, jat)
                   rr2 = xrel**2 + yrel**2 + zrel**2
-                  IF (rr2 .LE. cut2) THEN
+                  IF (rr2 <= cut2) THEN
                      indlst = MIN(indlst, myspace - 1)
                      lstb(indlst) = lay(jat)
 !                       write(*,*) 'iat,indlst,lay(jat)',iat,indlst,lay(jat)
@@ -2958,11 +3279,11 @@ CONTAINS
 
 ! interpolate if the argument is outside the cubic spline interval [tmin,tmax]
       tt = (x - tmin)*hi
-      IF (x .LT. tmin) THEN
+      IF (x < tmin) THEN
          yp = hi*(ya(1) - ya(0)) - &
               (y2a(1) + 2.e0_dp*y2a(0))*hsixth
          y = ya(0) + (x - tmin)*yp
-      ELSE IF (x .GT. tmax) THEN
+      ELSE IF (x > tmax) THEN
          yp = hi*(ya(n - 1) - ya(n - 2)) + &
               (2.e0_dp*y2a(n - 1) + y2a(n - 2))*hsixth
          y = ya(n - 1) + (x - tmax)*yp
@@ -2999,5 +3320,2000 @@ CONTAINS
       END IF
       RETURN
    END SUBROUTINE splint
+
+! **************************************************************************************************
+! Additional EIP kernels consolidated here to match the original Bazant/Lenosky layout.
+! **************************************************************************************************
+
+! **************************************************************************************************
+!> \brief ...
+!> \param nat ...
+!> \param alat ...
+!> \param rxyz0 ...
+!> \param fxyz ...
+!> \param etot ...
+!> \param count ...
+! **************************************************************************************************
+   SUBROUTINE eip_stillinger_weber_silicon(nat, alat, rxyz0, fxyz, etot, count)
+!*****************************************************************************************
+! This subroutine evaluates the Stillinger Weber Silicon potential with linear scaling
+! COPYRIGHT
+!    Copyright (C) 2009 AIST, UNIBAS
+!    This file is distributed under the terms of the
+!    GNU General Public License, see
+!    http://www.gnu.org/copyleft/gpl.txt .
+!
+! Implementation: Original version was written by Tetsuya Morishita, AIST Tsukuba (JP)
+!                 Improved by M. Amsler, S. Goedecker, Basel University (CH), 2009
+!
+! Note:
+!
+!     aa is the parameter A  given on page 5263 of PRB 31, 5262 (1985).
+!     bb is the parameter B  given on page 5263 of PRB 31, 5262 (1985).
+!     ra is the parameter a  given on page 5263 of PRB 31, 5262 (1985).
+!     gam and ramda are the parameters gamma and lambda
+!     for the 3-body term, respectively (see Eq. (2.5) in the paper).
+!
+! Input:
+!     nat, integer: the number of atoms
+!     alat,  real(8), dim(3)   : the three edges of the orthoromic simulation cell, periodic boundaries are applied
+!                                and atoms outside the cell will be brought back into the box
+!     rxyz, real(8), dim(3,nat) : the xyz cartesian components of the atomic positions in Angstroem
+!
+! Output:
+!     fxyz,  real(8), dim(3,nat): the xyz cartesian forces in on the corresponding atomic components n eV/A
+!     etot, real(8)            : total potential energy, 2-body and 3-body, in eV
+!     count, real(8)           : increased by 1.d0 at each call of this subroutine,
+!                                needs to be initialized to 0.d0 before calling this routine for the first time
+!
+! Other variables:
+!     p:  the 2-body potential energy
+!     p3: the 3-body potential energy
+!     fx(i) , fy(i) , fz(i)  are the 2-body forces on atom i.
+!     fx3(i), fy3(i), fz3(i) are the 3-body forces on atom i.
+!     fxyz(3,nat) contains both 2-body and 3-body forces
+!
+!     All units follow the description in PRB 31, 5262 (1985).
+!*****************************************************************************************
+
+      INTEGER                                            :: nat
+      REAL(8)                                            :: alat(3), rxyz0(3, nat), fxyz(3, nat), &
+                                                            etot, count
+
+      INTEGER                                            :: i, iam, iat, ii, il, in, indlst, &
+                                                            indlstx, ipb, l1, l2, l3, laymx, ll1, &
+                                                            ll2, ll3, myspace, myspaceout, ncx, &
+                                                            ndat, nn, nnbrx, npjkx, npjx, npr
+      INTEGER, ALLOCATABLE, DIMENSION(:)                 :: lay, lstb
+      INTEGER, ALLOCATABLE, DIMENSION(:, :)              :: lsta
+      INTEGER, ALLOCATABLE, DIMENSION(:, :, :, :)        :: icell
+      REAL(8)                                            :: cut, cut2, eps, esigma, fx(nat), &
+                                                            fx3(nat), fy(nat), fy3(nat), fz(nat), &
+                                                            fz3(nat), isigma, p, p3, pv3, ra, &
+                                                            rlc1i, rlc2i, rlc3i, sigma
+      REAL(8), ALLOCATABLE, DIMENSION(:, :)              :: rel, rxyz
+
+      PARAMETER(ra=1.8d0)
+      PARAMETER(sigma=2.0951d0, eps=2.167239428587d0)
+
+      count = count + 1.d0
+      cut = sigma*ra*2.d0
+      isigma = 1.d0/sigma
+      esigma = eps*isigma
+
+! linear scaling calculation of verlet list, only serial
+      ll1 = INT(alat(1)/cut)
+      IF (ll1 < 1) CPABORT("alat(1) too small")
+      ll2 = INT(alat(2)/cut)
+      IF (ll2 < 1) CPABORT("alat(2) too small")
+      ll3 = INT(alat(3)/cut)
+      IF (ll3 < 1) CPABORT("alat(3) too small")
+
+      npr = 1
+      ncx = 29
+      DO
+         ncx = ncx*2
+         ALLOCATE (icell(0:ncx, -1:ll1, -1:ll2, -1:ll3))
+         icell(0, :, :, :) = 0
+         rlc1i = ll1/alat(1)
+         rlc2i = ll2/alat(2)
+         rlc3i = ll3/alat(3)
+
+         DO iat = 1, nat
+            rxyz0(1, iat) = MODULO(MODULO(rxyz0(1, iat), alat(1)), alat(1))
+            rxyz0(2, iat) = MODULO(MODULO(rxyz0(2, iat), alat(2)), alat(2))
+            rxyz0(3, iat) = MODULO(MODULO(rxyz0(3, iat), alat(3)), alat(3))
+            l1 = INT(rxyz0(1, iat)*rlc1i)
+            l2 = INT(rxyz0(2, iat)*rlc2i)
+            l3 = INT(rxyz0(3, iat)*rlc3i)
+
+            ii = icell(0, l1, l2, l3)
+            ii = ii + 1
+            icell(0, l1, l2, l3) = ii
+            IF (ii > ncx) THEN
+               DEALLOCATE (icell)
+               EXIT
+            END IF
+            icell(ii, l1, l2, l3) = iat
+         END DO
+         IF (ALLOCATED(icell)) EXIT
+      END DO
+
+! duplicate all atoms within boundary layer
+      laymx = ncx*(2*ll1*ll2 + 2*ll1*ll3 + 2*ll2*ll3 + 4*ll1 + 4*ll2 + 4*ll3 + 8)
+      nn = nat + laymx
+      ALLOCATE (rxyz(3, nn), lay(nn))
+      DO iat = 1, nat
+         lay(iat) = iat
+         rxyz(1, iat) = rxyz0(1, iat)
+         rxyz(2, iat) = rxyz0(2, iat)
+         rxyz(3, iat) = rxyz0(3, iat)
+      END DO
+      il = nat
+! xy plane
+      DO l2 = 0, ll2 - 1
+      DO l1 = 0, ll1 - 1
+
+         in = icell(0, l1, l2, 0)
+         icell(0, l1, l2, ll3) = in
+         DO ii = 1, in
+            i = icell(ii, l1, l2, 0)
+            il = il + 1
+            IF (il > nn) CPABORT("enlarge laymx")
+            lay(il) = i
+            icell(ii, l1, l2, ll3) = il
+            rxyz(1, il) = rxyz(1, i)
+            rxyz(2, il) = rxyz(2, i)
+            rxyz(3, il) = rxyz(3, i) + alat(3)
+         END DO
+
+         in = icell(0, l1, l2, ll3 - 1)
+         icell(0, l1, l2, -1) = in
+         DO ii = 1, in
+            i = icell(ii, l1, l2, ll3 - 1)
+            il = il + 1
+            IF (il > nn) CPABORT("enlarge laymx")
+            lay(il) = i
+            icell(ii, l1, l2, -1) = il
+            rxyz(1, il) = rxyz(1, i)
+            rxyz(2, il) = rxyz(2, i)
+            rxyz(3, il) = rxyz(3, i) - alat(3)
+         END DO
+
+      END DO
+      END DO
+
+! yz plane
+      DO l3 = 0, ll3 - 1
+      DO l2 = 0, ll2 - 1
+
+         in = icell(0, 0, l2, l3)
+         icell(0, ll1, l2, l3) = in
+         DO ii = 1, in
+            i = icell(ii, 0, l2, l3)
+            il = il + 1
+            IF (il > nn) CPABORT("enlarge laymx")
+            lay(il) = i
+            icell(ii, ll1, l2, l3) = il
+            rxyz(1, il) = rxyz(1, i) + alat(1)
+            rxyz(2, il) = rxyz(2, i)
+            rxyz(3, il) = rxyz(3, i)
+         END DO
+
+         in = icell(0, ll1 - 1, l2, l3)
+         icell(0, -1, l2, l3) = in
+         DO ii = 1, in
+            i = icell(ii, ll1 - 1, l2, l3)
+            il = il + 1
+            IF (il > nn) CPABORT("enlarge laymx")
+            lay(il) = i
+            icell(ii, -1, l2, l3) = il
+            rxyz(1, il) = rxyz(1, i) - alat(1)
+            rxyz(2, il) = rxyz(2, i)
+            rxyz(3, il) = rxyz(3, i)
+         END DO
+
+      END DO
+      END DO
+
+! xz plane
+      DO l3 = 0, ll3 - 1
+      DO l1 = 0, ll1 - 1
+
+         in = icell(0, l1, 0, l3)
+         icell(0, l1, ll2, l3) = in
+         DO ii = 1, in
+            i = icell(ii, l1, 0, l3)
+            il = il + 1
+            IF (il > nn) CPABORT("enlarge laymx")
+            lay(il) = i
+            icell(ii, l1, ll2, l3) = il
+            rxyz(1, il) = rxyz(1, i)
+            rxyz(2, il) = rxyz(2, i) + alat(2)
+            rxyz(3, il) = rxyz(3, i)
+         END DO
+
+         in = icell(0, l1, ll2 - 1, l3)
+         icell(0, l1, -1, l3) = in
+         DO ii = 1, in
+            i = icell(ii, l1, ll2 - 1, l3)
+            il = il + 1
+            IF (il > nn) CPABORT("enlarge laymx")
+            lay(il) = i
+            icell(ii, l1, -1, l3) = il
+            rxyz(1, il) = rxyz(1, i)
+            rxyz(2, il) = rxyz(2, i) - alat(2)
+            rxyz(3, il) = rxyz(3, i)
+         END DO
+
+      END DO
+      END DO
+
+! x axis
+      DO l1 = 0, ll1 - 1
+
+         in = icell(0, l1, 0, 0)
+         icell(0, l1, ll2, ll3) = in
+         DO ii = 1, in
+            i = icell(ii, l1, 0, 0)
+            il = il + 1
+            IF (il > nn) CPABORT("enlarge laymx")
+            lay(il) = i
+            icell(ii, l1, ll2, ll3) = il
+            rxyz(1, il) = rxyz(1, i)
+            rxyz(2, il) = rxyz(2, i) + alat(2)
+            rxyz(3, il) = rxyz(3, i) + alat(3)
+         END DO
+
+         in = icell(0, l1, 0, ll3 - 1)
+         icell(0, l1, ll2, -1) = in
+         DO ii = 1, in
+            i = icell(ii, l1, 0, ll3 - 1)
+            il = il + 1
+            IF (il > nn) CPABORT("enlarge laymx")
+            lay(il) = i
+            icell(ii, l1, ll2, -1) = il
+            rxyz(1, il) = rxyz(1, i)
+            rxyz(2, il) = rxyz(2, i) + alat(2)
+            rxyz(3, il) = rxyz(3, i) - alat(3)
+         END DO
+
+         in = icell(0, l1, ll2 - 1, 0)
+         icell(0, l1, -1, ll3) = in
+         DO ii = 1, in
+            i = icell(ii, l1, ll2 - 1, 0)
+            il = il + 1
+            IF (il > nn) CPABORT("enlarge laymx")
+            lay(il) = i
+            icell(ii, l1, -1, ll3) = il
+            rxyz(1, il) = rxyz(1, i)
+            rxyz(2, il) = rxyz(2, i) - alat(2)
+            rxyz(3, il) = rxyz(3, i) + alat(3)
+         END DO
+
+         in = icell(0, l1, ll2 - 1, ll3 - 1)
+         icell(0, l1, -1, -1) = in
+         DO ii = 1, in
+            i = icell(ii, l1, ll2 - 1, ll3 - 1)
+            il = il + 1
+            IF (il > nn) CPABORT("enlarge laymx")
+            lay(il) = i
+            icell(ii, l1, -1, -1) = il
+            rxyz(1, il) = rxyz(1, i)
+            rxyz(2, il) = rxyz(2, i) - alat(2)
+            rxyz(3, il) = rxyz(3, i) - alat(3)
+         END DO
+
+      END DO
+
+! y axis
+      DO l2 = 0, ll2 - 1
+
+         in = icell(0, 0, l2, 0)
+         icell(0, ll1, l2, ll3) = in
+         DO ii = 1, in
+            i = icell(ii, 0, l2, 0)
+            il = il + 1
+            IF (il > nn) CPABORT("enlarge laymx")
+            lay(il) = i
+            icell(ii, ll1, l2, ll3) = il
+            rxyz(1, il) = rxyz(1, i) + alat(1)
+            rxyz(2, il) = rxyz(2, i)
+            rxyz(3, il) = rxyz(3, i) + alat(3)
+         END DO
+
+         in = icell(0, 0, l2, ll3 - 1)
+         icell(0, ll1, l2, -1) = in
+         DO ii = 1, in
+            i = icell(ii, 0, l2, ll3 - 1)
+            il = il + 1
+            IF (il > nn) CPABORT("enlarge laymx")
+            lay(il) = i
+            icell(ii, ll1, l2, -1) = il
+            rxyz(1, il) = rxyz(1, i) + alat(1)
+            rxyz(2, il) = rxyz(2, i)
+            rxyz(3, il) = rxyz(3, i) - alat(3)
+         END DO
+
+         in = icell(0, ll1 - 1, l2, 0)
+         icell(0, -1, l2, ll3) = in
+         DO ii = 1, in
+            i = icell(ii, ll1 - 1, l2, 0)
+            il = il + 1
+            IF (il > nn) CPABORT("enlarge laymx")
+            lay(il) = i
+            icell(ii, -1, l2, ll3) = il
+            rxyz(1, il) = rxyz(1, i) - alat(1)
+            rxyz(2, il) = rxyz(2, i)
+            rxyz(3, il) = rxyz(3, i) + alat(3)
+         END DO
+
+         in = icell(0, ll1 - 1, l2, ll3 - 1)
+         icell(0, -1, l2, -1) = in
+         DO ii = 1, in
+            i = icell(ii, ll1 - 1, l2, ll3 - 1)
+            il = il + 1
+            IF (il > nn) CPABORT("enlarge laymx")
+            lay(il) = i
+            icell(ii, -1, l2, -1) = il
+            rxyz(1, il) = rxyz(1, i) - alat(1)
+            rxyz(2, il) = rxyz(2, i)
+            rxyz(3, il) = rxyz(3, i) - alat(3)
+         END DO
+
+      END DO
+
+! z axis
+      DO l3 = 0, ll3 - 1
+
+         in = icell(0, 0, 0, l3)
+         icell(0, ll1, ll2, l3) = in
+         DO ii = 1, in
+            i = icell(ii, 0, 0, l3)
+            il = il + 1
+            IF (il > nn) CPABORT("enlarge laymx")
+            lay(il) = i
+            icell(ii, ll1, ll2, l3) = il
+            rxyz(1, il) = rxyz(1, i) + alat(1)
+            rxyz(2, il) = rxyz(2, i) + alat(2)
+            rxyz(3, il) = rxyz(3, i)
+         END DO
+
+         in = icell(0, ll1 - 1, 0, l3)
+         icell(0, -1, ll2, l3) = in
+         DO ii = 1, in
+            i = icell(ii, ll1 - 1, 0, l3)
+            il = il + 1
+            IF (il > nn) CPABORT("enlarge laymx")
+            lay(il) = i
+            icell(ii, -1, ll2, l3) = il
+            rxyz(1, il) = rxyz(1, i) - alat(1)
+            rxyz(2, il) = rxyz(2, i) + alat(2)
+            rxyz(3, il) = rxyz(3, i)
+         END DO
+
+         in = icell(0, 0, ll2 - 1, l3)
+         icell(0, ll1, -1, l3) = in
+         DO ii = 1, in
+            i = icell(ii, 0, ll2 - 1, l3)
+            il = il + 1
+            IF (il > nn) CPABORT("enlarge laymx")
+            lay(il) = i
+            icell(ii, ll1, -1, l3) = il
+            rxyz(1, il) = rxyz(1, i) + alat(1)
+            rxyz(2, il) = rxyz(2, i) - alat(2)
+            rxyz(3, il) = rxyz(3, i)
+         END DO
+
+         in = icell(0, ll1 - 1, ll2 - 1, l3)
+         icell(0, -1, -1, l3) = in
+         DO ii = 1, in
+            i = icell(ii, ll1 - 1, ll2 - 1, l3)
+            il = il + 1
+            IF (il > nn) CPABORT("enlarge laymx")
+            lay(il) = i
+            icell(ii, -1, -1, l3) = il
+            rxyz(1, il) = rxyz(1, i) - alat(1)
+            rxyz(2, il) = rxyz(2, i) - alat(2)
+            rxyz(3, il) = rxyz(3, i)
+         END DO
+
+      END DO
+
+! corners
+      in = icell(0, 0, 0, 0)
+      icell(0, ll1, ll2, ll3) = in
+      DO ii = 1, in
+         i = icell(ii, 0, 0, 0)
+         il = il + 1
+         IF (il > nn) CPABORT("enlarge laymx")
+         lay(il) = i
+         icell(ii, ll1, ll2, ll3) = il
+         rxyz(1, il) = rxyz(1, i) + alat(1)
+         rxyz(2, il) = rxyz(2, i) + alat(2)
+         rxyz(3, il) = rxyz(3, i) + alat(3)
+      END DO
+
+      in = icell(0, ll1 - 1, 0, 0)
+      icell(0, -1, ll2, ll3) = in
+      DO ii = 1, in
+         i = icell(ii, ll1 - 1, 0, 0)
+         il = il + 1
+         IF (il > nn) CPABORT("enlarge laymx")
+         lay(il) = i
+         icell(ii, -1, ll2, ll3) = il
+         rxyz(1, il) = rxyz(1, i) - alat(1)
+         rxyz(2, il) = rxyz(2, i) + alat(2)
+         rxyz(3, il) = rxyz(3, i) + alat(3)
+      END DO
+
+      in = icell(0, 0, ll2 - 1, 0)
+      icell(0, ll1, -1, ll3) = in
+      DO ii = 1, in
+         i = icell(ii, 0, ll2 - 1, 0)
+         il = il + 1
+         IF (il > nn) CPABORT("enlarge laymx")
+         lay(il) = i
+         icell(ii, ll1, -1, ll3) = il
+         rxyz(1, il) = rxyz(1, i) + alat(1)
+         rxyz(2, il) = rxyz(2, i) - alat(2)
+         rxyz(3, il) = rxyz(3, i) + alat(3)
+      END DO
+
+      in = icell(0, ll1 - 1, ll2 - 1, 0)
+      icell(0, -1, -1, ll3) = in
+      DO ii = 1, in
+         i = icell(ii, ll1 - 1, ll2 - 1, 0)
+         il = il + 1
+         IF (il > nn) CPABORT("enlarge laymx")
+         lay(il) = i
+         icell(ii, -1, -1, ll3) = il
+         rxyz(1, il) = rxyz(1, i) - alat(1)
+         rxyz(2, il) = rxyz(2, i) - alat(2)
+         rxyz(3, il) = rxyz(3, i) + alat(3)
+      END DO
+
+      in = icell(0, 0, 0, ll3 - 1)
+      icell(0, ll1, ll2, -1) = in
+      DO ii = 1, in
+         i = icell(ii, 0, 0, ll3 - 1)
+         il = il + 1
+         IF (il > nn) CPABORT("enlarge laymx")
+         lay(il) = i
+         icell(ii, ll1, ll2, -1) = il
+         rxyz(1, il) = rxyz(1, i) + alat(1)
+         rxyz(2, il) = rxyz(2, i) + alat(2)
+         rxyz(3, il) = rxyz(3, i) - alat(3)
+      END DO
+
+      in = icell(0, ll1 - 1, 0, ll3 - 1)
+      icell(0, -1, ll2, -1) = in
+      DO ii = 1, in
+         i = icell(ii, ll1 - 1, 0, ll3 - 1)
+         il = il + 1
+         IF (il > nn) CPABORT("enlarge laymx")
+         lay(il) = i
+         icell(ii, -1, ll2, -1) = il
+         rxyz(1, il) = rxyz(1, i) - alat(1)
+         rxyz(2, il) = rxyz(2, i) + alat(2)
+         rxyz(3, il) = rxyz(3, i) - alat(3)
+      END DO
+
+      in = icell(0, 0, ll2 - 1, ll3 - 1)
+      icell(0, ll1, -1, -1) = in
+      DO ii = 1, in
+         i = icell(ii, 0, ll2 - 1, ll3 - 1)
+         il = il + 1
+         IF (il > nn) CPABORT("enlarge laymx")
+         lay(il) = i
+         icell(ii, ll1, -1, -1) = il
+         rxyz(1, il) = rxyz(1, i) + alat(1)
+         rxyz(2, il) = rxyz(2, i) - alat(2)
+         rxyz(3, il) = rxyz(3, i) - alat(3)
+      END DO
+
+      in = icell(0, ll1 - 1, ll2 - 1, ll3 - 1)
+      icell(0, -1, -1, -1) = in
+      DO ii = 1, in
+         i = icell(ii, ll1 - 1, ll2 - 1, ll3 - 1)
+         il = il + 1
+         IF (il > nn) CPABORT("enlarge laymx")
+         lay(il) = i
+         icell(ii, -1, -1, -1) = il
+         rxyz(1, il) = rxyz(1, i) - alat(1)
+         rxyz(2, il) = rxyz(2, i) - alat(2)
+         rxyz(3, il) = rxyz(3, i) - alat(3)
+      END DO
+
+      ALLOCATE (lsta(2, nat))
+      nnbrx = 300
+      DO
+         nnbrx = 3*nnbrx/2
+         ALLOCATE (lstb(nnbrx*nat), rel(5, nnbrx*nat))
+
+         indlstx = 0
+
+         npr = 1
+         iam = 0
+
+         cut2 = cut**2
+! assign contiguous portions of the arrays lstb and rel to the threads (this version only contains one thread)
+         myspace = (nat*nnbrx)/npr
+         IF (iam == 0) myspaceout = myspace
+! Verlet list, relative positions
+         indlst = 0
+         DO l3 = 0, ll3 - 1
+         DO l2 = 0, ll2 - 1
+         DO l1 = 0, ll1 - 1
+         DO ii = 1, icell(0, l1, l2, l3)
+            iat = icell(ii, l1, l2, l3)
+            IF (((iat - 1)*npr)/nat == iam) THEN
+               lsta(1, iat) = iam*myspace + indlst + 1
+               CALL sw_sublstiat_l(iat, nn, ncx, ll1, ll2, ll3, l1, l2, l3, myspace, &
+                                   rxyz, icell, lstb(iam*myspace + 1), lay, rel(1, iam*myspace + 1), cut2, indlst)
+               lsta(2, iat) = iam*myspace + indlst
+               ipb = lsta(1, iat)
+               ndat = lsta(2, iat) - lsta(1, iat) + 1
+            END IF
+         END DO
+         END DO
+         END DO
+         END DO
+         indlstx = MAX(indlstx, indlst)
+
+         IF (indlstx < myspaceout) EXIT
+         DEALLOCATE (lstb, rel)
+      END DO
+
+      npr = 1
+      iam = 0
+      npjx = 300; npjkx = 6000
+!end of creating pairlist part------------------------------------------------------------
+
+!start energy and force calculation-------------------------------------------------------
+!set all variables to zero
+      p = 0.0d0
+      p3 = 0.0d0
+      pv3 = 0.0d0
+      fx(:) = 0.0d0
+      fy(:) = 0.0d0
+      fz(:) = 0.0d0
+      fx3(:) = 0.0d0
+      fy3(:) = 0.0d0
+      fz3(:) = 0.0d0
+!-----------------------------------------------------------------------------------------
+!     triple loop for the 2 and 3-body forces
+!     do 20 i
+!     do 30 j
+!     do 40 k
+!     the pairlists lsta and lstb are used for the perodic boundary conditions
+!-----------------------------------------------------------------------------------------
+
+      DO i = 1, nat
+         CALL sw_subfeniat_l(i, nat, nnbrx, rel, p, p3, fx, fy, fz, fx3, fy3, fz3, lstb, lsta, isigma, sigma)
+      END DO
+!-----------------------------------------------------------------------------------------
+!*****if necessary,********
+      DO i = 1, nat
+         fx(i) = fx(i) + fx3(i)
+         fy(i) = fy(i) + fy3(i)
+         fz(i) = fz(i) + fz3(i)
+      END DO
+!-----------------------------------------------------------------------------------------
+
+      DO i = 1, nat
+         fxyz(1, i) = fx(i)*esigma
+         fxyz(2, i) = fy(i)*esigma
+         fxyz(3, i) = fz(i)*esigma
+      END DO
+      etot = (p + p3)*eps
+      DEALLOCATE (rxyz, icell, lay, lsta, lstb, rel)
+   END SUBROUTINE eip_stillinger_weber_silicon
+!End of the force calculation-------------------------------------------------------------
+
+! **************************************************************************************************
+!> \brief ...
+!> \param c ...
+!> \return ...
+! **************************************************************************************************
+   REAL(8) FUNCTION f(c)
+      REAL(8)                                            :: c
+
+      REAL(8)                                            :: aa, bb, c4, crainv, ra
+
+      PARAMETER(aa=7.049556277d0)
+      PARAMETER(ra=1.8d0, bb=0.6022245584d0)
+
+      IF ((c - ra) < 0.d0) THEN
+         crainv = 1.0d0/(c - ra)
+         c4 = c*c*c*c
+         f = aa*bb*4.0d0/(c4*c)*dexp(crainv) + aa*(bb/(c4) - 1.0d0)*dexp(crainv)*crainv*crainv
+      ELSE
+         f = 0.d0
+      END IF
+
+      RETURN
+   END FUNCTION f
+
+! **************************************************************************************************
+!> \brief ...
+!> \param d ...
+!> \return ...
+! **************************************************************************************************
+   REAL(8) FUNCTION pe(d)
+      REAL(8)                                            :: d
+
+      REAL(8), PARAMETER                                 :: aa = 7.049556277d0, bb = 0.6022245584d0, &
+                                                            ra = 1.8d0
+
+      IF ((d - ra) < 0.d0) THEN
+         pe = aa*(bb/(d*d*d*d) - 1.0d0)*dexp(1.0d0/(d - ra))
+      ELSE
+         pe = 0.d0
+      END IF
+      RETURN
+   END FUNCTION pe
+
+!------------------------------------------------------------------------------------------
+! **************************************************************************************************
+!> \brief ...
+!> \param iat ...
+!> \param nn ...
+!> \param ncx ...
+!> \param ll1 ...
+!> \param ll2 ...
+!> \param ll3 ...
+!> \param l1 ...
+!> \param l2 ...
+!> \param l3 ...
+!> \param myspace ...
+!> \param rxyz ...
+!> \param icell ...
+!> \param lstb ...
+!> \param lay ...
+!> \param rel ...
+!> \param cut2 ...
+!> \param indlst ...
+! **************************************************************************************************
+   SUBROUTINE sw_sublstiat_l(iat, nn, ncx, ll1, ll2, ll3, l1, l2, l3, myspace, &
+                             rxyz, icell, lstb, lay, rel, cut2, indlst)
+! finds the neighbours of atom iat (specified by lsta and lstb) and and
+! the relative position rel of iat with respect to these neighbours
+      INTEGER                                            :: iat, nn, ncx, ll1, ll2, ll3, l1, l2, l3, &
+                                                            myspace
+      REAL(8)                                            :: rxyz(3, nn)
+      INTEGER :: icell(0:ncx, -1:ll1, -1:ll2, -1:ll3), lstb(0:myspace - 1), lay(nn)
+      REAL(8)                                            :: rel(5, 0:myspace - 1), cut2
+      INTEGER                                            :: indlst
+
+      INTEGER                                            :: jat, jj, k1, k2, k3
+      REAL(8)                                            :: rr2, tt, tti, xrel, yrel, zrel
+
+      DO k3 = l3 - 1, l3 + 1
+      DO k2 = l2 - 1, l2 + 1
+      DO k1 = l1 - 1, l1 + 1
+      DO jj = 1, icell(0, k1, k2, k3)
+         jat = icell(jj, k1, k2, k3)
+         IF (jat == iat) CYCLE
+         xrel = rxyz(1, iat) - rxyz(1, jat)
+         yrel = rxyz(2, iat) - rxyz(2, jat)
+         zrel = rxyz(3, iat) - rxyz(3, jat)
+         rr2 = xrel**2 + yrel**2 + zrel**2
+         IF (rr2 <= cut2) THEN
+            indlst = MIN(indlst, myspace - 1)
+            lstb(indlst) = lay(jat)
+!        write(6,*) 'iat,indlst,lay(jat)',iat,indlst,lay(jat)
+            tt = SQRT(rr2)
+            tti = 1.d0/tt
+            rel(1, indlst) = xrel*tti
+            rel(2, indlst) = yrel*tti
+            rel(3, indlst) = zrel*tti
+            rel(4, indlst) = tt
+            rel(5, indlst) = tti
+            indlst = indlst + 1
+         END IF
+      END DO
+      END DO
+      END DO
+      END DO
+
+      RETURN
+   END SUBROUTINE sw_sublstiat_l
+
+! **************************************************************************************************
+!> \brief ...
+!> \param i ...
+!> \param nat ...
+!> \param nnbrx ...
+!> \param rel ...
+!> \param p ...
+!> \param p3 ...
+!> \param fx ...
+!> \param fy ...
+!> \param fz ...
+!> \param fx3 ...
+!> \param fy3 ...
+!> \param fz3 ...
+!> \param lstb ...
+!> \param lsta ...
+!> \param isigma ...
+!> \param sigma ...
+! **************************************************************************************************
+   SUBROUTINE sw_subfeniat_l(i, nat, nnbrx, rel, p, p3, fx, fy, fz, fx3, fy3, fz3, lstb, lsta, isigma, sigma)
+      INTEGER, INTENT(IN)                                :: i, nat, nnbrx
+      REAL(8), INTENT(IN)                                :: rel(5, nnbrx*nat)
+      REAL(8), INTENT(INOUT)                             :: p, p3, fx(nat), fy(nat), fz(nat), &
+                                                            fx3(nat), fy3(nat), fz3(nat)
+      INTEGER, INTENT(IN)                                :: lstb(nnbrx*nat), lsta(2, nat)
+      REAL(8), INTENT(IN)                                :: isigma, sigma
+
+      INTEGER                                            :: Ipb, Ipe, j, k, l, m, nij
+      REAL(8) :: aa, bb, c4, cosijk, cosijk3, cosikj, cosikj3, cosjik, cosjik3, crainv, force, &
+         gam, hi, hixij, hixij0, hixij1, hixik, hixik0, hixik1, hiyij, hiyij0, hiyij1, hiyik, &
+         hiyik0, hiyik1, HIZIJ, HIZIJ0, HIZIJ1, HIZIK, HIZIK0, HIZIK1, hj, hjxij, hjxij0, hjxij1, &
+         hjxjk, hjxjk0, hjxjk1, hjyij, hjyij0, hjyij1, hjyjk, hjyjk0, hjyjk1, HJZIJ, HJZIJ0, &
+         HJZIJ1, HJZJK, HJZJK0, HJZJK1, hk, hkxik, hkxik0, HKXIK1, hkxkj, hkxkj0, hkxkj1, hkyik, &
+         hkyik0, hkyik1, hkykj, hkykj0, hkykj1, HKZIK, HKZIK0, HKZIK1, HKZKJ, HKZKJ0, HKZKJ1, &
+         invrij, invrija, invrik, invrika, invrjk, invrjka, ra, ramda, refi, refj
+      REAL(8) :: refk, rij, rija, rik, rika, rjk, rjka, xij, xik, xjk, yij, yik, yjk, zij, zik, zjk
+
+      PARAMETER(gam=1.2d0, ramda=21.0d0, aa=7.049556277d0)
+      PARAMETER(ra=1.8d0, bb=0.6022245584d0)
+
+      Ipb = lsta(1, i)
+      Ipe = lsta(2, i)
+
+      DO l = Ipb, Ipe
+         j = lstb(l)
+         IF (j <= i) CYCLE
+         nij = 0
+         rij = rel(4, l)*isigma
+         invrij = rel(5, l)*sigma
+         xij = rel(1, l)*rij
+         yij = rel(2, l)*rij
+         zij = rel(3, l)*rij
+
+         IF (rij >= 2.d0*ra) CYCLE
+         IF (rij < ra) THEN
+            crainv = 1.0d0/(rij - ra)
+            c4 = rij*rij*rij*rij
+            force = aa*bb*4.0d0/(c4*rij)*dexp(crainv) + aa*(bb/(c4) - 1.0d0)*dexp(crainv)*crainv*crainv
+
+            fx(i) = force*xij*invrij + fx(i)
+            fy(i) = force*yij*invrij + fy(i)
+            fz(i) = force*zij*invrij + fz(i)
+
+            fx(j) = -force*xij*invrij + fx(j)
+            fy(j) = -force*yij*invrij + fy(j)
+            fz(j) = -force*zij*invrij + fz(j)
+
+            p = p + aa*(bb/(rij*rij*rij*rij) - 1.0d0)*dexp(1.0d0/(rij - ra))
+
+            nij = 1
+         END IF
+
+         DO m = Ipb, Ipe
+            k = lstb(m)
+            IF (k <= j) CYCLE
+            invrik = rel(5, m)*sigma
+            rik = rel(4, m)*isigma
+            xik = rel(1, m)*rik
+            yik = rel(2, m)*rik
+            zik = rel(3, m)*rik
+
+            IF ((rik >= ra) .AND. (nij == 0)) CYCLE
+
+            xjk = xik - xij
+            yjk = yik - yij
+            zjk = zik - zij
+
+            rjk = SQRT(xjk*xjk + yjk*yjk + zjk*zjk)
+            invrjk = 1.d0/rjk
+
+            IF ((rjk >= ra) .AND. (nij == 0)) CYCLE
+            cosjik = (xij*xik + yij*yik + zij*zik)*(invrij*invrik)
+            cosijk = (-xij*xjk - yij*yjk - zij*zjk)*(invrij*invrjk)
+            cosikj = (xik*xjk + yik*yjk + zik*zjk)*(invrik*invrjk)
+            cosjik3 = cosjik + 1.0d0/3.0d0
+            cosijk3 = cosijk + 1.0d0/3.0d0
+            cosikj3 = cosikj + 1.0d0/3.0d0
+
+            rija = rij - ra
+            rika = rik - ra
+            rjka = rjk - ra
+
+            invrija = 1.d0/rija
+            invrika = 1.d0/rika
+            invrjka = 1.d0/rjka
+
+            IF (rija >= 0.0d0) THEN
+               refi = 0.0d0
+               refj = 0.0d0
+               refk = ramda*EXP(gam*invrika + gam*invrjka)
+            ELSE IF ((rija < 0.0d0) .AND. (rika < 0.0d0)) THEN
+               IF (rjka < 0.0d0) THEN
+                  refi = ramda*EXP(gam*invrija + gam*invrika)
+                  refj = ramda*EXP(gam*invrija + gam*invrjka)
+                  refk = ramda*EXP(gam*invrika + gam*invrjka)
+               ELSE
+                  refi = ramda*EXP(gam*invrija + gam*invrika)
+                  refj = 0.0d0
+                  refk = 0.0d0
+               END IF
+            ELSE IF ((rija < 0.0d0) .AND. (rjka < 0.0d0)) THEN
+               refi = 0.0d0
+               refj = ramda*EXP(gam*invrija + gam*invrjka)
+               refk = 0.0d0
+            ELSE
+               CYCLE
+            END IF
+
+            hi = refi*cosjik3*cosjik3
+            hj = refj*cosijk3*cosijk3
+            hk = refk*cosikj3*cosikj3
+            p3 = p3 + hi + hj + hk
+
+            hixij0 = 2.0d0*(xik*invrik - xij*cosjik*invrij)
+            hixij1 = gam*xij*cosjik3*(invrija*invrija)
+            hixij = refi*cosjik3*(hixij0 - hixij1)*invrij
+            hixik0 = 2.0d0*(xij*invrij - xik*cosjik*invrik)
+            hixik1 = gam*xik*cosjik3*(invrika*invrika)
+            hixik = refi*cosjik3*(hixik0 - hixik1)*invrik
+            hjxij0 = 2.0d0*(-xjk*invrjk - xij*cosijk*invrij)
+            hjxij1 = gam*xij*cosijk3*(invrija*invrija)
+            hjxij = refj*cosijk3*(hjxij0 - hjxij1)*invrij
+            hkxik0 = 2.0d0*(xjk*invrjk - xik*cosikj*invrik)
+            hkxik1 = gam*xik*cosikj3*(invrika*invrika)
+            hkxik = refk*cosikj3*(hkxik0 - hkxik1)*invrik
+            hjxjk0 = 2.0d0*(-xij*invrij - xjk*cosijk*invrjk)
+            hjxjk1 = gam*xjk*cosijk3*(invrjka*invrjka)
+            hjxjk = refj*cosijk3*(hjxjk0 - hjxjk1)*invrjk
+            hkxkj0 = 2.0d0*(-xik*invrik + xjk*cosikj*invrjk)
+            hkxkj1 = gam*xjk*cosikj3*(invrjka*invrjka)
+            hkxkj = refk*cosikj3*(hkxkj0 + hkxkj1)*invrjk
+
+            hiyij0 = 2.0d0*(yik*invrik - yij*cosjik*invrij)
+            hiyij1 = gam*yij*cosjik3*(invrija*invrija)
+            hiyij = refi*cosjik3*(hiyij0 - hiyij1)*invrij
+            hiyik0 = 2.0d0*(yij*invrij - yik*cosjik*invrik)
+            hiyik1 = gam*yik*cosjik3*(invrika*invrika)
+            hiyik = refi*cosjik3*(hiyik0 - hiyik1)*invrik
+            hjyij0 = 2.0d0*(-yjk*invrjk - yij*cosijk*invrij)
+            hjyij1 = gam*yij*cosijk3*(invrija*invrija)
+            hjyij = refj*cosijk3*(hjyij0 - hjyij1)*invrij
+            hkyik0 = 2.0d0*(yjk*invrjk - yik*cosikj*invrik)
+            hkyik1 = gam*yik*cosikj3*(invrika*invrika)
+            hkyik = refk*cosikj3*(hkyik0 - hkyik1)*invrik
+            hjyjk0 = 2.0d0*(-yij*invrij - yjk*cosijk*invrjk)
+            hjyjk1 = gam*yjk*cosijk3*(invrjka*invrjka)
+            hjyjk = refj*cosijk3*(hjyjk0 - hjyjk1)*invrjk
+            hkykj0 = 2.0d0*(-yik*invrik + yjk*cosikj*invrjk)
+            hkykj1 = gam*yjk*cosikj3*(invrjka*invrjka)
+            hkykj = refk*cosikj3*(hkykj0 + hkykj1)*invrjk
+
+            hizij0 = 2.0d0*(zik*invrik - zij*cosjik*invrij)
+            hizij1 = gam*zij*cosjik3*(invrija*invrija)
+            hizij = refi*cosjik3*(hizij0 - hizij1)*invrij
+            hizik0 = 2.0d0*(zij*invrij - zik*cosjik*invrik)
+            hizik1 = gam*zik*cosjik3*(invrika*invrika)
+            hizik = refi*cosjik3*(hizik0 - hizik1)*invrik
+            hjzij0 = 2.0d0*(-zjk*invrjk - zij*cosijk*invrij)
+            hjzij1 = gam*zij*cosijk3*(invrija*invrija)
+            hjzij = refj*cosijk3*(hjzij0 - hjzij1)*invrij
+            hkzik0 = 2.0d0*(zjk*invrjk - zik*cosikj*invrik)
+            hkzik1 = gam*zik*cosikj3*(invrika*invrika)
+            hkzik = refk*cosikj3*(hkzik0 - hkzik1)*invrik
+            hjzjk0 = 2.0d0*(-zij*invrij - zjk*cosijk*invrjk)
+            hjzjk1 = gam*zjk*cosijk3*(invrjka*invrjka)
+            hjzjk = refj*cosijk3*(hjzjk0 - hjzjk1)*invrjk
+            hkzkj0 = 2.0d0*(-zik*invrik + zjk*cosikj*invrjk)
+            hkzkj1 = gam*zjk*cosikj3*(invrjka*invrjka)
+            hkzkj = refk*cosikj3*(hkzkj0 + hkzkj1)*invrjk
+
+            fx3(i) = fx3(i) - hixij - hixik - hjxij - hkxik
+            fy3(i) = fy3(i) - hiyij - hiyik - hjyij - hkyik
+            fz3(i) = fz3(i) - hizij - hizik - hjzij - hkzik
+
+            fx3(j) = fx3(j) + hixij + hjxij - hjxjk + hkxkj
+            fy3(j) = fy3(j) + hiyij + hjyij - hjyjk + hkykj
+            fz3(j) = fz3(j) + hizij + hjzij - hjzjk + hkzkj
+
+            fx3(k) = fx3(k) + hixik + hkxik - hkxkj + hjxjk
+            fy3(k) = fy3(k) + hiyik + hkyik - hkykj + hjyjk
+            fz3(k) = fz3(k) + hizik + hkzik - hkzkj + hjzjk
+         END DO
+      END DO
+   END SUBROUTINE sw_subfeniat_l
+
+! **************************************************************************************************
+!> \brief ...
+!> \param nat ...
+!> \param alat ...
+!> \param rxyz ...
+!> \param fxyz ...
+!> \param etot ...
+!> \param count ...
+! **************************************************************************************************
+   SUBROUTINE eip_tersoff_silicon(nat, alat, rxyz, fxyz, etot, count)
+!*****************************************************************************************
+! This subroutine evaluates the Tersoff Silicon potential with linear scaling
+! COPYRIGHT
+!    Copyright (C) 2009 AIST, UNIBAS
+!    This file is distributed under the terms of the
+!    GNU General Public License, see
+!    http://www.gnu.org/copyleft/gpl.txt .
+!
+! Implementation: Original version was written by Kengo Nishio, AIST Tsukuba (JP)
+!                 Improved by M. Amsler, S. Goedecker, Basel University (CH), 2009
+!
+! Note:
+!     Parameters and functional form from PRL 61, 2879 (1988) and PRB 39, 5566 (1989)
+!
+! Input:
+!     nat, integer: the number of atoms
+!     alat,  real(8), dim(3)   : the three edges of the orthoromic simulation cell, periodic boundaries are applied
+!                                and atoms outside the cell will be brought back into the box
+!     rxyz, real(8), dim(3,nat) : the xyz cartesian components of the atomic positions in Angstroem
+!
+! Output:
+!     fxyz,  real(8), dim(3,nat): the xyz cartesian forces in on the corresponding atomic components n eV/A
+!     etot, real(8)            : total potential energy, 2-body and 3-body, in eV
+!     count, real(8)           : increased by 1.d0 at each call of this subroutine,
+!                                needs to be initialized to 0.d0 before calling this routine for the first time
+!*****************************************************************************************
+      INTEGER                                            :: nat
+      REAL(8)                                            :: alat(3), rxyz(3, nat), fxyz(3, nat), &
+                                                            etot, count
+
+      INTEGER                                            :: iat, NNmax, Npmax
+      INTEGER, ALLOCATABLE, DIMENSION(:)                 :: Kinds, lstb
+      INTEGER, ALLOCATABLE, DIMENSION(:, :)              :: lsta
+      REAL(8)                                            :: Uatot, Urtot, xbox, ybox, zbox
+      REAL(8), ALLOCATABLE, DIMENSION(:)                 :: dkEij, UadUrdf, XYZRrefdf
+      REAL(8), DIMENSION(1:2)                            :: bcsq, Co_bcd, dsq, h, Pmass, Pn
+      REAL(8), DIMENSION(1:2, 1:2)                       :: ala, alr, Ca, Cr, R1, R2, X
+
+      INTEGER:: nnbrx, nnbrxt
+      INTEGER :: i
+
+      count = count + 1.d0
+
+      DO iat = 1, nat
+         rxyz(1, iat) = MODULO(MODULO(rxyz(1, iat), alat(1)), alat(1))
+         rxyz(2, iat) = MODULO(MODULO(rxyz(2, iat), alat(2)), alat(2))
+         rxyz(3, iat) = MODULO(MODULO(rxyz(3, iat), alat(3)), alat(3))
+      END DO
+
+      ALLOCATE (Kinds(1:nat))
+
+      nnbrx = 24
+      nnbrxt = 3*nnbrx/2
+      nnmax = nnbrxt*nat
+      npmax = nnbrxt*nat
+      ALLOCATE (lsta(2, nat), lstb(nnbrxt*nat))
+      ALLOCATE (XYZRrefdf(1:6*Npmax), UadUrdf(1:3*Npmax), dkEij(1:3*NNmax))
+
+      DO i = 1, nat
+         kinds(i) = 2                             !Since all atoms are Si, all of kind 2
+      END DO
+      fxyz = 0.0d0
+      xbox = alat(1); ybox = alat(2); zbox = alat(3)
+      CALL tersoff_parameters(R1, R2, Cr, Ca, alr, ala, X, Pn, Co_bcd, bcsq, dsq, h, Pmass)
+      CALL tersoff_pairlist_energy_forces(nat, Npmax, NNmax, xbox, ybox, zbox, Kinds, rxyz, R1, R2, Cr, &
+                                          Ca, alr, ala, X, XYZRrefdf, UadUrdf, Urtot, lsta, lstb, nnbrx, &
+                                          Pn, Co_bcd, bcsq, dsq, h, fxyz, Uatot, dkEij)
+      etot = Urtot + Uatot
+      DEALLOCATE (Kinds, XYZRrefdf, UadUrdf, dkEij, lsta, lstb)
+   END SUBROUTINE eip_tersoff_silicon
+!-----------------------------------------------------------------------------------------
+! **************************************************************************************************
+!> \brief ...
+!> \param R1 ...
+!> \param R2 ...
+!> \param Cr ...
+!> \param Ca ...
+!> \param alr ...
+!> \param ala ...
+!> \param X ...
+!> \param Pn ...
+!> \param Co_bcd ...
+!> \param bcsq ...
+!> \param dsq ...
+!> \param h ...
+!> \param Pmass ...
+! **************************************************************************************************
+   SUBROUTINE tersoff_parameters(R1, R2, Cr, Ca, alr, ala, X, Pn, Co_bcd, bcsq, dsq, h, Pmass)
+
+      REAL(8), DIMENSION(1:2, 1:2), INTENT(out)          :: R1, R2, Cr, Ca, alr, ala, X
+      REAL(8), DIMENSION(1:2), INTENT(out)               :: Pn, Co_bcd, bcsq, dsq, h, Pmass
+
+      REAL(8), PARAMETER :: C_ala = 2.2119d0, C_alr = 3.4879d0, C_b = 1.5724d-7, C_c = 3.8049d4, &
+         C_Ca = 3.4674d2, C_Cr = 1.3936d3, C_d = 4.3484d0, C_h = -5.7058d-1, C_mass = 12.0d0, &
+         C_n = 7.2751d-1, C_R1 = 1.8d0, C_R2 = 2.1d0, Si_ala = 1.7322d0, Si_alr = 2.4799d0, &
+         Si_b = 1.1000d-6, Si_c = 1.0039d5, Si_Ca = 4.7118d2, Si_Cr = 1.8308d3, Si_d = 1.6217d1, &
+         Si_h = -5.9825d-1, Si_mass = 28.0855d0, Si_n = 7.8734d-1, Si_R1 = 2.7d0, Si_R2 = 3.3d0
+
+!Parameter for carbon, not used in this version
+!Parameter for carbon, not used in this version
+!Parameter for carbon, not used in this version
+!Parameter for carbon, not used in this version
+!Parameter for carbon, not used in this version
+!Parameter for carbon, not used in this version
+!Parameter for carbon, not used in this version
+!Parameter for carbon, not used in this version
+!Parameter for carbon, not used in this version
+!Parameter for carbon, not used in this version
+!Parameter for carbon, not used in this version
+!Parameter for carbon, not used in this version
+!Increased Cutoff, originally 3.0d0
+
+      Cr(1, 1) = C_Cr
+      Cr(2, 2) = Si_Cr
+      Cr(1, 2) = dsqrt(Cr(1, 1)*Cr(2, 2))
+      Cr(2, 1) = Cr(1, 2)
+
+      Ca(1, 1) = C_Ca
+      Ca(2, 2) = Si_Ca
+      Ca(1, 2) = dsqrt(Ca(1, 1)*Ca(2, 2))
+      Ca(2, 1) = Ca(1, 2)
+
+      R1(1, 1) = C_R1
+      R1(2, 2) = Si_R1
+      R1(1, 2) = dsqrt(R1(1, 1)*R1(2, 2))
+      R1(2, 1) = R1(1, 2)
+
+      R2(1, 1) = C_R2
+      R2(2, 2) = Si_R2
+      R2(1, 2) = dsqrt(R2(1, 1)*R2(2, 2))
+      R2(2, 1) = R2(1, 2)
+
+      X(1, 1) = 1.0d0
+      X(2, 2) = 1.0d0
+      X(1, 2) = 0.9776d0
+      X(2, 1) = 0.9776d0
+
+      alr(1, 1) = C_alr
+      alr(2, 2) = Si_alr
+      alr(1, 2) = 0.5d0*(alr(1, 1) + alr(2, 2))
+      alr(2, 1) = alr(1, 2)
+
+      ala(1, 1) = C_ala
+      ala(2, 2) = Si_ala
+      ala(1, 2) = 0.5d0*(ala(1, 1) + ala(2, 2))
+      ala(2, 1) = ala(1, 2)
+
+      Pn(1) = C_n
+      Pn(2) = Si_n
+
+      Co_bcd(1) = C_b*(1.0d0 + C_c*C_c/(C_d*C_d))
+      Co_bcd(2) = Si_b*(1.0d0 + Si_c*Si_c/(Si_d*Si_d))
+
+      bcsq(1) = C_b*C_c*C_c
+      bcsq(2) = Si_b*Si_c*Si_c
+
+      dsq(1) = C_d*C_d
+      dsq(2) = Si_d*Si_d
+
+      h(1) = C_h
+      h(2) = Si_h
+
+      Pmass(1) = C_mass
+      Pmass(2) = Si_mass
+
+      RETURN
+   END SUBROUTINE tersoff_parameters
+!-----------------------------------------------------------------------------------------
+! **************************************************************************************************
+!> \brief ...
+!> \param Nmol ...
+!> \param Npmax ...
+!> \param NNmax ...
+!> \param xbox ...
+!> \param ybox ...
+!> \param zbox ...
+!> \param Kinds ...
+!> \param R ...
+!> \param R1 ...
+!> \param R2 ...
+!> \param Cr ...
+!> \param Ca ...
+!> \param alr ...
+!> \param ala ...
+!> \param X ...
+!> \param XYZRrefdf ...
+!> \param UadUrdf ...
+!> \param Urtot ...
+!> \param lsta ...
+!> \param lstb ...
+!> \param nnbrx ...
+!> \param Pn ...
+!> \param Co_bcd ...
+!> \param bcsq ...
+!> \param dsq ...
+!> \param h ...
+!> \param F ...
+!> \param Uatot ...
+!> \param dkEij ...
+! **************************************************************************************************
+   SUBROUTINE tersoff_pairlist_energy_forces(Nmol, Npmax, NNmax, xbox, ybox, zbox, Kinds, R, R1, R2, Cr, Ca, alr, ala, X, &
+                                             XYZRrefdf, UadUrdf, Urtot, lsta, lstb, nnbrx, &
+                                             Pn, Co_bcd, bcsq, dsq, h, F, Uatot, dkEij)
+      INTEGER, INTENT(in)                                :: Nmol, Npmax, NNmax
+      REAL(8), INTENT(in)                                :: xbox, ybox, zbox
+      INTEGER, DIMENSION(1:Nmol), INTENT(in)             :: Kinds
+      REAL(8), DIMENSION(1:3*Nmol), INTENT(in)           :: R
+      REAL(8), DIMENSION(1:2, 1:2), INTENT(in)           :: R1, R2, Cr, Ca, alr, ala, X
+      REAL(8), DIMENSION(1:6*Npmax), INTENT(out)         :: XYZRrefdf
+      REAL(8), DIMENSION(1:3*Npmax), INTENT(out)         :: UadUrdf
+      REAL(8), INTENT(out)                               :: Urtot
+      INTEGER                                            :: lsta(2, Nmol)
+      INTEGER, INTENT(inout)                             :: nnbrx
+      INTEGER                                            :: lstb(nnbrx*Nmol)
+      REAL(8), DIMENSION(1:2), INTENT(in)                :: Pn, Co_bcd, bcsq, dsq, h
+      REAL(8), DIMENSION(1:3*Nmol), INTENT(out)          :: F
+      REAL(8), INTENT(out)                               :: Uatot
+      REAL(8), DIMENSION(1:3*NNmax)                      :: dkEij
+
+      INTEGER :: i, iam, iat, ii, il, in, indlst, indlstx, Ipb, istopg, jat, l1, l2, l3, laymx, &
+         ll1, ll2, ll3, myspace, myspaceout, nat, ncx, ndat, nn, npjkx, npjx, npr, Nptot
+      INTEGER, ALLOCATABLE, DIMENSION(:)                 :: lay
+      INTEGER, ALLOCATABLE, DIMENSION(:, :, :, :)        :: icell
+      REAL(8)                                            :: alat(3), cut, cut2, pi, rlc1i, rlc2i, &
+                                                            rlc3i, rxyz0(3, Nmol), xhalf, yhalf, &
+                                                            zhalf
+      REAL(8), ALLOCATABLE, DIMENSION(:, :)              :: rel, rxyz
+
+      pi = dacos(-1.0d0)
+
+      xhalf = 0.5d0*xbox
+      yhalf = 0.5d0*ybox
+      zhalf = 0.5d0*zbox
+
+      nat = Nmol
+
+      alat(1) = xbox
+      alat(2) = ybox
+      alat(3) = zbox
+
+      DO iat = 1, nat
+         jat = 3*(iat - 1)
+         rxyz0(1, iat) = R(jat + 1)
+         rxyz0(2, iat) = R(jat + 2)
+         rxyz0(3, iat) = R(jat + 3)
+      END DO
+
+      cut = R2(2, 2) - 1.d-9
+
+! linear scaling calculation of verlet list
+      ll1 = INT(alat(1)/cut)
+      IF (ll1 < 1) CPABORT("alat(1) too small")
+      ll2 = INT(alat(2)/cut)
+      IF (ll2 < 1) CPABORT("alat(2) too small")
+      ll3 = INT(alat(3)/cut)
+      IF (ll3 < 1) CPABORT("alat(3) too small")
+
+! determine number of threadsi (this version is only singlethreaded)
+      npr = 1
+! linear scaling calculation of verlet list
+
+      ncx = 8
+      DO
+         ncx = ncx*2
+         ALLOCATE (icell(0:ncx, -1:ll1, -1:ll2, -1:ll3))
+         icell(0, :, :, :) = 0
+         rlc1i = ll1/alat(1)
+         rlc2i = ll2/alat(2)
+         rlc3i = ll3/alat(3)
+
+         DO iat = 1, nat
+            l1 = INT(rxyz0(1, iat)*rlc1i)
+            l2 = INT(rxyz0(2, iat)*rlc2i)
+            l3 = INT(rxyz0(3, iat)*rlc3i)
+
+            ii = icell(0, l1, l2, l3)
+            ii = ii + 1
+            icell(0, l1, l2, l3) = ii
+            IF (ii > ncx) THEN
+               DEALLOCATE (icell)
+               EXIT
+            END IF
+            icell(ii, l1, l2, l3) = iat
+         END DO
+         IF (ALLOCATED(icell)) EXIT
+      END DO
+
+! duplicate all atoms within boundary layer
+      laymx = ncx*(2*ll1*ll2 + 2*ll1*ll3 + 2*ll2*ll3 + 4*ll1 + 4*ll2 + 4*ll3 + 8)
+      nn = nat + laymx
+      ALLOCATE (rxyz(3, nn), lay(nn))
+      DO iat = 1, nat
+         lay(iat) = iat
+         rxyz(1, iat) = rxyz0(1, iat)
+         rxyz(2, iat) = rxyz0(2, iat)
+         rxyz(3, iat) = rxyz0(3, iat)
+      END DO
+      il = nat
+! xy plane
+      DO l2 = 0, ll2 - 1
+      DO l1 = 0, ll1 - 1
+
+         in = icell(0, l1, l2, 0)
+         icell(0, l1, l2, ll3) = in
+         DO ii = 1, in
+            i = icell(ii, l1, l2, 0)
+            il = il + 1
+            IF (il > nn) CPABORT("enlarge laymx")
+            lay(il) = i
+            icell(ii, l1, l2, ll3) = il
+            rxyz(1, il) = rxyz(1, i)
+            rxyz(2, il) = rxyz(2, i)
+            rxyz(3, il) = rxyz(3, i) + alat(3)
+         END DO
+
+         in = icell(0, l1, l2, ll3 - 1)
+         icell(0, l1, l2, -1) = in
+         DO ii = 1, in
+            i = icell(ii, l1, l2, ll3 - 1)
+            il = il + 1
+            IF (il > nn) CPABORT("enlarge laymx")
+            lay(il) = i
+            icell(ii, l1, l2, -1) = il
+            rxyz(1, il) = rxyz(1, i)
+            rxyz(2, il) = rxyz(2, i)
+            rxyz(3, il) = rxyz(3, i) - alat(3)
+         END DO
+
+      END DO
+      END DO
+
+! yz plane
+      DO l3 = 0, ll3 - 1
+      DO l2 = 0, ll2 - 1
+
+         in = icell(0, 0, l2, l3)
+         icell(0, ll1, l2, l3) = in
+         DO ii = 1, in
+            i = icell(ii, 0, l2, l3)
+            il = il + 1
+            IF (il > nn) CPABORT("enlarge laymx")
+            lay(il) = i
+            icell(ii, ll1, l2, l3) = il
+            rxyz(1, il) = rxyz(1, i) + alat(1)
+            rxyz(2, il) = rxyz(2, i)
+            rxyz(3, il) = rxyz(3, i)
+         END DO
+
+         in = icell(0, ll1 - 1, l2, l3)
+         icell(0, -1, l2, l3) = in
+         DO ii = 1, in
+            i = icell(ii, ll1 - 1, l2, l3)
+            il = il + 1
+            IF (il > nn) CPABORT("enlarge laymx")
+            lay(il) = i
+            icell(ii, -1, l2, l3) = il
+            rxyz(1, il) = rxyz(1, i) - alat(1)
+            rxyz(2, il) = rxyz(2, i)
+            rxyz(3, il) = rxyz(3, i)
+         END DO
+
+      END DO
+      END DO
+
+! xz plane
+      DO l3 = 0, ll3 - 1
+      DO l1 = 0, ll1 - 1
+
+         in = icell(0, l1, 0, l3)
+         icell(0, l1, ll2, l3) = in
+         DO ii = 1, in
+            i = icell(ii, l1, 0, l3)
+            il = il + 1
+            IF (il > nn) CPABORT("enlarge laymx")
+            lay(il) = i
+            icell(ii, l1, ll2, l3) = il
+            rxyz(1, il) = rxyz(1, i)
+            rxyz(2, il) = rxyz(2, i) + alat(2)
+            rxyz(3, il) = rxyz(3, i)
+         END DO
+
+         in = icell(0, l1, ll2 - 1, l3)
+         icell(0, l1, -1, l3) = in
+         DO ii = 1, in
+            i = icell(ii, l1, ll2 - 1, l3)
+            il = il + 1
+            IF (il > nn) CPABORT("enlarge laymx")
+            lay(il) = i
+            icell(ii, l1, -1, l3) = il
+            rxyz(1, il) = rxyz(1, i)
+            rxyz(2, il) = rxyz(2, i) - alat(2)
+            rxyz(3, il) = rxyz(3, i)
+         END DO
+
+      END DO
+      END DO
+
+! x axis
+      DO l1 = 0, ll1 - 1
+
+         in = icell(0, l1, 0, 0)
+         icell(0, l1, ll2, ll3) = in
+         DO ii = 1, in
+            i = icell(ii, l1, 0, 0)
+            il = il + 1
+            IF (il > nn) CPABORT("enlarge laymx")
+            lay(il) = i
+            icell(ii, l1, ll2, ll3) = il
+            rxyz(1, il) = rxyz(1, i)
+            rxyz(2, il) = rxyz(2, i) + alat(2)
+            rxyz(3, il) = rxyz(3, i) + alat(3)
+         END DO
+
+         in = icell(0, l1, 0, ll3 - 1)
+         icell(0, l1, ll2, -1) = in
+         DO ii = 1, in
+            i = icell(ii, l1, 0, ll3 - 1)
+            il = il + 1
+            IF (il > nn) CPABORT("enlarge laymx")
+            lay(il) = i
+            icell(ii, l1, ll2, -1) = il
+            rxyz(1, il) = rxyz(1, i)
+            rxyz(2, il) = rxyz(2, i) + alat(2)
+            rxyz(3, il) = rxyz(3, i) - alat(3)
+         END DO
+
+         in = icell(0, l1, ll2 - 1, 0)
+         icell(0, l1, -1, ll3) = in
+         DO ii = 1, in
+            i = icell(ii, l1, ll2 - 1, 0)
+            il = il + 1
+            IF (il > nn) CPABORT("enlarge laymx")
+            lay(il) = i
+            icell(ii, l1, -1, ll3) = il
+            rxyz(1, il) = rxyz(1, i)
+            rxyz(2, il) = rxyz(2, i) - alat(2)
+            rxyz(3, il) = rxyz(3, i) + alat(3)
+         END DO
+
+         in = icell(0, l1, ll2 - 1, ll3 - 1)
+         icell(0, l1, -1, -1) = in
+         DO ii = 1, in
+            i = icell(ii, l1, ll2 - 1, ll3 - 1)
+            il = il + 1
+            IF (il > nn) CPABORT("enlarge laymx")
+            lay(il) = i
+            icell(ii, l1, -1, -1) = il
+            rxyz(1, il) = rxyz(1, i)
+            rxyz(2, il) = rxyz(2, i) - alat(2)
+            rxyz(3, il) = rxyz(3, i) - alat(3)
+         END DO
+
+      END DO
+
+! y axis
+      DO l2 = 0, ll2 - 1
+
+         in = icell(0, 0, l2, 0)
+         icell(0, ll1, l2, ll3) = in
+         DO ii = 1, in
+            i = icell(ii, 0, l2, 0)
+            il = il + 1
+            IF (il > nn) CPABORT("enlarge laymx")
+            lay(il) = i
+            icell(ii, ll1, l2, ll3) = il
+            rxyz(1, il) = rxyz(1, i) + alat(1)
+            rxyz(2, il) = rxyz(2, i)
+            rxyz(3, il) = rxyz(3, i) + alat(3)
+         END DO
+
+         in = icell(0, 0, l2, ll3 - 1)
+         icell(0, ll1, l2, -1) = in
+         DO ii = 1, in
+            i = icell(ii, 0, l2, ll3 - 1)
+            il = il + 1
+            IF (il > nn) CPABORT("enlarge laymx")
+            lay(il) = i
+            icell(ii, ll1, l2, -1) = il
+            rxyz(1, il) = rxyz(1, i) + alat(1)
+            rxyz(2, il) = rxyz(2, i)
+            rxyz(3, il) = rxyz(3, i) - alat(3)
+         END DO
+
+         in = icell(0, ll1 - 1, l2, 0)
+         icell(0, -1, l2, ll3) = in
+         DO ii = 1, in
+            i = icell(ii, ll1 - 1, l2, 0)
+            il = il + 1
+            IF (il > nn) CPABORT("enlarge laymx")
+            lay(il) = i
+            icell(ii, -1, l2, ll3) = il
+            rxyz(1, il) = rxyz(1, i) - alat(1)
+            rxyz(2, il) = rxyz(2, i)
+            rxyz(3, il) = rxyz(3, i) + alat(3)
+         END DO
+
+         in = icell(0, ll1 - 1, l2, ll3 - 1)
+         icell(0, -1, l2, -1) = in
+         DO ii = 1, in
+            i = icell(ii, ll1 - 1, l2, ll3 - 1)
+            il = il + 1
+            IF (il > nn) CPABORT("enlarge laymx")
+            lay(il) = i
+            icell(ii, -1, l2, -1) = il
+            rxyz(1, il) = rxyz(1, i) - alat(1)
+            rxyz(2, il) = rxyz(2, i)
+            rxyz(3, il) = rxyz(3, i) - alat(3)
+         END DO
+
+      END DO
+
+! z axis
+      DO l3 = 0, ll3 - 1
+
+         in = icell(0, 0, 0, l3)
+         icell(0, ll1, ll2, l3) = in
+         DO ii = 1, in
+            i = icell(ii, 0, 0, l3)
+            il = il + 1
+            IF (il > nn) CPABORT("enlarge laymx")
+            lay(il) = i
+            icell(ii, ll1, ll2, l3) = il
+            rxyz(1, il) = rxyz(1, i) + alat(1)
+            rxyz(2, il) = rxyz(2, i) + alat(2)
+            rxyz(3, il) = rxyz(3, i)
+         END DO
+
+         in = icell(0, ll1 - 1, 0, l3)
+         icell(0, -1, ll2, l3) = in
+         DO ii = 1, in
+            i = icell(ii, ll1 - 1, 0, l3)
+            il = il + 1
+            IF (il > nn) CPABORT("enlarge laymx")
+            lay(il) = i
+            icell(ii, -1, ll2, l3) = il
+            rxyz(1, il) = rxyz(1, i) - alat(1)
+            rxyz(2, il) = rxyz(2, i) + alat(2)
+            rxyz(3, il) = rxyz(3, i)
+         END DO
+
+         in = icell(0, 0, ll2 - 1, l3)
+         icell(0, ll1, -1, l3) = in
+         DO ii = 1, in
+            i = icell(ii, 0, ll2 - 1, l3)
+            il = il + 1
+            IF (il > nn) CPABORT("enlarge laymx")
+            lay(il) = i
+            icell(ii, ll1, -1, l3) = il
+            rxyz(1, il) = rxyz(1, i) + alat(1)
+            rxyz(2, il) = rxyz(2, i) - alat(2)
+            rxyz(3, il) = rxyz(3, i)
+         END DO
+
+         in = icell(0, ll1 - 1, ll2 - 1, l3)
+         icell(0, -1, -1, l3) = in
+         DO ii = 1, in
+            i = icell(ii, ll1 - 1, ll2 - 1, l3)
+            il = il + 1
+            IF (il > nn) CPABORT("enlarge laymx")
+            lay(il) = i
+            icell(ii, -1, -1, l3) = il
+            rxyz(1, il) = rxyz(1, i) - alat(1)
+            rxyz(2, il) = rxyz(2, i) - alat(2)
+            rxyz(3, il) = rxyz(3, i)
+         END DO
+
+      END DO
+
+! corners
+      in = icell(0, 0, 0, 0)
+      icell(0, ll1, ll2, ll3) = in
+      DO ii = 1, in
+         i = icell(ii, 0, 0, 0)
+         il = il + 1
+         IF (il > nn) CPABORT("enlarge laymx")
+         lay(il) = i
+         icell(ii, ll1, ll2, ll3) = il
+         rxyz(1, il) = rxyz(1, i) + alat(1)
+         rxyz(2, il) = rxyz(2, i) + alat(2)
+         rxyz(3, il) = rxyz(3, i) + alat(3)
+      END DO
+
+      in = icell(0, ll1 - 1, 0, 0)
+      icell(0, -1, ll2, ll3) = in
+      DO ii = 1, in
+         i = icell(ii, ll1 - 1, 0, 0)
+         il = il + 1
+         IF (il > nn) CPABORT("enlarge laymx")
+         lay(il) = i
+         icell(ii, -1, ll2, ll3) = il
+         rxyz(1, il) = rxyz(1, i) - alat(1)
+         rxyz(2, il) = rxyz(2, i) + alat(2)
+         rxyz(3, il) = rxyz(3, i) + alat(3)
+      END DO
+
+      in = icell(0, 0, ll2 - 1, 0)
+      icell(0, ll1, -1, ll3) = in
+      DO ii = 1, in
+         i = icell(ii, 0, ll2 - 1, 0)
+         il = il + 1
+         IF (il > nn) CPABORT("enlarge laymx")
+         lay(il) = i
+         icell(ii, ll1, -1, ll3) = il
+         rxyz(1, il) = rxyz(1, i) + alat(1)
+         rxyz(2, il) = rxyz(2, i) - alat(2)
+         rxyz(3, il) = rxyz(3, i) + alat(3)
+      END DO
+
+      in = icell(0, ll1 - 1, ll2 - 1, 0)
+      icell(0, -1, -1, ll3) = in
+      DO ii = 1, in
+         i = icell(ii, ll1 - 1, ll2 - 1, 0)
+         il = il + 1
+         IF (il > nn) CPABORT("enlarge laymx")
+         lay(il) = i
+         icell(ii, -1, -1, ll3) = il
+         rxyz(1, il) = rxyz(1, i) - alat(1)
+         rxyz(2, il) = rxyz(2, i) - alat(2)
+         rxyz(3, il) = rxyz(3, i) + alat(3)
+      END DO
+
+      in = icell(0, 0, 0, ll3 - 1)
+      icell(0, ll1, ll2, -1) = in
+      DO ii = 1, in
+         i = icell(ii, 0, 0, ll3 - 1)
+         il = il + 1
+         IF (il > nn) CPABORT("enlarge laymx")
+         lay(il) = i
+         icell(ii, ll1, ll2, -1) = il
+         rxyz(1, il) = rxyz(1, i) + alat(1)
+         rxyz(2, il) = rxyz(2, i) + alat(2)
+         rxyz(3, il) = rxyz(3, i) - alat(3)
+      END DO
+
+      in = icell(0, ll1 - 1, 0, ll3 - 1)
+      icell(0, -1, ll2, -1) = in
+      DO ii = 1, in
+         i = icell(ii, ll1 - 1, 0, ll3 - 1)
+         il = il + 1
+         IF (il > nn) CPABORT("enlarge laymx")
+         lay(il) = i
+         icell(ii, -1, ll2, -1) = il
+         rxyz(1, il) = rxyz(1, i) - alat(1)
+         rxyz(2, il) = rxyz(2, i) + alat(2)
+         rxyz(3, il) = rxyz(3, i) - alat(3)
+      END DO
+
+      in = icell(0, 0, ll2 - 1, ll3 - 1)
+      icell(0, ll1, -1, -1) = in
+      DO ii = 1, in
+         i = icell(ii, 0, ll2 - 1, ll3 - 1)
+         il = il + 1
+         IF (il > nn) CPABORT("enlarge laymx")
+         lay(il) = i
+         icell(ii, ll1, -1, -1) = il
+         rxyz(1, il) = rxyz(1, i) + alat(1)
+         rxyz(2, il) = rxyz(2, i) - alat(2)
+         rxyz(3, il) = rxyz(3, i) - alat(3)
+      END DO
+
+      in = icell(0, ll1 - 1, ll2 - 1, ll3 - 1)
+      icell(0, -1, -1, -1) = in
+      DO ii = 1, in
+         i = icell(ii, ll1 - 1, ll2 - 1, ll3 - 1)
+         il = il + 1
+         IF (il > nn) CPABORT("enlarge laymx")
+         lay(il) = i
+         icell(ii, -1, -1, -1) = il
+         rxyz(1, il) = rxyz(1, i) - alat(1)
+         rxyz(2, il) = rxyz(2, i) - alat(2)
+         rxyz(3, il) = rxyz(3, i) - alat(3)
+      END DO
+
+      nnbrx = 3*nnbrx/2
+      ALLOCATE (rel(5, nnbrx*nat))
+      indlstx = 0
+
+      npr = 1
+      iam = 0
+
+      cut2 = cut**2
+! assign contiguous portions of the arrays lstb and rel to the threads
+      myspace = (nat*nnbrx)/npr
+      IF (iam == 0) myspaceout = myspace
+! Verlet list, relative positions
+      indlst = 0
+      DO l3 = 0, ll3 - 1
+      DO l2 = 0, ll2 - 1
+      DO l1 = 0, ll1 - 1
+      DO ii = 1, icell(0, l1, l2, l3)
+         iat = icell(ii, l1, l2, l3)
+         IF (((iat - 1)*npr)/nat == iam) THEN
+!       write(6,*) 'sublstiat:iam,iat',iam,iat
+            lsta(1, iat) = iam*myspace + indlst + 1
+            CALL tersoff_sublstiat_l(iat, nn, ncx, ll1, ll2, ll3, l1, l2, l3, myspace, &
+                                     rxyz, icell, lstb(iam*myspace + 1), lay, rel(1, iam*myspace + 1), cut2, indlst)
+            lsta(2, iat) = iam*myspace + indlst
+            ipb = lsta(1, iat)
+            ndat = lsta(2, iat) - lsta(1, iat) + 1
+         END IF
+
+      END DO
+      END DO
+      END DO
+      END DO
+      indlstx = MAX(indlstx, indlst)
+
+      IF (indlstx >= myspaceout) CPABORT("NNBRX too small")
+      npr = 1
+      iam = 0
+
+      npjx = 300; npjkx = 6000
+      istopg = 0
+!end of creating pairlist part------------------------------------------------------------
+!Energy-----------------------------------------------------------------------------------
+      Urtot = 0.0d0
+      Nptot = 0
+
+      F = 0.0d0
+      Uatot = 0.0d0
+      DO_I: DO i = 1, Nmol
+  CALL tersoff_subeniat_l(i, Nmol, Npmax, Kinds, X, R1, R2, Cr, Ca, alr, ala, XYZRrefdf, UadUrdf, Urtot, lsta, lstb, nnbrx, rel, pi)
+      END DO DO_I
+
+      Urtot = 0.5d0*Urtot
+!Force------------------------------------------------------------------------------------
+      F = 0.0d0
+      Uatot = 0.0d0
+
+      DO_If: DO i = 1, Nmol
+         CALL tersoff_subfiat_l(i,Nmol,Npmax,NNmax,Kinds,Pn,Co_bcd,bcsq,dsq,h,XYZRrefdf,UadUrdf,F,Uatot,dkEij,lsta,lstb,nnbrx)
+      END DO DO_If
+
+      F = 0.5d0*F
+      Uatot = 0.5d0*Uatot
+!-----------------------------------------------------------------------------------------
+      DEALLOCATE (rxyz, icell, lay, rel)
+      RETURN
+   END SUBROUTINE tersoff_pairlist_energy_forces
+
+!-----------------------------------------------------------------------------------------
+! **************************************************************************************************
+!> \brief ...
+!> \param iat ...
+!> \param nn ...
+!> \param ncx ...
+!> \param ll1 ...
+!> \param ll2 ...
+!> \param ll3 ...
+!> \param l1 ...
+!> \param l2 ...
+!> \param l3 ...
+!> \param myspace ...
+!> \param rxyz ...
+!> \param icell ...
+!> \param lstb ...
+!> \param lay ...
+!> \param rel ...
+!> \param cut2 ...
+!> \param indlst ...
+! **************************************************************************************************
+   SUBROUTINE tersoff_sublstiat_l(iat, nn, ncx, ll1, ll2, ll3, l1, l2, l3, myspace, &
+                                  rxyz, icell, lstb, lay, rel, cut2, indlst)
+! finds the neighbours of atom iat (specified by lsta and lstb) and and
+! the relative position rel of iat with respect to these neighbours
+      INTEGER                                            :: iat, nn, ncx, ll1, ll2, ll3, l1, l2, l3, &
+                                                            myspace
+      REAL(8)                                            :: rxyz(3, nn)
+      INTEGER :: icell(0:ncx, -1:ll1, -1:ll2, -1:ll3), lstb(0:myspace - 1), lay(nn)
+      REAL(8)                                            :: rel(5, 0:myspace - 1), cut2
+      INTEGER                                            :: indlst
+
+      INTEGER                                            :: jat, jj, k1, k2, k3
+      REAL(8)                                            :: rr2, tt, tti, xrel, yrel, zrel
+
+      DO k3 = l3 - 1, l3 + 1
+      DO k2 = l2 - 1, l2 + 1
+      DO k1 = l1 - 1, l1 + 1
+      DO jj = 1, icell(0, k1, k2, k3)
+         jat = icell(jj, k1, k2, k3)
+         IF (jat == iat) CYCLE
+         xrel = rxyz(1, iat) - rxyz(1, jat)
+         yrel = rxyz(2, iat) - rxyz(2, jat)
+         zrel = rxyz(3, iat) - rxyz(3, jat)
+         rr2 = xrel**2 + yrel**2 + zrel**2
+         IF (rr2 <= cut2) THEN
+            indlst = MIN(indlst, myspace - 1)
+            lstb(indlst) = lay(jat)
+!        write(6,*) 'iat,indlst,lay(jat)',iat,indlst,lay(jat)
+            tt = SQRT(rr2)
+            tti = 1.d0/tt
+            rel(1, indlst) = xrel*tti
+            rel(2, indlst) = yrel*tti
+            rel(3, indlst) = zrel*tti
+            rel(4, indlst) = tt
+            rel(5, indlst) = tti
+            indlst = indlst + 1
+         END IF
+      END DO
+      END DO
+      END DO
+      END DO
+
+      RETURN
+   END SUBROUTINE tersoff_sublstiat_l
+
+! **************************************************************************************************
+!> \brief ...
+!> \param i ...
+!> \param Nmol ...
+!> \param Npmax ...
+!> \param Kinds ...
+!> \param X ...
+!> \param R1 ...
+!> \param R2 ...
+!> \param Cr ...
+!> \param Ca ...
+!> \param alr ...
+!> \param ala ...
+!> \param XYZRrefdf ...
+!> \param UadUrdf ...
+!> \param Urtot ...
+!> \param lsta ...
+!> \param lstb ...
+!> \param nnbrx ...
+!> \param rel ...
+!> \param pi ...
+! **************************************************************************************************
+   SUBROUTINE tersoff_subeniat_l(i,Nmol,Npmax,Kinds,X,R1,R2,Cr,Ca,alr,ala,XYZRrefdf,UadUrdf,Urtot,lsta,lstb,nnbrx,rel,pi)
+      INTEGER                                            :: i
+      INTEGER, INTENT(in)                                :: Nmol, Npmax
+      INTEGER, DIMENSION(1:Nmol), INTENT(in)             :: Kinds
+      REAL(8), DIMENSION(1:2, 1:2), INTENT(in)           :: X, R1, R2, Cr, Ca, alr, ala
+      REAL(8), DIMENSION(1:6*Npmax), INTENT(inout)       :: XYZRrefdf
+      REAL(8), DIMENSION(1:3*Npmax), INTENT(inout)       :: UadUrdf
+      REAL(8), INTENT(inout)                             :: Urtot
+      INTEGER, INTENT(in)                                :: lsta(2, Nmol), nnbrx, lstb(nnbrx*Nmol)
+      REAL(8), INTENT(in)                                :: rel(5, nnbrx*Nmol)
+      REAL(8)                                            :: pi
+
+      INTEGER                                            :: j, Ki, Kj, l, Nppt3, Nppt6, Nptot
+      REAL(8)                                            :: alaij, alrij, dfij, fij, PL1, PL2, R1ij, &
+                                                            R2ij, Rij, Rreij, Ua, Ur, Xij, Yij, Zij
+
+!     #######################################
+!     # Calculate XYZRrefdf, UadUrdf, Urtot #
+!     #######################################
+      Ki = Kinds(i)
+
+      DO_J: DO l = lsta(1, i), lsta(2, i)
+         j = lstb(l)
+
+         Kj = Kinds(j)
+         R2ij = R2(Ki, Kj)
+         Rij = rel(4, l)
+         Xij = rel(1, l)
+         Yij = rel(2, l)
+         Zij = rel(3, l)
+         Nptot = l
+
+         Nppt3 = 3*(Nptot - 1)
+         Nppt6 = 6*(Nptot - 1)
+         Rreij = rel(5, l)
+
+         XYZRrefdf(Nppt6 + 1) = Xij
+         XYZRrefdf(Nppt6 + 2) = Yij
+         XYZRrefdf(Nppt6 + 3) = Zij
+         XYZRrefdf(Nppt6 + 4) = Rreij
+
+         alrij = alr(Ki, Kj)
+         alaij = ala(Ki, Kj)
+
+         Ur = Cr(Ki, Kj)*dexp(-alrij*Rij)
+         Ua = -Ca(Ki, Kj)*dexp(-alaij*Rij)*X(Ki, Kj)
+         R1ij = R1(Ki, Kj)
+
+         IF (Rij <= R1ij) THEN
+            XYZRrefdf(Nppt6 + 5) = 1.0d0
+            XYZRrefdf(Nppt6 + 6) = 0.0d0
+            Urtot = Urtot + Ur
+            UadUrdf(Nppt3 + 1) = Ua
+            UadUrdf(Nppt3 + 2) = -alrij*Ur
+            UadUrdf(Nppt3 + 3) = -alaij*Ua
+         ELSE
+            PL1 = pi/(R2ij - R1ij)
+            PL2 = PL1*(Rij - R1ij)
+            fij = 0.5d0 + 0.5d0*dcos(PL2)
+            dfij = -0.5d0*PL1*dsin(PL2)
+            XYZRrefdf(Nppt6 + 5) = fij
+            XYZRrefdf(Nppt6 + 6) = dfij
+            Urtot = Urtot + fij*Ur
+            UadUrdf(Nppt3 + 1) = fij*Ua
+            UadUrdf(Nppt3 + 2) = (dfij - alrij*fij)*Ur
+            UadUrdf(Nppt3 + 3) = (dfij - alaij*fij)*Ua
+         END IF
+      END DO DO_J
+   END SUBROUTINE tersoff_subeniat_l
+
+! **************************************************************************************************
+!> \brief ...
+!> \param i ...
+!> \param Nmol ...
+!> \param Npmax ...
+!> \param NNmax ...
+!> \param Kinds ...
+!> \param Pn ...
+!> \param Co_bcd ...
+!> \param bcsq ...
+!> \param dsq ...
+!> \param h ...
+!> \param XYZRrefdf ...
+!> \param UadUrdf ...
+!> \param F ...
+!> \param Uatot ...
+!> \param dkEij ...
+!> \param lsta ...
+!> \param lstb ...
+!> \param nnbrx ...
+! **************************************************************************************************
+   SUBROUTINE tersoff_subfiat_l(i,Nmol,Npmax,NNmax,Kinds,Pn,Co_bcd,bcsq,dsq,h,XYZRrefdf,UadUrdf,F,Uatot,dkEij,lsta,lstb,nnbrx)
+      INTEGER                                            :: i
+      INTEGER, INTENT(in)                                :: Nmol, Npmax, NNmax
+      INTEGER, DIMENSION(1:Nmol), INTENT(in)             :: Kinds
+      REAL(8), DIMENSION(1:2), INTENT(in)                :: Pn, Co_bcd, bcsq, dsq, h
+      REAL(8), DIMENSION(1:6*Npmax), INTENT(in)          :: XYZRrefdf
+      REAL(8), DIMENSION(1:3*Npmax), INTENT(in)          :: UadUrdf
+      REAL(8), DIMENSION(1:3*Nmol), INTENT(inout)        :: F
+      REAL(8), INTENT(inout)                             :: Uatot
+      REAL(8), DIMENSION(1:3*NNmax)                      :: dkEij
+      INTEGER, INTENT(in)                                :: lsta(2, Nmol), nnbrx, lstb(nnbrx*Nmol)
+
+      INTEGER                                            :: ij, ijpt3, ijpt6, ik, ikpt6, Ipb, Ipe, &
+                                                            Ipt3, Jpt3, Ki, Kpt3, Nkpt3
+      REAL(8) :: bcsqi, Bij, Co1_dkEij, Co2_dkEij, Co_cdi, Co_dhcosi, Co_hcosi, Co_mb1, Co_mb2, &
+         Co_pa, COSijk, dfij, dfik, dFxi, dFxj, dFxk, dFyi, dFyj, dFyk, dFzi, dFzj, dFzk, dGi, &
+         djEij, dsqi, dXjEij2, dYjEij2, dZjEij2, Eij, fdG, fdGcos, fij, fik, Gi, hi, Pni, Rreij, &
+         Rreik, Ua, XRreij, XRreik, YRreij, YRreik, ZRreij, ZRreik
+
+      Ipb = lsta(1, i)
+      Ipe = lsta(2, i)
+
+      Ki = Kinds(i)
+      bcsqi = bcsq(Ki)
+      dsqi = dsq(Ki)
+      hi = h(Ki)
+      Pni = Pn(Ki)
+
+      Co_cdi = Co_bcd(Ki)
+
+      dFxi = 0.0d0
+      dFyi = 0.0d0
+      dFzi = 0.0d0
+
+      DO_J: DO ij = Ipb, Ipe, +1
+
+         IJpt3 = 3*(ij - 1)
+         IJpt6 = 6*(ij - 1)
+
+         XRreij = XYZRrefdf(IJpt6 + 1)
+         YRreij = XYZRrefdf(IJpt6 + 2)
+         ZRreij = XYZRrefdf(IJpt6 + 3)
+         Rreij = XYZRrefdf(IJpt6 + 4)
+         fij = XYZRrefdf(IJpt6 + 5)
+         dfij = XYZRrefdf(IJpt6 + 6)
+
+         Eij = 0.0d0
+         djEij = 0.0d0
+         dXjEij2 = 0.0d0
+         dYjEij2 = 0.0d0
+         dZjEij2 = 0.0d0
+
+         Nkpt3 = -3
+         DO_K: DO ik = Ipb, Ipe, +1
+
+            Nkpt3 = Nkpt3 + 3
+
+            IKIJ: IF (ik /= ij) THEN
+
+               IKpt6 = 6*(ik - 1)
+
+               XRreik = XYZRrefdf(IKpt6 + 1)
+               YRreik = XYZRrefdf(IKpt6 + 2)
+               ZRreik = XYZRrefdf(IKpt6 + 3)
+               Rreik = XYZRrefdf(IKpt6 + 4)
+               fik = XYZRrefdf(IKpt6 + 5)
+               dfik = XYZRrefdf(IKpt6 + 6)
+
+               COSijk = XRreij*XRreik + YRreij*YRreik + ZRreij*ZRreik
+
+               Co_hcosi = hi - COSijk
+               Co_dhcosi = 1.0d0/(dsqi + Co_hcosi*Co_hcosi)
+               Gi = -bcsqi*Co_dhcosi
+               dGi = 2.0d0*Co_hcosi*Co_dhcosi*Gi
+               Gi = Gi + Co_cdi
+
+               Eij = Eij + fik*Gi
+
+               fdG = fik*dGi
+               fdGcos = fdG*COSijk
+
+               djEij = djEij + fdGcos
+
+               dXjEij2 = dXjEij2 + fdG*XRreik
+               dYjEij2 = dYjEij2 + fdG*YRreik
+               dZjEij2 = dZjEij2 + fdG*ZRreik
+
+               Co1_dkEij = -dfik*Gi + fdGcos*Rreik
+               Co2_dkEij = -fdG*Rreik
+
+               dkEij(Nkpt3 + 1) = Co1_dkEij*XRreik + Co2_dkEij*XRreij
+               dkEij(Nkpt3 + 2) = Co1_dkEij*YRreik + Co2_dkEij*YRreij
+               dkEij(Nkpt3 + 3) = Co1_dkEij*ZRreik + Co2_dkEij*ZRreij
+
+            ELSE
+               dkEij(Nkpt3 + 1) = 0.0d0
+               dkEij(Nkpt3 + 2) = 0.0d0
+               dkEij(Nkpt3 + 3) = 0.0d0
+            END IF IKIJ
+
+         END DO DO_K
+
+         Bij = 1.0d0 + Eij**Pni
+         Ua = UadUrdf(IJpt3 + 1)*Bij**(-0.5d0/Pni)
+         Uatot = Uatot + Ua
+
+         Co_pa = UadUrdf(IJpt3 + 2) + UadUrdf(IJpt3 + 3)*Bij**(-0.5d0/Pni)
+
+         CEij: IF (Nkpt3 > 0) THEN
+
+            Co_mb1 = Ua*0.5d0*Eij**(Pni - 1.0d0)/Bij
+            Co_mb2 = Co_mb1*Rreij
+
+            Nkpt3 = -3
+            DO ik = Ipb, Ipe, +1
+
+               Nkpt3 = Nkpt3 + 3
+               dFxk = Co_mb1*dkEij(Nkpt3 + 1)
+               dFyk = Co_mb1*dkEij(Nkpt3 + 2)
+               dFzk = Co_mb1*dkEij(Nkpt3 + 3)
+
+               Kpt3 = 3*(lstb(ik) - 1)
+               F(Kpt3 + 1) = F(Kpt3 + 1) + dFxk
+               F(Kpt3 + 2) = F(Kpt3 + 2) + dFyk
+               F(Kpt3 + 3) = F(Kpt3 + 3) + dFzk
+
+               dFxi = dFxi + dFxk
+               dFyi = dFyi + dFyk
+               dFzi = dFzi + dFzk
+
+            END DO
+
+            dFxj = Co_pa*XRreij + Co_mb2*(XRreij*djEij - dXjEij2)
+            dFyj = Co_pa*YRreij + Co_mb2*(YRreij*djEij - dYjEij2)
+            dFzj = Co_pa*ZRreij + Co_mb2*(ZRreij*djEij - dZjEij2)
+
+         ELSE
+
+            dFxj = Co_pa*XRreij
+            dFyj = Co_pa*YRreij
+            dFzj = Co_pa*ZRreij
+
+         END IF CEij
+
+         Jpt3 = 3*(lstb(ij) - 1)
+
+         F(Jpt3 + 1) = F(Jpt3 + 1) + dFxj
+         F(Jpt3 + 2) = F(Jpt3 + 2) + dFyj
+         F(Jpt3 + 3) = F(Jpt3 + 3) + dFzj
+
+         dFxi = dFxi + dFxj
+         dFyi = dFyi + dFyj
+         dFzi = dFzi + dFzj
+
+      END DO DO_J
+
+      Ipt3 = 3*(i - 1)
+      F(Ipt3 + 1) = F(Ipt3 + 1) - dFxi
+      F(Ipt3 + 2) = F(Ipt3 + 2) - dFyi
+      F(Ipt3 + 3) = F(Ipt3 + 3) - dFzi
+   END SUBROUTINE tersoff_subfiat_l
 
 END MODULE eip_silicon

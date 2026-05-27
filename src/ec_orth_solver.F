@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2025 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2026 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -17,10 +17,12 @@ MODULE ec_orth_solver
                                               get_admm_env
    USE cp_control_types,                ONLY: dft_control_type
    USE cp_dbcsr_api,                    ONLY: &
-        dbcsr_add, dbcsr_add_on_diag, dbcsr_checksum, dbcsr_copy, dbcsr_create, &
-        dbcsr_desymmetrize, dbcsr_dot, dbcsr_filter, dbcsr_finalize, dbcsr_get_info, &
-        dbcsr_multiply, dbcsr_p_type, dbcsr_release, dbcsr_scale, dbcsr_set, dbcsr_transposed, &
-        dbcsr_type, dbcsr_type_no_symmetry
+        dbcsr_add, dbcsr_copy, dbcsr_create, dbcsr_desymmetrize, dbcsr_filter, dbcsr_finalize, &
+        dbcsr_get_info, dbcsr_multiply, dbcsr_p_type, dbcsr_release, dbcsr_scale, dbcsr_set, &
+        dbcsr_transposed, dbcsr_type, dbcsr_type_no_symmetry
+   USE cp_dbcsr_contrib,                ONLY: dbcsr_add_on_diag,&
+                                              dbcsr_checksum,&
+                                              dbcsr_dot
    USE cp_dbcsr_operations,             ONLY: dbcsr_allocate_matrix_set,&
                                               dbcsr_deallocate_matrix_set
    USE cp_external_control,             ONLY: external_control
@@ -101,11 +103,12 @@ CONTAINS
 !> \param eps_filter ...
 !> \param iounit ...
 !>
+!> \param silent ...
 !> \date    01.2020
 !> \author  Fabian Belleflamme
 ! **************************************************************************************************
-   SUBROUTINE preconditioner(qs_env, matrix_ks, matrix_p, matrix_rhs, &
-                             matrix_cg_z, eps_filter, iounit)
+   SUBROUTINE ec_preconditioner(qs_env, matrix_ks, matrix_p, matrix_rhs, &
+                                matrix_cg_z, eps_filter, iounit, silent)
 
       TYPE(qs_environment_type), POINTER                 :: qs_env
       TYPE(dbcsr_p_type), DIMENSION(:), INTENT(IN), &
@@ -114,11 +117,12 @@ CONTAINS
          POINTER                                         :: matrix_cg_z
       REAL(KIND=dp), INTENT(IN)                          :: eps_filter
       INTEGER, INTENT(IN)                                :: iounit
+      LOGICAL, INTENT(IN), OPTIONAL                      :: silent
 
-      CHARACTER(len=*), PARAMETER                        :: routineN = 'preconditioner'
+      CHARACTER(len=*), PARAMETER                        :: routineN = 'ec_preconditioner'
 
       INTEGER                                            :: handle, i, ispin, max_iter, nao, nspins
-      LOGICAL                                            :: converged
+      LOGICAL                                            :: converged, my_silent
       REAL(KIND=dp)                                      :: norm_res, t1, t2
       REAL(KIND=dp), DIMENSION(:), POINTER               :: alpha, beta, new_norm, norm_cA, norm_rr
       TYPE(dbcsr_p_type), DIMENSION(:), POINTER          :: matrix_Ax, matrix_b, matrix_cg, &
@@ -127,6 +131,9 @@ CONTAINS
       TYPE(linres_control_type), POINTER                 :: linres_control
 
       CALL timeset(routineN, handle)
+
+      my_silent = .FALSE.
+      IF (PRESENT(silent)) my_silent = silent
 
       CPASSERT(ASSOCIATED(qs_env))
       CPASSERT(ASSOCIATED(matrix_ks))
@@ -209,7 +216,7 @@ CONTAINS
       END DO
 
       ! header
-      IF (iounit > 0) THEN
+      IF (iounit > 0 .AND. .NOT. my_silent) THEN
          WRITE (iounit, "(/,T10,A)") "Preconditioning of search direction"
          WRITE (iounit, "(/,T10,A,T25,A,T42,A,T62,A,/,T10,A)") &
             "Iteration", "Stepsize", "Convergence", "Time", &
@@ -237,14 +244,14 @@ CONTAINS
             IF (abnormal_value(norm_rr(ispin))) &
                CPABORT("Preconditioner: Tr[r_j*r_j] is an abnormal value (NaN/Inf)")
 
-            IF (norm_rr(ispin) .LT. 0.0_dp) CPABORT("norm_rr < 0")
+            IF (norm_rr(ispin) < 0.0_dp) CPABORT("norm_rr < 0")
             norm_res = MAX(norm_res, ABS(norm_rr(ispin)/REAL(nao, dp)))
 
             ! norm_cA = tr(Ap_j * p_j)
             CALL dbcsr_dot(matrix_cg(ispin)%matrix, matrix_Ax(ispin)%matrix, norm_cA(ispin))
 
             ! Determine step-size
-            IF (norm_cA(ispin) .LT. linres_control%eps) THEN
+            IF (norm_cA(ispin) < linres_control%eps) THEN
                alpha(ispin) = 1.0_dp
             ELSE
                alpha(ispin) = norm_rr(ispin)/norm_cA(ispin)
@@ -264,13 +271,13 @@ CONTAINS
          DO ispin = 1, nspins
             ! Tr[r_j+1*z_j+1]
             CALL dbcsr_dot(matrix_res(ispin)%matrix, matrix_res(ispin)%matrix, new_norm(ispin))
-            IF (new_norm(ispin) .LT. 0.0_dp) CPABORT("tr(r_j+1*z_j+1) < 0")
+            IF (new_norm(ispin) < 0.0_dp) CPABORT("tr(r_j+1*z_j+1) < 0")
             IF (abnormal_value(new_norm(ispin))) &
                CPABORT("Preconditioner: Tr[r_j+1*z_j+1] is an abnormal value (NaN/Inf)")
             norm_res = MAX(norm_res, new_norm(ispin)/REAL(nao, dp))
 
-            IF (norm_rr(ispin) .LT. linres_control%eps*0.001_dp &
-                .OR. new_norm(ispin) .LT. linres_control%eps*0.001_dp) THEN
+            IF (norm_rr(ispin) < linres_control%eps*0.001_dp &
+                .OR. new_norm(ispin) < linres_control%eps*0.001_dp) THEN
                beta(ispin) = 0.0_dp
                converged = .TRUE.
             ELSE
@@ -286,13 +293,13 @@ CONTAINS
          END DO
 
          ! Convergence criteria
-         IF (norm_res .LT. linres_control%eps) THEN
+         IF (norm_res < linres_control%eps) THEN
             converged = .TRUE.
          END IF
 
          t2 = m_walltime()
-         IF (i .EQ. 1 .OR. MOD(i, 1) .EQ. 0 .OR. converged) THEN
-            IF (iounit > 0) THEN
+         IF (i == 1 .OR. MOD(i, 1) == 0 .OR. converged) THEN
+            IF (iounit > 0 .AND. .NOT. my_silent) THEN
                WRITE (iounit, "(T10,I5,T25,1E8.2,T33,F25.14,T58,F8.2)") &
                   i, MAXVAL(alpha), norm_res, t2 - t1
                ! Convergence in scientific notation
@@ -302,7 +309,7 @@ CONTAINS
             END IF
          END IF
          IF (converged) THEN
-            IF (iounit > 0) THEN
+            IF (iounit > 0 .AND. .NOT. my_silent) THEN
                WRITE (iounit, "(/,T10,A,I4,A,/)") "The precon solver converged in ", i, " iterations."
                CALL m_flush(iounit)
             END IF
@@ -334,7 +341,7 @@ CONTAINS
 
       CALL timestop(handle)
 
-   END SUBROUTINE preconditioner
+   END SUBROUTINE ec_preconditioner
 
 ! **************************************************************************************************
 !> \brief AO-based conjugate gradient linear response solver.
@@ -350,10 +357,12 @@ CONTAINS
 !> \param iounit ...
 !> \param should_stop ...
 !>
+!> \param silent ...
 !> \date    01.2020
 !> \author  Fabian Belleflamme
 ! **************************************************************************************************
-   SUBROUTINE ec_response_ao(qs_env, p_env, matrix_hz, matrix_pz, matrix_wz, iounit, should_stop)
+   SUBROUTINE ec_response_ao(qs_env, p_env, matrix_hz, matrix_pz, matrix_wz, iounit, &
+                             should_stop, silent)
 
       TYPE(qs_environment_type), POINTER                 :: qs_env
       TYPE(qs_p_env_type), POINTER                       :: p_env
@@ -363,12 +372,13 @@ CONTAINS
          POINTER                                         :: matrix_pz, matrix_wz
       INTEGER, INTENT(IN)                                :: iounit
       LOGICAL, INTENT(OUT)                               :: should_stop
+      LOGICAL, INTENT(IN), OPTIONAL                      :: silent
 
       CHARACTER(len=*), PARAMETER                        :: routineN = 'ec_response_ao'
 
       INTEGER                                            :: handle, i, ispin, max_iter_lanczos, nao, &
                                                             nspins, s_sqrt_method, s_sqrt_order
-      LOGICAL                                            :: restart
+      LOGICAL                                            :: my_silent, restart
       REAL(KIND=dp)                                      :: eps_filter, eps_lanczos, focc, &
                                                             min_shift, norm_res, old_conv, shift, &
                                                             t1, t2
@@ -384,6 +394,9 @@ CONTAINS
       TYPE(section_vals_type), POINTER                   :: solver_section
 
       CALL timeset(routineN, handle)
+
+      my_silent = .FALSE.
+      IF (PRESENT(silent)) my_silent = silent
 
       CPASSERT(ASSOCIATED(qs_env))
       CPASSERT(ASSOCIATED(matrix_hz))
@@ -556,13 +569,13 @@ CONTAINS
       IF (linres_control%preconditioner_type == precond_mlp) THEN
          ! M * z_0 = r_0
          ! Conjugate gradient returns z_0
-         CALL preconditioner(qs_env=qs_env, &
-                             matrix_ks=matrix_ks, &
-                             matrix_p=matrix_p, &
-                             matrix_rhs=matrix_res, &
-                             matrix_cg_z=matrix_z0, &
-                             eps_filter=eps_filter, &
-                             iounit=iounit)
+         CALL ec_preconditioner(qs_env=qs_env, &
+                                matrix_ks=matrix_ks, &
+                                matrix_p=matrix_p, &
+                                matrix_rhs=matrix_res, &
+                                matrix_cg_z=matrix_z0, &
+                                eps_filter=eps_filter, &
+                                iounit=iounit, silent=silent)
          linres_control%flag = "PCG-AO"
       ELSE
          ! z_0 = r_0
@@ -581,7 +594,7 @@ CONTAINS
          ! Tr(r_0 * z_0)
          CALL dbcsr_dot(matrix_res(ispin)%matrix, matrix_cg(ispin)%matrix, norm_rr(ispin))
 
-         IF (norm_rr(ispin) .LT. 0.0_dp) CPABORT("norm_rr < 0")
+         IF (norm_rr(ispin) < 0.0_dp) CPABORT("norm_rr < 0")
          norm_res = MAX(norm_res, ABS(norm_rr(ispin)/REAL(nao, dp)))
       END DO
 
@@ -592,7 +605,7 @@ CONTAINS
       old_conv = 100.0_dp
 
       ! header
-      IF (iounit > 0) THEN
+      IF (iounit > 0 .AND. .NOT. my_silent) THEN
          WRITE (iounit, "(/,T3,A,T16,A,T25,A,T38,A,T52,A,/,T3,A)") &
             "Iteration", "Method", "Stepsize", "Convergence", "Time", &
             REPEAT("-", 80)
@@ -608,14 +621,14 @@ CONTAINS
 
          ! Convergence criteria
          ! default for eps 10E-6 in MO_linres
-         IF (norm_res .LT. linres_control%eps) THEN
+         IF (norm_res < linres_control%eps) THEN
             linres_control%converged = .TRUE.
          END IF
 
          t2 = m_walltime()
-         IF (i .EQ. 1 .OR. MOD(i, 1) .EQ. 0 .OR. linres_control%converged &
+         IF (i == 1 .OR. MOD(i, 1) == 0 .OR. linres_control%converged &
              .OR. restart .OR. should_stop) THEN
-            IF (iounit > 0) THEN
+            IF (iounit > 0 .AND. .NOT. my_silent) THEN
                WRITE (iounit, "(T5,I5,T18,A3,T28,L1,T38,1E8.2,T48,F16.10,T68,F8.2)") &
                   i, linres_control%flag, restart, MAXVAL(alpha), norm_res, t2 - t1
                CALL m_flush(iounit)
@@ -623,7 +636,8 @@ CONTAINS
          END IF
          IF (linres_control%converged) THEN
             IF (iounit > 0) THEN
-               WRITE (iounit, "(/,T2,A,I4,A,/)") "The linear solver converged in ", i, " iterations."
+               WRITE (iounit, "(/,T2,A,I4,A,T73,F8.2,/)") "The linear solver converged in ", &
+                  i, " iterations.", t2 - t1
                CALL m_flush(iounit)
             END IF
             EXIT iteration
@@ -664,7 +678,7 @@ CONTAINS
             ! norm_cA = tr(Ap_j * p_j)
             CALL dbcsr_dot(matrix_cg(ispin)%matrix, matrix_Ax(ispin)%matrix, norm_cA(ispin))
 
-            IF (norm_cA(ispin) .LT. 0.0_dp) THEN
+            IF (norm_cA(ispin) < 0.0_dp) THEN
 
                ! Recalculate w/o preconditioner
                IF (i > 1) THEN
@@ -705,7 +719,7 @@ CONTAINS
 
          DO ispin = 1, nspins
             ! Determine step-size
-            IF (norm_cA(ispin) .LT. linres_control%eps) THEN
+            IF (norm_cA(ispin) < linres_control%eps) THEN
                alpha(ispin) = 1.0_dp
             ELSE
                alpha(ispin) = norm_rr(ispin)/norm_cA(ispin)
@@ -718,7 +732,7 @@ CONTAINS
 
          ! need to recompute the residue
          restart = .FALSE.
-         IF (MOD(i, linres_control%restart_every) .EQ. 0) THEN
+         IF (MOD(i, linres_control%restart_every) == 0) THEN
             !
             ! r_j+1 = b - A * x_j+1
             CALL build_hessian_op(qs_env=qs_env, &
@@ -755,13 +769,13 @@ CONTAINS
          IF (linres_control%preconditioner_type == precond_mlp) THEN
             ! M * z_j+1 = r_j+1
             ! Conjugate gradient returns z_j+1
-            CALL preconditioner(qs_env=qs_env, &
-                                matrix_ks=matrix_ks, &
-                                matrix_p=matrix_p, &
-                                matrix_rhs=matrix_res, &
-                                matrix_cg_z=matrix_z0, &
-                                eps_filter=eps_filter, &
-                                iounit=iounit)
+            CALL ec_preconditioner(qs_env=qs_env, &
+                                   matrix_ks=matrix_ks, &
+                                   matrix_p=matrix_p, &
+                                   matrix_rhs=matrix_res, &
+                                   matrix_cg_z=matrix_z0, &
+                                   eps_filter=eps_filter, &
+                                   iounit=iounit, silent=silent)
             linres_control%flag = "PCG-AO"
          ELSE
             DO ispin = 1, nspins
@@ -775,12 +789,12 @@ CONTAINS
          DO ispin = 1, nspins
             ! Tr[r_j+1*z_j+1]
             CALL dbcsr_dot(matrix_res(ispin)%matrix, matrix_z0(ispin)%matrix, new_norm(ispin))
-            IF (new_norm(ispin) .LT. 0.0_dp) CPABORT("tr(r_j+1*z_j+1) < 0")
+            IF (new_norm(ispin) < 0.0_dp) CPABORT("tr(r_j+1*z_j+1) < 0")
             IF (abnormal_value(new_norm(ispin))) &
                CPABORT("Preconditioner: Tr[r_j+1*z_j+1] is an abnormal value (NaN/Inf)")
             norm_res = MAX(norm_res, new_norm(ispin)/REAL(nao, dp))
 
-            IF (norm_rr(ispin) .LT. linres_control%eps .OR. new_norm(ispin) .LT. linres_control%eps) THEN
+            IF (norm_rr(ispin) < linres_control%eps .OR. new_norm(ispin) < linres_control%eps) THEN
                beta(ispin) = 0.0_dp
                linres_control%converged = .TRUE.
             ELSE
@@ -1055,7 +1069,7 @@ CONTAINS
       END DO
 
       ! skip the kernel if the DM is very small
-      IF (chksum .GT. 1.0E-14_dp) THEN
+      IF (chksum > 1.0E-14_dp) THEN
 
          ! Bring matrix B as density on grid
 
@@ -1139,6 +1153,7 @@ CONTAINS
       TYPE(pw_pool_type), POINTER                        :: auxbas_pw_pool
       TYPE(pw_r3d_rs_type)                               :: v_hartree_rspace
       TYPE(pw_r3d_rs_type), DIMENSION(:), POINTER        :: rho1_r, rho_r, tau1_r, v_xc, v_xc_tau
+      TYPE(pw_r3d_rs_type), POINTER                      :: weights
       TYPE(qs_kpp1_env_type), POINTER                    :: kpp1_env
       TYPE(qs_rho_type), POINTER                         :: rho, rho_aux
       TYPE(section_vals_type), POINTER                   :: input, xc_section, xc_section_aux
@@ -1168,6 +1183,9 @@ CONTAINS
       NULLIFY (pw_env)
       CALL get_qs_env(qs_env, pw_env=pw_env)
       CPASSERT(ASSOCIATED(pw_env))
+
+      NULLIFY (weights)
+      CALL get_qs_env(qs_env, xcint_weights=weights)
 
       NULLIFY (auxbas_pw_pool, poisson_env, pw_pools)
       ! gets the tmp grids
@@ -1216,7 +1234,7 @@ CONTAINS
                CALL qs_rho_get(rho_aux, rho_r=rho_r)
                ALLOCATE (kpp1_env%deriv_set_admm, kpp1_env%rho_set_admm)
                CALL xc_prep_2nd_deriv(kpp1_env%deriv_set_admm, kpp1_env%rho_set_admm, &
-                                      rho_r, auxbas_pw_pool, &
+                                      rho_r, auxbas_pw_pool, weights, &
                                       xc_section=xc_section_aux)
             END IF
          END IF

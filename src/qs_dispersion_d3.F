@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2025 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2026 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -392,7 +392,7 @@ CONTAINS
                ELSE
                   CPABORT("Unknown DFT-D3 damping function:")
                END IF
-               IF (dispersion_env%srb .AND. dr .LT. 30.0d0) THEN
+               IF (dispersion_env%srb .AND. dr < 30.0d0) THEN
                   srbe = ssrb*(REAL((za*zb), KIND=dp))**t1srb*EXP(-gsrb*dr*dispersion_env%r0ab(za, zb)**t2srb)
                   esrb = esrb + srbe
                   evdw = evdw - srbe
@@ -424,7 +424,7 @@ CONTAINS
                      CPABORT("Unknown DFT-D3 damping function:")
                   END IF
                   fdij(:) = (de6 + de8)*rij(:)/dr*fac
-                  IF (dispersion_env%srb .AND. dr .LT. 30.0d0) THEN
+                  IF (dispersion_env%srb .AND. dr < 30.0d0) THEN
                      fdij(:) = fdij(:) + srbe*gsrb*dispersion_env%r0ab(za, zb)**t2srb*rij(:)/dr
                   END IF
                   atom_a = atom_of_kind(iatom)
@@ -815,18 +815,18 @@ CONTAINS
       END IF
 
       ! set dispersion energy
-      IF (para_env%is_source()) THEN
-         evdw = evdw + (elrc6 + elrc8 + elrc9)
-      END IF
 
       CALL para_env%sum(e6tot)
       CALL para_env%sum(e8tot)
       CALL para_env%sum(e9tot)
+      CALL para_env%sum(evdw)
       CALL para_env%sum(nab)
       CALL para_env%sum(nabc)
       e6tot = e6tot + elrc6
       e8tot = e8tot + elrc8
       e9tot = e9tot + elrc9
+      ! For printing, we need all contributions
+      evdw = evdw + (elrc6 + elrc8 + elrc9)
       IF (unit_nr > 0) THEN
          WRITE (unit_nr, "(A,F20.0)") "  E6 vdW terms              :", nab
          WRITE (unit_nr, *) " E6 vdW energy [au/kcal]   :", e6tot, e6tot*kcalmol
@@ -841,6 +841,8 @@ CONTAINS
             WRITE (unit_nr, *) " E LRC C9 [au/kcal]        :", elrc9, elrc9*kcalmol
          END IF
       END IF
+
+      evdw = evdw/para_env%num_pe
 
       DEALLOCATE (dodisp, exclude, atomnumber, rcpbc, radd2, c6d2)
 
@@ -867,7 +869,7 @@ CONTAINS
       TYPE(mp_para_env_type), POINTER                    :: para_env
 
       INTEGER                                            :: funit, iadr, iat, jadr, jat, kk, nl, &
-                                                            nlines, nn
+                                                            nlines, nn, ref_stride
       REAL(KIND=dp), ALLOCATABLE, DIMENSION(:)           :: pars
 
       IF (para_env%is_source()) THEN
@@ -887,11 +889,12 @@ CONTAINS
       ! Store C6AB coefficients in an array
       c6ab = -1._dp
       maxci = 0
+      ref_stride = get_ref_stride(pars, nlines)
       kk = 1
       DO nn = 1, nlines
          iat = NINT(pars(kk + 1))
          jat = NINT(pars(kk + 2))
-         CALL limit(iat, jat, iadr, jadr)
+         CALL limit(iat, jat, iadr, jadr, ref_stride)
          maxci(iat) = MAX(maxci(iat), iadr)
          maxci(jat) = MAX(maxci(jat), jadr)
          c6ab(iat, jat, iadr, jadr, 1) = pars(kk)
@@ -909,28 +912,50 @@ CONTAINS
    END SUBROUTINE dftd3_c6_param
 
 ! **************************************************************************************************
-!> \brief ...
-!> \param iat ...
-!> \param jat ...
-!> \param iadr ...
-!> \param jadr ...
+!> \brief Detects the reference-state encoding used in the DFT-D3 C6AB table.
+!> \param pars DFT-D3 C6AB parameter table.
+!> \param nlines Number of C6AB parameter lines.
+!> \return Reference-state stride.
 ! **************************************************************************************************
-   SUBROUTINE limit(iat, jat, iadr, jadr)
-      INTEGER                                            :: iat, jat, iadr, jadr
+   FUNCTION get_ref_stride(pars, nlines) RESULT(ref_stride)
+      REAL(KIND=dp), DIMENSION(:), INTENT(IN)            :: pars
+      INTEGER, INTENT(IN)                                :: nlines
+      INTEGER                                            :: ref_stride
 
-      INTEGER                                            :: i
+      INTEGER                                            :: kk, nn
+
+      ref_stride = 100
+      kk = 1
+      DO nn = 1, nlines
+         IF (NINT(pars(kk + 1)) > 1000 .OR. NINT(pars(kk + 2)) > 1000) THEN
+            ref_stride = 1000
+            EXIT
+         END IF
+         kk = (nn*5) + 1
+      END DO
+
+   END FUNCTION get_ref_stride
+
+! **************************************************************************************************
+!> \brief Decodes element numbers and reference-state indices.
+!> \param iat Encoded first element number.
+!> \param jat Encoded second element number.
+!> \param iadr First reference-state index.
+!> \param jadr Second reference-state index.
+!> \param ref_stride Reference-state stride.
+! **************************************************************************************************
+   SUBROUTINE limit(iat, jat, iadr, jadr, ref_stride)
+      INTEGER                                            :: iat, jat, iadr, jadr, ref_stride
 
       iadr = 1
       jadr = 1
-      i = 100
-      DO WHILE (iat .GT. 100)
-         iat = iat - 100
+      DO WHILE (iat > ref_stride)
+         iat = iat - ref_stride
          iadr = iadr + 1
       END DO
 
-      i = 100
-      DO WHILE (jat .GT. 100)
-         jat = jat - 100
+      DO WHILE (jat > ref_stride)
+         jat = jat - ref_stride
          jadr = jadr + 1
       END DO
    END SUBROUTINE limit

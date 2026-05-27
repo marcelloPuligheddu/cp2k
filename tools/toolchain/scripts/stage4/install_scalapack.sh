@@ -6,9 +6,9 @@
 [ "${BASH_SOURCE[0]}" ] && SCRIPT_NAME="${BASH_SOURCE[0]}" || SCRIPT_NAME=$0
 SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_NAME")/.." && pwd -P)"
 
-scalapack_ver="2.2.1"
-scalapack_sha256="4aede775fdb28fa44b331875730bcd5bab130caaec225fadeccf424c8fcb55aa"
-scalapack_pkg="scalapack-${scalapack_ver}.tgz"
+scalapack_ver="2.2.3"
+scalapack_sha256="5d93701eca663925e98010dd8d0f45fd79b2191d74e5afa5711d587370a8b9dd"
+scalapack_pkg="scalapack-${scalapack_ver}.tar.gz"
 
 source "${SCRIPT_DIR}"/common_vars.sh
 source "${SCRIPT_DIR}"/tool_kit.sh
@@ -18,9 +18,6 @@ source "${INSTALLDIR}"/toolchain.env
 
 [ -f "${BUILDDIR}/setup_scalapack" ] && rm "${BUILDDIR}/setup_scalapack"
 
-SCALAPACK_CFLAGS=''
-SCALAPACK_LDFLAGS=''
-SCALAPACK_LIBS=''
 ! [ -d "${BUILDDIR}" ] && mkdir -p "${BUILDDIR}"
 cd "${BUILDDIR}"
 
@@ -33,11 +30,7 @@ case "$with_scalapack" in
       echo "scalapack-${scalapack_ver} is already installed, skipping it."
     else
       require_env MATH_LIBS
-      if [ -f ${scalapack_pkg} ]; then
-        echo "${scalapack_pkg} is found"
-      else
-        download_pkg_from_cp2k_org "${scalapack_sha256}" "${scalapack_pkg}"
-      fi
+      retrieve_package "${scalapack_sha256}" "${scalapack_pkg}"
       echo "Installing from scratch into ${pkg_install_dir}"
       [ -d scalapack-${scalapack_ver} ] && rm -rf scalapack-${scalapack_ver}
       tar -xzf ${scalapack_pkg}
@@ -48,30 +41,39 @@ case "$with_scalapack" in
       cflags=""
       fflags=""
       if ("${FC}" --version | grep -q 'GNU'); then
-        cflags="-fpermissive"
+        cflags="-fpermissive -std=c17"
         fflags=$(allowed_gfortran_flags "-fallow-argument-mismatch")
       fi
-      CFLAGS=${cflags} FFLAGS=${fflags} cmake -DCMAKE_FIND_ROOT_PATH="$ROOTDIR" \
+      cmake \
+        -DCMAKE_BUILD_TYPE=Release .. \
+        -DCMAKE_C_FLAGS="${cflags}" \
+        -DCMAKE_Fortran_FLAGS="${fflags}" \
+        -DCMAKE_FIND_ROOT_PATH="${ROOTDIR}" \
         -DCMAKE_INSTALL_PREFIX="${pkg_install_dir}" \
         -DCMAKE_INSTALL_LIBDIR="lib" \
+        -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
         -DCMAKE_VERBOSE_MAKEFILE=ON \
         -DBUILD_SHARED_LIBS=NO \
-        -DCMAKE_BUILD_TYPE=Release .. \
         -DBUILD_TESTING=NO \
         -DSCALAPACK_BUILD_TESTS=NO \
-        > configure.log 2>&1 || tail -n ${LOG_LINES} configure.log
-      make -j $(get_nprocs) > make.log 2>&1 || tail -n ${LOG_LINES} make.log
-      make install >> make.log 2>&1 || tail -n ${LOG_LINES} make.log
+        > configure.log 2>&1 || tail_excerpt configure.log
+      make -j $(get_nprocs) > make.log 2>&1 || tail_excerpt make.log
+      make install >> make.log 2>&1 || tail_excerpt make.log
 
       popd > /dev/null
       write_checksums "${install_lock_file}" "${SCRIPT_DIR}/stage4/$(basename ${SCRIPT_NAME})"
     fi
-    SCALAPACK_LDFLAGS="-L'${pkg_install_dir}/lib' -Wl,-rpath,'${pkg_install_dir}/lib'"
+    SCALAPACK_LDFLAGS="-L${pkg_install_dir}/lib -Wl,-rpath,${pkg_install_dir}/lib"
     ;;
   __SYSTEM__)
     echo "==================== Finding ScaLAPACK from system paths ===================="
     check_lib -lscalapack "ScaLAPACK"
-    add_lib_from_paths SCALAPACK_LDFLAGS "libscalapack.*" $LIB_PATHS
+    pkg_install_dir="$(dirname $(dirname $(find_in_paths "libscalapack*" $LIB_PATHS)))"
+    # Deal with the condition that libscalapack is installed in "/usr/lib/x86_64-linux-gnu"
+    if [[ "${pkg_install_dir}" == "/usr/lib"* ]]; then
+      pkg_install_dir="/usr"
+    fi
+    add_lib_from_paths SCALAPACK_LDFLAGS "libscalapack*" $LIB_PATHS
     ;;
   __DONTUSE__) ;;
 
@@ -79,7 +81,7 @@ case "$with_scalapack" in
     echo "==================== Linking ScaLAPACK to user paths ===================="
     pkg_install_dir="$with_scalapack"
     check_dir "${pkg_install_dir}/lib"
-    SCALAPACK_LDFLAGS="-L'${pkg_install_dir}/lib' -Wl,-rpath,'${pkg_install_dir}/lib'"
+    SCALAPACK_LDFLAGS="-L${pkg_install_dir}/lib -Wl,-rpath,${pkg_install_dir}/lib"
     ;;
 esac
 if [ "$with_scalapack" != "__DONTUSE__" ]; then
@@ -94,9 +96,7 @@ prepend_path LD_RUN_PATH "${pkg_install_dir}/lib"
 prepend_path LIBRARY_PATH "${pkg_install_dir}/lib"
 prepend_path PKG_CONFIG_PATH "$pkg_install_dir/lib/pkgconfig"
 prepend_path CMAKE_PREFIX_PATH "$pkg_install_dir"
-export SCALAPACK_ROOT="${pkg_install_dir}"
 EOF
-    cat "${BUILDDIR}/setup_scalapack" >> $SETUPFILE
   fi
   cat << EOF >> "${BUILDDIR}/setup_scalapack"
 export SCALAPACK_LDFLAGS="${SCALAPACK_LDFLAGS}"
@@ -106,6 +106,7 @@ export CP_DFLAGS="\${CP_DFLAGS} IF_MPI(-D__parallel|)"
 export CP_LDFLAGS="\${CP_LDFLAGS} IF_MPI(${SCALAPACK_LDFLAGS}|)"
 export CP_LIBS="IF_MPI(-lscalapack|) \${CP_LIBS}"
 EOF
+  filter_setup "${BUILDDIR}/setup_scalapack" "${SETUPFILE}"
 fi
 cd "${ROOTDIR}"
 

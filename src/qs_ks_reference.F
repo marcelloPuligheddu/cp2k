@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2025 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2026 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -86,18 +86,21 @@ CONTAINS
 !> \param ehartree ...
 !> \param exc ...
 !> \param h_stress container for the stress tensor of the Hartree term
+!> \param vadmm_tau_rspace ADMM auxiliary tau potential
 !> \par History
 !>      10.2019 created [JGH]
 !> \author JGH
 ! **************************************************************************************************
    SUBROUTINE ks_ref_potential(qs_env, vh_rspace, vxc_rspace, vtau_rspace, vadmm_rspace, &
-                               ehartree, exc, h_stress)
+                               ehartree, exc, h_stress, vadmm_tau_rspace)
       TYPE(qs_environment_type), POINTER                 :: qs_env
       TYPE(pw_r3d_rs_type), INTENT(INOUT)                :: vh_rspace
       TYPE(pw_r3d_rs_type), DIMENSION(:), POINTER        :: vxc_rspace, vtau_rspace, vadmm_rspace
       REAL(KIND=dp), INTENT(OUT)                         :: ehartree, exc
       REAL(KIND=dp), DIMENSION(3, 3), INTENT(INOUT), &
          OPTIONAL                                        :: h_stress
+      TYPE(pw_r3d_rs_type), DIMENSION(:), OPTIONAL, &
+         POINTER                                         :: vadmm_tau_rspace
 
       CHARACTER(LEN=*), PARAMETER                        :: routineN = 'ks_ref_potential'
 
@@ -225,6 +228,19 @@ CONTAINS
       ELSE
          NULLIFY (vadmm_rspace)
       END IF
+      IF (PRESENT(vadmm_tau_rspace)) THEN
+         IF (ASSOCIATED(vadmm_tau_rspace)) THEN
+            DO iab = 1, SIZE(vadmm_tau_rspace)
+               CALL vadmm_tau_rspace(iab)%release()
+            END DO
+         END IF
+         IF (ASSOCIATED(v_admm_tau_rspace)) THEN
+            IF (.NOT. ASSOCIATED(vadmm_tau_rspace)) ALLOCATE (vadmm_tau_rspace(nspins))
+         ELSE
+            IF (ASSOCIATED(vadmm_tau_rspace)) DEALLOCATE (vadmm_tau_rspace)
+            NULLIFY (vadmm_tau_rspace)
+         END IF
+      END IF
 
       pw_grid => v_hartree_rspace%pw_grid
       CALL vh_rspace%create(pw_grid)
@@ -235,6 +251,9 @@ CONTAINS
          END IF
          IF (ASSOCIATED(vadmm_rspace)) THEN
             CALL vadmm_rspace(ispin)%create(pw_grid)
+         END IF
+         IF (PRESENT(vadmm_tau_rspace)) THEN
+            IF (ASSOCIATED(vadmm_tau_rspace)) CALL vadmm_tau_rspace(ispin)%create(pw_grid)
          END IF
       END DO
       !
@@ -259,6 +278,14 @@ CONTAINS
             CALL pw_scale(vadmm_rspace(ispin), vadmm_rspace(ispin)%pw_grid%dvol)
          END DO
       END IF
+      IF (PRESENT(vadmm_tau_rspace)) THEN
+         IF (ASSOCIATED(v_admm_tau_rspace)) THEN
+            DO ispin = 1, nspins
+               CALL pw_transfer(v_admm_tau_rspace(ispin), vadmm_tau_rspace(ispin))
+               CALL pw_scale(vadmm_tau_rspace(ispin), vadmm_tau_rspace(ispin)%pw_grid%dvol)
+            END DO
+         END IF
+      END IF
 
       ! return pw grids
       CALL auxbas_pw_pool%give_back_pw(v_hartree_rspace)
@@ -277,6 +304,12 @@ CONTAINS
             CALL auxbas_pw_pool%give_back_pw(v_admm_rspace(ispin))
          END DO
          DEALLOCATE (v_admm_rspace)
+      END IF
+      IF (ASSOCIATED(v_admm_tau_rspace)) THEN
+         DO ispin = 1, nspins
+            CALL auxbas_pw_pool%give_back_pw(v_admm_tau_rspace(ispin))
+         END DO
+         DEALLOCATE (v_admm_tau_rspace)
       END IF
 
       CALL timestop(handle)
@@ -349,11 +382,6 @@ CONTAINS
                                        qs_kind_set, oce, sab, para_env)
          CALL prepare_gapw_den(qs_env, local_rho_set, do_rho0=gapw)
 
-         IF (gapw) THEN
-            CALL Vh_1c_gg_integrals(qs_env, eh1c, hartree_local%ecoul_1c, local_rho_set, para_env, .FALSE.)
-            CALL integrate_vhg0_rspace(qs_env, v_hartree_rspace, para_env, calculate_forces=.FALSE., &
-                                       local_rho_set=local_rho_set)
-         END IF
          IF (dft_control%do_admm) THEN
             CALL get_qs_env(qs_env, admm_env=admm_env)
             xc_section => admm_env%xc_section_primary
@@ -362,6 +390,12 @@ CONTAINS
          END IF
          CALL calculate_vxc_atom(qs_env, .FALSE., exc1=exc1, xc_section_external=xc_section, &
                                  rho_atom_set_external=local_rho_set%rho_atom_set)
+
+         IF (gapw) THEN
+            CALL Vh_1c_gg_integrals(qs_env, eh1c, hartree_local%ecoul_1c, local_rho_set, para_env, .FALSE.)
+            CALL integrate_vhg0_rspace(qs_env, v_hartree_rspace, para_env, calculate_forces=.FALSE., &
+                                       local_rho_set=local_rho_set)
+         END IF
 
          IF (dft_control%do_admm) THEN
             IF (admm_env%do_gapw) THEN

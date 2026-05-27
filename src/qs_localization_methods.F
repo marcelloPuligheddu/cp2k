@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2025 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2026 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -16,9 +16,12 @@
 !> \author CJM (04.2003)
 ! **************************************************************************************************
 MODULE qs_localization_methods
+   USE bibliography,                    ONLY: Schreder2024_2,&
+                                              cite_reference
    USE cell_types,                      ONLY: cell_type
    USE cp_blacs_env,                    ONLY: cp_blacs_env_type
    USE cp_cfm_basic_linalg,             ONLY: cp_cfm_column_scale,&
+                                              cp_cfm_gemm,&
                                               cp_cfm_rot_cols,&
                                               cp_cfm_rot_rows,&
                                               cp_cfm_scale,&
@@ -28,8 +31,8 @@ MODULE qs_localization_methods
    USE cp_cfm_diag,                     ONLY: cp_cfm_heevd
    USE cp_cfm_types,                    ONLY: &
         cp_cfm_create, cp_cfm_get_element, cp_cfm_get_info, cp_cfm_get_submatrix, cp_cfm_release, &
-        cp_cfm_set_all, cp_cfm_set_submatrix, cp_cfm_to_cfm, cp_cfm_to_fm, cp_cfm_type, &
-        cp_fm_to_cfm
+        cp_cfm_set_all, cp_cfm_set_element, cp_cfm_set_submatrix, cp_cfm_to_cfm, cp_cfm_to_fm, &
+        cp_cfm_type, cp_fm_to_cfm
    USE cp_dbcsr_api,                    ONLY: dbcsr_p_type
    USE cp_dbcsr_operations,             ONLY: cp_dbcsr_sm_fm_multiply
    USE cp_external_control,             ONLY: external_control
@@ -42,7 +45,8 @@ MODULE qs_localization_methods
                                               cp_fm_transpose,&
                                               cp_fm_triangular_multiply
    USE cp_fm_cholesky,                  ONLY: cp_fm_cholesky_decompose
-   USE cp_fm_diag,                      ONLY: cp_fm_syevd
+   USE cp_fm_diag,                      ONLY: choose_eigv_solver,&
+                                              cp_fm_syevd
    USE cp_fm_struct,                    ONLY: cp_fm_struct_create,&
                                               cp_fm_struct_get,&
                                               cp_fm_struct_release,&
@@ -57,8 +61,11 @@ MODULE qs_localization_methods
    USE kinds,                           ONLY: dp
    USE machine,                         ONLY: m_flush,&
                                               m_walltime
-   USE mathconstants,                   ONLY: pi,&
-                                              twopi
+   USE mathconstants,                   ONLY: gaussi,&
+                                              pi,&
+                                              twopi,&
+                                              z_one,&
+                                              z_zero
    USE matrix_exp,                      ONLY: exp_pade_real,&
                                               get_nsquare_norder
    USE message_passing,                 ONLY: mp_para_env_type
@@ -68,7 +75,7 @@ MODULE qs_localization_methods
    IMPLICIT NONE
    PUBLIC :: initialize_weights, crazy_rotations, &
              direct_mini, rotate_orbitals, approx_l1_norm_sd, jacobi_rotations, scdm_qrfact, zij_matrix, &
-             jacobi_cg_edf_ls
+             jacobi_cg_edf_ls, cardoso_souloumiac, cardoso_souloumiac_pipek
 
    CHARACTER(len=*), PARAMETER, PRIVATE :: moduleN = 'qs_localization_methods'
 
@@ -76,11 +83,11 @@ MODULE qs_localization_methods
 
    TYPE set_c_1d_type
       COMPLEX(KIND=dp), POINTER, DIMENSION(:) :: c_array => NULL()
-   END TYPE
+   END TYPE set_c_1d_type
 
    TYPE set_c_2d_type
       COMPLEX(KIND=dp), POINTER, DIMENSION(:, :) :: c_array => NULL()
-   END TYPE
+   END TYPE set_c_2d_type
 
 CONTAINS
 ! **************************************************************************************************
@@ -185,7 +192,7 @@ CONTAINS
          CALL cp_fm_scale_and_add(1.0_dp, U, expfactor, G)
          tnorm = cp_fm_frobenius_norm(G)
          !write(*,*) 'Taylor expansion i=',1,' norm(X^i)/i!=',tnorm
-         IF (tnorm .GT. 1.0E-10_dp) THEN
+         IF (tnorm > 1.0E-10_dp) THEN
             ! other orders
             CALL cp_fm_to_fm(G, Gp1)
             DO i = 2, taylor_order
@@ -197,7 +204,7 @@ CONTAINS
                CALL cp_fm_scale_and_add(1.0_dp, U, expfactor, Gp1)
                tnorm = cp_fm_frobenius_norm(Gp1)
                !write(*,*) 'Taylor expansion i=',i,' norm(X^i)/i!=',tnorm*expfactor
-               IF (tnorm*expfactor .LT. 1.0E-10_dp) EXIT
+               IF (tnorm*expfactor < 1.0E-10_dp) EXIT
             END DO
          END IF
          !
@@ -206,14 +213,14 @@ CONTAINS
          CALL cp_fm_to_fm(CTmp, C)
          !
          ! printing
-         IF (output_unit .GT. 0) THEN
+         IF (output_unit > 0) THEN
             WRITE (output_unit, '(10X,I4,E18.10,2E10.2)') istep, f2, gnorm, ABS((f2 - f2old)/f2)
          END IF
          !
          ! Are we done?
          sweeps = istep
-         !IF(gnorm.LE.grad_thresh.AND.ABS((f2-f2old)/f2).LE.f2_thresh.AND.istep.GT.1) THEN
-         IF (ABS((f2 - f2old)/f2) .LE. eps .AND. istep .GT. 1) THEN
+         !IF(gnorm<=grad_thresh.AND.ABS((f2-f2old)/f2)<=f2_thresh.AND.istep>1) THEN
+         IF (ABS((f2 - f2old)/f2) <= eps .AND. istep > 1) THEN
             converged = .TRUE.
             EXIT
          END IF
@@ -223,20 +230,20 @@ CONTAINS
       ! here we should do one refine step to enforce C'*S*C=1 for any case
       !
       ! Print the final result
-      IF (output_unit .GT. 0) WRITE (output_unit, '(A,E16.10)') ' sparseness function f2 = ', f2
+      IF (output_unit > 0) WRITE (output_unit, '(A,E16.10)') ' sparseness function f2 = ', f2
       !
       ! sparsity
       !DO i=1,size(thresh,1)
       !   gnorm = 0.0_dp
       !   DO o=1,ncol_local
       !      DO p=1,nrow_local
-      !         IF(ABS(C%local_data(p,o)).GT.thresh(i)) THEN
+      !         IF(ABS(C%local_data(p,o))>thresh(i)) THEN
       !            gnorm = gnorm + 1.0_dp
       !         ENDIF
       !      ENDDO
       !   ENDDO
       !   CALL C%matrix_struct%para_env%sum(gnorm)
-      !   IF(output_unit.GT.0) THEN
+      !   IF(output_unit>0) THEN
       !      WRITE(output_unit,*) 'qs_localize: ratio2=',gnorm / ( REAL(k,KIND=dp)*REAL(n,KIND=dp) ),thresh(i)
       !   ENDIF
       !ENDDO
@@ -424,8 +431,10 @@ CONTAINS
       DEALLOCATE (c_zij)
       DEALLOCATE (mii, mij, mjj)
       rmat%local_data = REAL(c_rmat%local_data, dp)
-      CALL cp_cfm_release(c_rmat)
+
       CALL rotate_orbitals(rmat, vectors)
+
+      CALL cp_cfm_release(c_rmat)
       CALL cp_fm_release(rmat)
 
       CALL timestop(handle)
@@ -786,7 +795,7 @@ CONTAINS
             CALL cp_fm_get_submatrix(matrix_V_all, tmp_mat)
             DO istate = 1, ndummy
                tmp_arr(:) = tmp_mat(:, istate)
-               norm = norm2(tmp_arr)
+               norm = NORM2(tmp_arr)
                tmp_arr(:) = tmp_arr(:)/norm
                tmp_mat(:, istate) = tmp_arr(:)
             END DO
@@ -801,7 +810,7 @@ CONTAINS
             ALLOCATE (tmp_arr(ndummy))
             tmp_arr = 0.0_dp
             DO istate = 1, ndummy
-               tmp_arr(istate) = norm2(tmp_mat(:, istate))
+               tmp_arr(istate) = NORM2(tmp_mat(:, istate))
             END DO
             ! find edfs
             DO istate = 1, nextra
@@ -932,7 +941,7 @@ CONTAINS
             END IF
 
             ! reset if new_direction
-            IF (new_direction .AND. MOD(line_searches, 20) .EQ. 5) THEN
+            IF (new_direction .AND. MOD(line_searches, 20) == 5) THEN
                CALL cp_cfm_set_all(skc, czero)
                CALL cp_cfm_set_all(Gct_old, czero)
                norm2_old = 1.0E30_dp
@@ -1077,7 +1086,7 @@ CONTAINS
                   CALL cp_cfm_scale_and_add(cone, skc, cone, Gct_old)
                   CALL cp_cfm_trace(skc, Gct_old, cnorm2_Gct_cross)
                   norm2_Gct_cross = REAL(cnorm2_Gct_cross, KIND=dp)
-                  IF (norm2_Gct_cross .LE. 0.0_dp) THEN ! back to steepest ascent
+                  IF (norm2_Gct_cross <= 0.0_dp) THEN ! back to steepest ascent
                      CALL cp_cfm_scale_and_add(czero, skc, cone, Gct_old)
                   END IF
                ELSE
@@ -1092,7 +1101,7 @@ CONTAINS
 
             ! gold line search
             new_direction = .FALSE.
-            IF (line_search_count .EQ. 1) THEN
+            IF (line_search_count == 1) THEN
                lsl = 1
                lsr = 0
                lsm = 1
@@ -1100,7 +1109,7 @@ CONTAINS
                pos(2) = ds_min/gold_sec
                ds = pos(2)
             ELSE
-               IF (line_search_count .EQ. 50) THEN
+               IF (line_search_count == 50) THEN
                   IF (ABS(energy(line_search_count) - energy(line_search_count - 1)) < 1.0E-4_dp) THEN
                      CPWARN("Line search failed to converge properly")
                      ds_min = 0.1_dp
@@ -1111,8 +1120,8 @@ CONTAINS
                      CPABORT("No. of line searches exceeds 50")
                   END IF
                ELSE
-                  IF (lsr .EQ. 0) THEN
-                     IF (energy(line_search_count - 1) .GT. energy(line_search_count)) THEN
+                  IF (lsr == 0) THEN
+                     IF (energy(line_search_count - 1) > energy(line_search_count)) THEN
                         lsr = line_search_count
                         pos(line_search_count + 1) = pos(lsm) + (pos(lsr) - pos(lsm))*gold_sec
                      ELSE
@@ -1121,27 +1130,27 @@ CONTAINS
                         pos(line_search_count + 1) = pos(line_search_count)/gold_sec
                      END IF
                   ELSE
-                     IF (pos(line_search_count) .LT. pos(lsm)) THEN
-                        IF (energy(line_search_count) .GT. energy(lsm)) THEN
+                     IF (pos(line_search_count) < pos(lsm)) THEN
+                        IF (energy(line_search_count) > energy(lsm)) THEN
                            lsr = lsm
                            lsm = line_search_count
                         ELSE
                            lsl = line_search_count
                         END IF
                      ELSE
-                        IF (energy(line_search_count) .GT. energy(lsm)) THEN
+                        IF (energy(line_search_count) > energy(lsm)) THEN
                            lsl = lsm
                            lsm = line_search_count
                         ELSE
                            lsr = line_search_count
                         END IF
                      END IF
-                     IF (pos(lsr) - pos(lsm) .GT. pos(lsm) - pos(lsl)) THEN
+                     IF (pos(lsr) - pos(lsm) > pos(lsm) - pos(lsl)) THEN
                         pos(line_search_count + 1) = pos(lsm) + gold_sec*(pos(lsr) - pos(lsm))
                      ELSE
                         pos(line_search_count + 1) = pos(lsl) + gold_sec*(pos(lsm) - pos(lsl))
                      END IF
-                     IF ((pos(lsr) - pos(lsl)) .LT. 1.0E-3_dp*pos(lsr)) THEN
+                     IF ((pos(lsr) - pos(lsl)) < 1.0E-3_dp*pos(lsr)) THEN
                         new_direction = .TRUE.
                      END IF
                   END IF ! lsr .eq. 0
@@ -1389,6 +1398,7 @@ CONTAINS
       CALL timestop(handle)
 
    END SUBROUTINE check_tolerance
+
 ! **************************************************************************************************
 !> \brief ...
 !> \param rmat ...
@@ -1406,6 +1416,25 @@ CONTAINS
       CALL cp_fm_to_fm(wf, vectors)
       CALL cp_fm_release(wf)
    END SUBROUTINE rotate_orbitals
+
+! **************************************************************************************************
+!> \brief ...
+!> \param rmat ...
+!> \param vectors ...
+! **************************************************************************************************
+   SUBROUTINE rotate_orbitals_cfm(rmat, vectors)
+      TYPE(cp_cfm_type), INTENT(IN)                      :: rmat, vectors
+
+      INTEGER                                            :: k, n
+      TYPE(cp_cfm_type)                                  :: wf
+
+      CALL cp_cfm_create(wf, vectors%matrix_struct)
+      CALL cp_cfm_get_info(vectors, nrow_global=n, ncol_global=k)
+      CALL parallel_gemm("N", "N", n, k, k, z_one, vectors, rmat, z_zero, wf)
+      CALL cp_cfm_to_cfm(wf, vectors)
+      CALL cp_cfm_release(wf)
+   END SUBROUTINE rotate_orbitals_cfm
+
 ! **************************************************************************************************
 !> \brief ...
 !> \param rmat ...
@@ -1684,11 +1713,11 @@ CONTAINS
                   mii(idim) = diag_z(row_indices(irow), idim)
                   mjj(idim) = diag_z(col_indices(icol), idim)
                END DO
-               IF (row_indices(irow) .NE. col_indices(icol)) THEN
+               IF (row_indices(irow) /= col_indices(icol)) THEN
                   CALL get_angle(mii, mjj, mij, weights, theta)
                   theta = crazy_scale*theta
-                  IF (theta .GT. limit_crazy_angle) theta = limit_crazy_angle
-                  IF (theta .LT. -limit_crazy_angle) theta = -limit_crazy_angle
+                  IF (theta > limit_crazy_angle) theta = limit_crazy_angle
+                  IF (theta < -limit_crazy_angle) theta = -limit_crazy_angle
                   IF (crazy_use_diag) THEN
                      cmat_A%local_data(irow, icol) = -CMPLX(0.0_dp, theta, dp)
                   ELSE
@@ -1743,10 +1772,10 @@ CONTAINS
                "CRAZY| ", iterations, value, tolerance, maxeval, limit_crazy_angle
             CALL m_flush(unit_nr)
          END IF
-         IF (tolerance .LT. eps_localization .OR. iterations .GE. max_iter) EXIT
+         IF (tolerance < eps_localization .OR. iterations >= max_iter) EXIT
       END DO
 
-      IF (PRESENT(converged)) converged = (tolerance .LT. eps_localization)
+      IF (PRESENT(converged)) converged = (tolerance < eps_localization)
 
       CALL cp_cfm_release(cmat_A)
       CALL cp_cfm_release(cmat_R)
@@ -1879,7 +1908,7 @@ CONTAINS
          CALL parallel_gemm('N', 'C', n, n, n, cone, cmat_t1, cmat_R, czero, cmat_U)
          cmat_U%local_data = REAL(cmat_U%local_data, KIND=dp) ! enforce numerics, U is a real matrix
 
-         IF (new_direction .AND. MOD(line_searches, 20) .EQ. 5) THEN ! reset with A .eq. 0
+         IF (new_direction .AND. MOD(line_searches, 20) == 5) THEN ! reset with A .eq. 0
             DO idim = 1, ndim
                CALL parallel_gemm('N', 'N', n, n, n, cone, c_zij(idim), cmat_U, czero, cmat_t1)
                CALL parallel_gemm('C', 'N', n, n, n, cone, cmat_U, cmat_t1, czero, c_zij(idim))
@@ -1939,7 +1968,7 @@ CONTAINS
             DO irow = 1, nrow_local
                ll = (0.0_dp, -1.0_dp)*evals(row_indices(irow))
                lk = (0.0_dp, -1.0_dp)*evals(col_indices(icol))
-               IF (ABS(ll - lk) .LT. 0.5_dp) THEN ! use a series expansion to avoid loss of precision
+               IF (ABS(ll - lk) < 0.5_dp) THEN ! use a series expansion to avoid loss of precision
                   tmp = 1.0_dp
                   cmat_B%local_data(irow, icol) = 0.0_dp
                   DO i = 1, 16
@@ -1998,7 +2027,7 @@ CONTAINS
                beta_pr = MAX(beta_pr, 0.0_dp)
                CALL cp_fm_scale_and_add(beta_pr, matrix_G_search, -1.0_dp, matrix_G_old)
                CALL cp_fm_trace(matrix_G_search, matrix_G_old, normg_cross)
-               IF (normg_cross .GE. 0) THEN ! back to SD
+               IF (normg_cross >= 0) THEN ! back to SD
                   IF (matrix_A%matrix_struct%para_env%is_source()) THEN
                      WRITE (cp_logger_get_default_unit_nr(), *) "!"
                   END IF
@@ -2031,10 +2060,10 @@ CONTAINS
                b = grad(1)
                x1 = pos(2)
                a = (energy(2) - b*x1 - c)/(x1**2)
-               IF (a .LE. 0.0_dp) a = 1.0E-15_dp
+               IF (a <= 0.0_dp) a = 1.0E-15_dp
                npos = -b/(2.0_dp*a)
                val = a*npos**2 + b*npos + c
-               IF (val .LT. energy(1) .AND. val .LE. energy(2)) THEN
+               IF (val < energy(1) .AND. val <= energy(2)) THEN
                   ! we go to a minimum, but ...
                   ! we take a guard against too large steps
                   pos(3) = MIN(npos, MAXVAL(pos(1:2))*4.0_dp)
@@ -2050,7 +2079,7 @@ CONTAINS
                pos(2) = ds_min*0.8_dp
             CASE (2)
                new_direction = .FALSE.
-               IF (energy(2) .GT. energy(1)) THEN
+               IF (energy(2) > energy(1)) THEN
                   pos(3) = ds_min*0.7_dp
                ELSE
                   pos(3) = ds_min*1.4_dp
@@ -2065,7 +2094,7 @@ CONTAINS
                fc = energy(3)
                nom = (xb - xa)**2*(fb - fc) - (xb - xc)**2*(fb - fa)
                denom = (xb - xa)*(fb - fc) - (xb - xc)*(fb - fa)
-               IF (ABS(denom) .LE. 1.0E-18_dp*MAX(ABS(fb - fc), ABS(fb - fa))) THEN
+               IF (ABS(denom) <= 1.0E-18_dp*MAX(ABS(fb - fc), ABS(fb - fa))) THEN
                   npos = xb
                ELSE
                   npos = xb - 0.5_dp*nom/denom ! position of the stationary point
@@ -2073,7 +2102,7 @@ CONTAINS
                val = (npos - xa)*(npos - xb)*fc/((xc - xa)*(xc - xb)) + &
                      (npos - xb)*(npos - xc)*fa/((xa - xb)*(xa - xc)) + &
                      (npos - xc)*(npos - xa)*fb/((xb - xc)*(xb - xa))
-               IF (val .LT. fa .AND. val .LE. fb .AND. val .LE. fc) THEN ! OK, we go to a minimum
+               IF (val < fa .AND. val <= fb .AND. val <= fc) THEN ! OK, we go to a minimum
                   ! we take a guard against too large steps
                   pos(4) = MAX(MAXVAL(pos(1:3))*0.01_dp, &
                                MIN(npos, MAXVAL(pos(1:3))*4.0_dp))
@@ -2083,16 +2112,16 @@ CONTAINS
             END SELECT
          CASE (3) ! golden section hunt
             new_direction = .FALSE.
-            IF (line_search_count .EQ. 1) THEN
+            IF (line_search_count == 1) THEN
                lsl = 1
                lsr = 0
                lsm = 1
                pos(1) = 0.0_dp
                pos(2) = ds_min/gold_sec
             ELSE
-               IF (line_search_count .EQ. 150) CPABORT("Too many")
-               IF (lsr .EQ. 0) THEN
-                  IF (energy(line_search_count - 1) .LT. energy(line_search_count)) THEN
+               IF (line_search_count == 150) CPABORT("Too many")
+               IF (lsr == 0) THEN
+                  IF (energy(line_search_count - 1) < energy(line_search_count)) THEN
                      lsr = line_search_count
                      pos(line_search_count + 1) = pos(lsm) + (pos(lsr) - pos(lsm))*gold_sec
                   ELSE
@@ -2101,27 +2130,27 @@ CONTAINS
                      pos(line_search_count + 1) = pos(line_search_count)/gold_sec
                   END IF
                ELSE
-                  IF (pos(line_search_count) .LT. pos(lsm)) THEN
-                     IF (energy(line_search_count) .LT. energy(lsm)) THEN
+                  IF (pos(line_search_count) < pos(lsm)) THEN
+                     IF (energy(line_search_count) < energy(lsm)) THEN
                         lsr = lsm
                         lsm = line_search_count
                      ELSE
                         lsl = line_search_count
                      END IF
                   ELSE
-                     IF (energy(line_search_count) .LT. energy(lsm)) THEN
+                     IF (energy(line_search_count) < energy(lsm)) THEN
                         lsl = lsm
                         lsm = line_search_count
                      ELSE
                         lsr = line_search_count
                      END IF
                   END IF
-                  IF (pos(lsr) - pos(lsm) .GT. pos(lsm) - pos(lsl)) THEN
+                  IF (pos(lsr) - pos(lsm) > pos(lsm) - pos(lsl)) THEN
                      pos(line_search_count + 1) = pos(lsm) + gold_sec*(pos(lsr) - pos(lsm))
                   ELSE
                      pos(line_search_count + 1) = pos(lsl) + gold_sec*(pos(lsm) - pos(lsl))
                   END IF
-                  IF ((pos(lsr) - pos(lsl)) .LT. 1.0E-3_dp*pos(lsr)) THEN
+                  IF ((pos(lsr) - pos(lsl)) < 1.0E-3_dp*pos(lsr)) THEN
                      new_direction = .TRUE.
                   END IF
                END IF ! lsr .eq. 0
@@ -2166,7 +2195,7 @@ CONTAINS
 
       CALL timestop(handle)
 
-   END SUBROUTINE
+   END SUBROUTINE direct_mini
 
 ! **************************************************************************************************
 !> \brief Parallel algorithm for jacobi rotations
@@ -2537,9 +2566,9 @@ CONTAINS
 
       DO idim = 1, dim2
          ALLOCATE (zdiag_me(idim)%c_array(nblock_max))
-         zdiag_me(idim)%c_array = CMPLX(0.0_dp, 0.0_dp, dp)
+         zdiag_me(idim)%c_array = z_zero
          ALLOCATE (zdiag_all(idim)%c_array(para_env%num_pe*nblock_max))
-         zdiag_all(idim)%c_array = CMPLX(0.0_dp, 0.0_dp, dp)
+         zdiag_all(idim)%c_array = z_zero
       END DO
       ALLOCATE (rmat_recv(nblock_max*2, nblock_max))
       ALLOCATE (rmat_send(nblock_max*2, nblock_max))
@@ -2696,7 +2725,7 @@ CONTAINS
 
                DO idim = 1, dim2
                   DO i = 1, n1
-                     xyz_mix_ns(idim)%c_array(1:nstate, i) = CMPLX(0.0_dp, 0.0_dp, dp)
+                     xyz_mix_ns(idim)%c_array(1:nstate, i) = z_zero
                   END DO
 
                   DO istate = 1, n1
@@ -2730,7 +2759,7 @@ CONTAINS
 
             DO idim = 1, dim2
                DO i = 1, ns_me
-                  cz_ij_loc(idim)%c_array(1:nstate, i) = CMPLX(0.0_dp, 0.0_dp, dp)
+                  cz_ij_loc(idim)%c_array(1:nstate, i) = z_zero
                END DO
             END DO
 
@@ -3081,5 +3110,313 @@ CONTAINS
       CALL timestop(handle)
 
    END SUBROUTINE scdm_qrfact
+
+! **************************************************************************************************
+!> \brief Achieves minimisation of the spread functional by simultaneous diagonalisation with Jacobi
+!>        rotations as presented in Cardoso & Souloumiac, SIAM J. Matrix Anal. Appl., 17(1), 161.
+!>        Generalizes the Jacobi algorithm to complex matrices.
+!> \param weights array of weights for calculating the total spread
+!> \param zij spread operator matrices
+!> \param max_iter maximum number iterations
+!> \param eps_localization numerical tolerance
+!> \param sweeps counts number of sweeps required
+!> \param out_each how often to print info
+!> \param vectors complex vectors to be localized
+!> \par History
+!>      2020-04 created [LS]
+!> \author Lukas Schreder
+! **************************************************************************************************
+   SUBROUTINE cardoso_souloumiac(weights, zij, max_iter, eps_localization, sweeps, &
+                                 out_each, vectors)
+
+      REAL(KIND=dp), INTENT(IN)                          :: weights(:)
+      TYPE(cp_cfm_type), INTENT(INOUT)                   :: zij(:, :)
+      INTEGER, INTENT(IN)                                :: max_iter
+      REAL(KIND=dp), INTENT(IN)                          :: eps_localization
+      INTEGER                                            :: sweeps
+      INTEGER, INTENT(IN)                                :: out_each
+      TYPE(cp_cfm_type), POINTER                         :: vectors
+
+      CHARACTER(len=*), PARAMETER :: routineN = 'cardoso_souloumiac'
+
+      COMPLEX(KIND=dp)                                   :: s
+      COMPLEX(KIND=dp), ALLOCATABLE                      :: mii(:), mij(:), mji(:), mjj(:)
+      INTEGER                                            :: dim1, dim2, handle, idim, istate, jdim, &
+                                                            jstate, nstate, unit_nr
+      REAL(KIND=dp)                                      :: c, old_spread, spread, t1, t2, tolerance
+      TYPE(cp_cfm_type), POINTER                         :: c_rmat, c_zij(:)
+
+      CALL timeset(routineN, handle)
+
+      dim1 = SIZE(zij, 1)
+      dim2 = SIZE(zij, 2)
+
+      NULLIFY (c_rmat, c_zij)
+      ALLOCATE (c_rmat, c_zij(dim1*dim2), mii(dim1*dim2), mij(dim1*dim2), mji(dim1*dim2), mjj(dim1*dim2))
+      CALL cp_cfm_create(c_rmat, zij(1, 1)%matrix_struct)
+      CALL cp_cfm_set_all(c_rmat, (0.0_dp, 0.0_dp), (1.0_dp, 0.0_dp))  ! start with the identity transformation
+      DO idim = 1, dim2
+         DO jdim = 1, dim1
+            CALL cp_cfm_create(c_zij((idim - 1)*dim1 + jdim), zij(jdim, idim)%matrix_struct)
+            CALL cp_cfm_to_cfm(zij(jdim, idim), c_zij((idim - 1)*dim1 + jdim))
+         END DO
+      END DO
+
+      CALL cp_cfm_get_info(c_rmat, nrow_global=nstate)
+      tolerance = 1.0e10_dp
+      old_spread = 1.0e10_dp
+      sweeps = 0
+      unit_nr = -1
+      IF (c_rmat%matrix_struct%para_env%is_source()) THEN
+         unit_nr = cp_logger_get_default_unit_nr()
+         WRITE (unit_nr, "(T4,A )") " Localization by iterative Jacobi rotation using "// &
+            "Cardoso-Souloumiac angles"
+
+      END IF
+
+      ! Jacobi sweeps until converged
+      DO WHILE (tolerance >= eps_localization .AND. sweeps < max_iter)
+         sweeps = sweeps + 1
+         t1 = m_walltime()
+         DO jstate = 1, nstate
+            DO istate = jstate + 1, nstate
+               DO idim = 1, dim1*dim2
+                  CALL cp_cfm_get_element(c_zij(idim), istate, istate, mii(idim))
+                  CALL cp_cfm_get_element(c_zij(idim), istate, jstate, mij(idim))
+                  CALL cp_cfm_get_element(c_zij(idim), jstate, istate, mji(idim))
+                  CALL cp_cfm_get_element(c_zij(idim), jstate, jstate, mjj(idim))
+               END DO
+               CALL get_cardoso_angles(mii, mij, mji, mjj, c, s, vectors%matrix_struct)
+               DO idim = 1, dim1*dim2
+                  CALL cp_cfm_rot_cols(c_zij(idim), istate, jstate, c, REAL(s))
+                  CALL cp_cfm_rot_rows(c_zij(idim), istate, jstate, c, REAL(s))
+               END DO
+               CALL cp_cfm_rot_cols(c_rmat, istate, jstate, c, REAL(s))
+            END DO
+         END DO
+         CALL check_tolerance(c_zij, weights, spread)
+         CALL check_tolerance(c_zij, weights, tolerance)
+         tolerance = ABS(spread - old_spread)
+         old_spread = spread
+
+         t2 = m_walltime()
+         IF (unit_nr > 0 .AND. MODULO(sweeps, out_each) == 0) THEN
+            WRITE (unit_nr, "(T4,A,I7,A,E12.4,A,E12.4,A,F8.3)") &
+               "Iteration:", sweeps, "Functional", spread, "Tolerance:", tolerance, "Time:", t2 - t1
+            CALL m_flush(unit_nr)
+         END IF
+      END DO
+
+      DO idim = 1, dim2
+         ! back to an interlaced matrix
+         DO jdim = 1, dim1
+            CALL cp_cfm_to_cfm(c_zij((idim - 1)*dim1 + jdim), zij(jdim, idim))
+            CALL cp_cfm_release(c_zij((idim - 1)*dim1 + jdim))
+         END DO
+      END DO
+
+      CALL rotate_orbitals_cfm(c_rmat, vectors)
+
+      DEALLOCATE (c_zij, mii, mij, mji, mjj)
+      CALL cp_cfm_release(c_rmat)
+      DEALLOCATE (c_rmat)
+
+      CALL timestop(handle)
+
+   END SUBROUTINE cardoso_souloumiac
+
+! **************************************************************************************************
+!> \brief Pipek-Mezey version of the Cardoso-Souloumiac PADE algorithm for complex-valued matrices.
+!> \param zij spread operator matrices
+!> \param vec complex vectors to be localised
+!> \param sweeps counts number of sweeps required
+!> \param max_iter maximum number iterations
+!> \param eps numerical tolerance
+!> \param out_each how often to print info
+!> \par History
+!>      2020-04 created [LS]
+!> \author Lukas Schreder
+! **************************************************************************************************
+   SUBROUTINE cardoso_souloumiac_pipek(zij, vec, sweeps, max_iter, eps, out_each)
+
+      TYPE(cp_cfm_type), POINTER                         :: zij(:, :), vec
+      INTEGER                                            :: sweeps, max_iter
+      REAL(dp)                                           :: eps
+      INTEGER                                            :: out_each
+
+      CHARACTER(*), PARAMETER :: routineN = 'cardoso_souloumiac_pipek'
+
+      COMPLEX(dp)                                        :: c_spread, s
+      COMPLEX(dp), POINTER                               :: qii(:), qij(:), qji(:), qjj(:)
+      INTEGER                                            :: handle, i, j, k, n_dim, n_states, &
+                                                            output_unit
+      REAL(dp)                                           :: c, old_spread, spread, t1, t2, tol
+      TYPE(cp_cfm_type), POINTER                         :: c_zij(:), rmat
+
+      CALL timeset(routineN, handle)
+
+      CALL cite_reference(Schreder2024_2)
+
+      n_dim = SIZE(zij)
+
+      ALLOCATE (rmat)
+      CALL cp_cfm_create(rmat, zij(1, 1)%matrix_struct)
+
+      CALL cp_cfm_set_all(rmat, (0.0_dp, 0.0_dp), (1.0_dp, 0.0_dp))
+      ALLOCATE (c_zij(n_dim), qii(n_dim), qij(n_dim), qji(n_dim), qjj(n_dim))
+
+      ! build Qij matrix
+      DO k = 1, n_dim
+         c_zij(k) = zij(k, 1)
+      END DO
+
+      CALL cp_cfm_get_info(c_zij(1), ncol_global=n_states)
+
+      tol = 1.0e10_dp
+      c_spread = (0.0_dp, 0.0_dp)
+      DO k = 1, n_dim
+         DO i = 1, n_states
+            CALL cp_cfm_get_element(c_zij(k), i, i, s)
+            c_spread = c_spread + s*s
+         END DO
+      END DO
+      spread = REAL(c_spread)
+      old_spread = spread
+
+      sweeps = 0
+      output_unit = cp_logger_get_default_unit_nr()
+      WRITE (output_unit, "(T4,A )") " Localization by iterative Jacobi rotation using "// &
+         "Cardoso-Souloumiac angles"
+      WRITE (output_unit, "(T4,A )") " and Pipek-Mezey spread functional"
+
+      IF (output_unit > 0 .AND. MODULO(sweeps, out_each) == 0) THEN
+         WRITE (output_unit, "(T4,A,I7,A,E12.4,A,E12.4,A,F8.3)") &
+            "Iteration:", sweeps, " Functional", spread, " Tolerance:", tol, " Time:", 0.0_dp
+      END IF
+
+      DO WHILE (tol >= eps .AND. sweeps < max_iter)
+         t1 = m_walltime()
+         sweeps = sweeps + 1
+
+         DO i = 1, n_states
+            DO j = i + 1, n_states
+               DO k = 1, n_dim
+                  CALL cp_cfm_get_element(c_zij(k), i, i, qii(k))
+                  CALL cp_cfm_get_element(c_zij(k), i, j, qij(k))
+                  CALL cp_cfm_get_element(c_zij(k), j, i, qji(k))
+                  CALL cp_cfm_get_element(c_zij(k), j, j, qjj(k))
+               END DO
+               CALL get_cardoso_angles(qii, qij, qji, qjj, c, s, vec%matrix_struct)
+               DO k = 1, n_dim
+                  CALL cp_cfm_rot_cols(c_zij(k), i, j, c, REAL(s))
+                  CALL cp_cfm_rot_rows(c_zij(k), i, j, c, REAL(s))
+               END DO
+               CALL cp_cfm_rot_cols(rmat, i, j, c, REAL(s))
+            END DO
+         END DO
+
+         c_spread = (0.0_dp, 0.0_dp)
+         DO i = 1, n_states
+            DO k = 1, n_dim
+               CALL cp_cfm_get_element(c_zij(k), i, i, s)
+               c_spread = c_spread + s*s
+            END DO
+         END DO
+         spread = REAL(c_spread)
+
+         tol = ABS(spread - old_spread)
+         old_spread = spread
+         t2 = m_walltime()
+         IF (output_unit > 0 .AND. MODULO(sweeps, out_each) == 0) THEN
+            WRITE (output_unit, "(T4,A,I7,A,E12.4,A,E12.4,A,F8.3)") &
+               "Iteration:", sweeps, " Functional", spread, " Tolerance:", tol, " Time:", t2 - t1
+         END IF
+      END DO
+
+      CALL rotate_orbitals_cfm(rmat, vec)
+
+      ! c_zij(k) was assigned (shallow copy of zij(k,1)); do not release contents
+      DEALLOCATE (c_zij, qii, qij, qji, qjj)
+      CALL cp_cfm_release(rmat)
+      DEALLOCATE (rmat)
+
+      CALL timestop(handle)
+
+   END SUBROUTINE cardoso_souloumiac_pipek
+
+! **************************************************************************************************
+!> \brief calculates the Jacobi angles needed in serial Cardoso-Souloumiac diagonalisation
+!> \param mii ...
+!> \param mij ...
+!> \param mji ...
+!> \param mjj ...
+!> \param c ...
+!> \param s ...
+!> \param tmp_fm_struct ...
+!> \par History
+!>      2020-04 created [LS]
+!> \author Lukas Schreder
+! **************************************************************************************************
+   SUBROUTINE get_cardoso_angles(mii, mij, mji, mjj, c, s, tmp_fm_struct)
+
+      COMPLEX(KIND=dp), DIMENSION(:)                     :: mii, mij, mji, mjj
+      REAL(KIND=dp), INTENT(out)                         :: c
+      COMPLEX(KIND=dp), INTENT(out)                      :: s
+      TYPE(cp_fm_struct_type), POINTER                   :: tmp_fm_struct
+
+      INTEGER                                            :: dim_m, i, i_max
+      REAL(KIND=dp)                                      :: r, x, y, z
+      REAL(KIND=dp), DIMENSION(3)                        :: evals
+      TYPE(cp_cfm_type), POINTER                         :: c_Gmat, hmat
+      TYPE(cp_fm_struct_type), POINTER                   :: G_fm_struct, h_fm_struct
+      TYPE(cp_fm_type), POINTER                          :: evects, Gmat
+
+      dim_m = SIZE(mii)
+
+      CALL cp_fm_struct_create(h_fm_struct, nrow_global=1, ncol_global=3, &
+                               template_fmstruct=tmp_fm_struct)
+      CALL cp_fm_struct_create(G_fm_struct, nrow_global=3, ncol_global=3, &
+                               template_fmstruct=tmp_fm_struct)
+      ALLOCATE (hmat, c_Gmat, Gmat, evects)
+      CALL cp_cfm_create(hmat, h_fm_struct)
+      CALL cp_cfm_create(c_Gmat, G_fm_struct)
+      CALL cp_cfm_set_all(c_Gmat, (0.0_dp, 0.0_dp), (0.0_dp, 0.0_dp))
+      CALL cp_fm_create(Gmat, G_fm_struct)
+      CALL cp_fm_create(evects, G_fm_struct)
+
+      DO i = 1, dim_m
+         CALL cp_cfm_set_element(hmat, 1, 1, (mii(i) - mjj(i)))
+         CALL cp_cfm_set_element(hmat, 1, 2, (mij(i) + mji(i)))
+         CALL cp_cfm_set_element(hmat, 1, 3, (0.0_dp, 1.0_dp)*(mji(i) - mij(i)))
+         CALL cp_cfm_gemm("C", "N", 3, 3, 1, (1.0_dp, 0.0_dp), hmat, hmat, (1.0_dp, 0.0_dp), c_Gmat)
+      END DO
+      CALL cp_cfm_to_fm(c_Gmat, Gmat)
+
+      ! find eigenvector with highest eigenvalue
+      CALL choose_eigv_solver(Gmat, evects, evals)
+      i_max = MAXLOC(evals, 1)
+      CALL cp_fm_get_element(evects, 1, i_max, x)
+      CALL cp_fm_get_element(evects, 2, i_max, y)
+      CALL cp_fm_get_element(evects, 3, i_max, z)
+      IF (x < 0) THEN
+         x = -x
+         y = -y
+         z = -z
+      END IF
+
+      ! calculate the angles
+      r = SQRT(x**2 + y**2 + z**2)  ! always 1
+      c = SQRT((x + r)/(2*r))  ! always real
+      s = (y - gaussi*z)/SQRT(2*r*(x + r)) ! always complex
+
+      CALL cp_fm_struct_release(h_fm_struct)
+      CALL cp_fm_struct_release(G_fm_struct)
+      CALL cp_cfm_release(hmat)
+      CALL cp_cfm_release(c_Gmat)
+      CALL cp_fm_release(Gmat)
+      CALL cp_fm_release(evects)
+      DEALLOCATE (hmat, c_Gmat, Gmat, evects)
+
+   END SUBROUTINE get_cardoso_angles
 
 END MODULE qs_localization_methods

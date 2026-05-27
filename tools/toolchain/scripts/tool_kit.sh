@@ -1,13 +1,12 @@
 # A set of tools used in the toolchain installer, intended to be used
+# by sourcing this file inside other scripts.
 
 # TODO: Review and if possible fix shellcheck errors.
 # shellcheck disable=all
 # shellcheck shell=bash
 
-# by sourcing this file inside other scripts.
-
 SYS_INCLUDE_PATH=${SYS_INCLUDE_PATH:-"/usr/local/include:/usr/include"}
-SYS_LIB_PATH=${SYS_LIB_PATH:-"/usr/local/lib64:/usr/local/lib:/usr/lib64:/usr/lib:/lib64:/lib"}
+SYS_LIB_PATH=${SYS_LIB_PATH:-"/usr/local/lib64:/usr/local/lib:/usr/lib64:/usr/lib:/usr/lib/x86_64-linux-gnu:/usr/lib/aarch-linux-gnu:/lib64:/lib"}
 INCLUDE_PATHS=${INCLUDE_PATHS:-"CPATH SYS_INCLUDE_PATH"}
 LIB_PATHS=${LIB_PATHS:-"LIBRARY_PATH LD_LIBRARY_PATH LD_RUN_PATH SYS_LIB_PATH"}
 time_start=$(date +%s)
@@ -15,7 +14,7 @@ time_start=$(date +%s)
 # report timing
 report_timing() {
   time_stop=$(date +%s)
-  printf "Step %s took %0.2f seconds.\n" $1 $((time_stop - time_start))
+  printf "Step %s took %0.2f seconds.\n" "$1" $((time_stop - time_start))
 }
 
 # report a warning message with script name and line number
@@ -44,8 +43,7 @@ report_error() {
 
 # error handler for line trap from set -e
 error_handler() {
-  local __lineno="$1"
-  report_error $1 "Non-zero exit code detected."
+  report_error "$1" "Non-zero exit code detected."
   exit 1
 }
 
@@ -56,10 +54,25 @@ load() {
   fi
 }
 
+# Take excerpt of ${LOG_LINES} lines from tail of a file, always reporting
+# its absolute path at the top
+tail_excerpt() {
+  local __filename=$(real_path "$1")
+  if [ -n "${LOG_LINES}" ]; then
+    local __lines="${LOG_LINES}"
+  elif [ $# -gt 1 ]; then
+    local __lines="$2"
+  fi
+  tail -v -n "${__lines}" "${__filename}"
+}
+
 # A more portable command that will give the full path, removing
 # symlinks, of a given path. This is more portable than readlink -f
 # which does not work on Mac OS X
-realpath() {
+# Former name is "realpath", renamed to avoid accidentally overriding
+# the native GNU coreutils command when this script is sourced
+# https://www.gnu.org/software/coreutils/manual/html_node/realpath-invocation.html
+real_path() {
   local __path="$1"
   if [ "x$__path" = x ]; then
     return 0
@@ -142,8 +155,8 @@ reverse() (
 get_nprocs() {
   if [ -n "${NPROCS_OVERWRITE}" ]; then
     echo ${NPROCS_OVERWRITE} | sed 's/^0*//'
-  elif $(command -v nproc > /dev/null 2>&1); then
-    echo $(nproc --all)
+  elif $(command -v lscpu > /dev/null 2>&1); then
+    echo $(lscpu -p=Core,Socket | grep -v '#' | sort -u | wc -l)
   elif $(command -v sysctl > /dev/null 2>&1); then
     echo $(sysctl -n hw.ncpu)
   else
@@ -217,7 +230,7 @@ find_in_paths() {
       IFS="${IFS%x}"
       for __file in $__dir/$__target; do
         if [ -e "$__file" ]; then
-          echo $(realpath "$__file")
+          echo $(real_path "$__file")
           # must remember to change IFS back when exiting
           IFS="$__ifs"
           return 0
@@ -340,7 +353,7 @@ check_command() {
     local __package=${2}
   fi
   if $(command -v ${__command} > /dev/null 2>&1); then
-    echo "path to ${__command} is $(realpath $(command -v ${__command}))"
+    echo "path to ${__command} is $(real_path $(command -v ${__command}))"
   else
     report_error "Cannot find ${__command}, please check if the package ${__package} is installed or in system search path"
     return 1
@@ -526,7 +539,7 @@ remove_path() {
   __path=${__path//:$__directory:/:}
   __path=${__path#$__directory:}
   __path=${__path%:$__directory}
-  __path=$(echo "$__path" | sed "s:^$__directory\$::g")
+  __path=$(echo "$__path" | sed "s#^$__directory\$##g")
   eval $__path_name=\"$__path\"
   export $__path_name
 }
@@ -602,25 +615,34 @@ read_with() {
   esac
 }
 
-# helper routine to check integrity of downloaded files
+# get checksum command based on OS type, inspired by part of gcc package
+# (gcc-14.3.0/contrib/download_prerequisites)
+get_checksum_cmd() {
+  local __os=$(uname)
+  local __chksum="sha256sum"
+  case $__os in
+    "Darwin" | "FreeBSD" | "DragonFly" | "AIX")
+      __chksum='shasum -a 256'
+      ;;
+    "OpenBSD")
+      __chksum='sha256'
+      ;;
+    *)
+      __chksum='sha256sum'
+      ;;
+  esac
+  echo "$__chksum"
+}
+
+# helper routine to check integrity of files
+# intended to be used as condition test in an if-then-else construct, because
+# no extra actions are taken for missing file or failed match in this form
+# usage: checksum sha256 filename
 checksum() {
-  local __filename=$1
-  local __sha256=$2
-  local __shasum_command='sha256sum'
-  # check if we have sha256sum command, Mac OS X does not have
-  # sha256sum, but has an equivalent with shasum -a 256
-  if command -v "$__shasum_command" > /dev/null 2>&1 && ! ${__shasum_command} --version 2>&1 | grep -q 'Darwin'; then
-    __shasum_command='sha256sum'
-  else
-    __shasum_command="shasum -a 256"
-  fi
-  if echo "$__sha256  $__filename" | ${__shasum_command} --check; then
-    echo "Checksum of $__filename Ok"
-  else
-    rm -v ${__filename}
-    report_error "Checksum of $__filename could not be verified, abort."
-    return 1
-  fi
+  local __sha256="$1"
+  local __filename="$2"
+  local __shasum_command=$(get_checksum_cmd)
+  echo "$__sha256  $__filename" | ${__shasum_command} --check
 }
 
 # downloader for the package tars, includes checksum
@@ -638,7 +660,13 @@ download_pkg_from_urlpath() {
     return 1
   fi
   # checksum
-  checksum "${__outfile}" "${__sha256}"
+  if checksum "${__sha256}" "${__outfile}"; then
+    echo "Checksum of $__filename Ok"
+  else
+    rm -vf "${__outfile}"
+    report_error "Checksum of $__filename could not be verified, abort."
+    return 1
+  fi
 }
 
 # download from CP2K.org
@@ -647,18 +675,30 @@ download_pkg_from_cp2k_org() {
   download_pkg_from_urlpath "$1" "$2" https://www.cp2k.org/static/downloads
 }
 
+# retrieve package under current directory with filename and checksum verification
+# if file exists and checksum is correct, only print a message
+# if file exists but checksum is incorrect, delete and re-download from cp2k.org
+# if file does not exist, download from cp2k.org
+retrieve_package() {
+  local __sha256="$1"
+  local __filename="$2"
+  if ! [ -f "${__filename}" ]; then
+    download_pkg_from_cp2k_org "${__sha256}" "${__filename}"
+  else
+    if ! checksum "${__sha256}" "${__filename}"; then
+      echo "$__filename is found but checksum is wrong; delete and re-download"
+      rm -vf "${__filename}"
+      download_pkg_from_cp2k_org "${__sha256}" "${__filename}"
+    else
+      echo "$__filename is found and checksum is right"
+    fi
+  fi
+}
+
 # verify the checksums inside the given checksum file
 verify_checksums() {
   local __checksum_file=$1
-  local __shasum_command='sha256sum'
-
-  # check if we have sha256sum command, Mac OS X does not have
-  # sha256sum, but has an equivalent with shasum -a 256
-  if command -v "$__shasum_command" > /dev/null 2>&1 && ! ${__shasum_command} --version 2>&1 | grep -q 'Darwin'; then
-    __shasum_command='sha256sum'
-  else
-    __shasum_command="shasum -a 256"
-  fi
+  local __shasum_command=$(get_checksum_cmd)
 
   ${__shasum_command} --check "${__checksum_file}" > /dev/null 2>&1
 }
@@ -667,15 +707,7 @@ verify_checksums() {
 write_checksums() {
   local __checksum_file=$1
   shift # remove output file from arguments to be able to pass them along properly quoted
-  local __shasum_command='sha256sum'
-
-  # check if we have sha256sum command, Mac OS X does not have
-  # sha256sum, but has an equivalent with shasum -a 256
-  if command -v "$__shasum_command" > /dev/null 2>&1 && ! ${__shasum_command} --version 2>&1 | grep -q 'Darwin'; then
-    __shasum_command='sha256sum'
-  else
-    __shasum_command="shasum -a 256"
-  fi
+  local __shasum_command=$(get_checksum_cmd)
 
   ${__shasum_command} "${VERSION_FILE}" "$@" > "${__checksum_file}"
 }
@@ -702,4 +734,20 @@ write_toolchain_env() {
 
     export -p
   ) > "${__installdir}/toolchain.env"
+}
+
+# Write a setup file without containing flags unnecessay for building and running CP2K
+filter_setup() {
+  local source_file="$1"
+  local target_file="$2"
+
+  # Check if setup_xxx file exists
+  if [[ ! -f "$source_file" ]]; then
+    report_error "File '$source_file' does not exist."
+    return 1
+  fi
+
+  local filename=$(basename "$source_file")
+  echo "# ==================== Setup for ${filename#*_} ==================== #" >> "$target_file"
+  sed '/if[[:space:]]/,/^[[:space:]]*fi$/d' "$source_file" | grep -v -E '# For|# Other|CPATH|FLAGS|CP_LIBS' >> "$target_file"
 }

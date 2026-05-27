@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2025 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2026 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -23,10 +23,10 @@ MODULE preconditioner_solvers
    USE cp_blacs_env,                    ONLY: cp_blacs_env_type
    USE cp_dbcsr_api,                    ONLY: &
         dbcsr_create, dbcsr_filter, dbcsr_get_info, dbcsr_get_occupation, dbcsr_init_p, &
-        dbcsr_p_type, dbcsr_release, dbcsr_type, dbcsr_type_no_symmetry, dbcsr_type_real_8
+        dbcsr_p_type, dbcsr_release, dbcsr_type, dbcsr_type_no_symmetry
    USE cp_dbcsr_operations,             ONLY: copy_dbcsr_to_fm,&
                                               copy_fm_to_dbcsr
-   USE cp_fm_basic_linalg,              ONLY: cp_fm_upper_to_full
+   USE cp_fm_basic_linalg,              ONLY: cp_fm_uplo_to_full
    USE cp_fm_cholesky,                  ONLY: cp_fm_cholesky_decompose,&
                                               cp_fm_cholesky_invert
    USE cp_fm_struct,                    ONLY: cp_fm_struct_create,&
@@ -98,7 +98,7 @@ CONTAINS
             occ_matrix = dbcsr_get_occupation(preconditioner_env%sparse_matrix)
          END IF
          ! check whether we are in the first step and if it is a good idea to use cholesky (matrix sparsity)
-         IF (preconditioner_env%solver .NE. ot_precond_solver_update .AND. occ_matrix > 0.5_dp) THEN
+         IF (preconditioner_env%solver /= ot_precond_solver_update .AND. occ_matrix > 0.5_dp) THEN
             preconditioner_env%solver = ot_precond_solver_update
             CALL make_full_inverse_cholesky(preconditioner_env, matrix_s)
          ELSE
@@ -157,7 +157,7 @@ CONTAINS
       END IF
       CALL cp_fm_cholesky_invert(fm)
 
-      CALL cp_fm_upper_to_full(fm, fm_work)
+      CALL cp_fm_uplo_to_full(fm, fm_work)
       CALL cp_fm_release(fm_work)
 
       CALL timestop(handle)
@@ -193,7 +193,7 @@ CONTAINS
       CALL cp_fm_cholesky_decompose(fm, info_out=info_out)
       !
       ! if fm not SPD we go with the overlap matrix
-      IF (info_out .NE. 0) THEN
+      IF (info_out /= 0) THEN
          !
          ! just the overlap matrix
          IF (PRESENT(matrix_s)) THEN
@@ -315,8 +315,7 @@ CONTAINS
             CALL dbcsr_init_p(dbcsr_matrix)
             CALL dbcsr_create(dbcsr_matrix, template=template_mat, &
                               name="preconditioner_env%dbcsr_matrix", &
-                              matrix_type=dbcsr_type_no_symmetry, &
-                              nze=0, data_type=dbcsr_type_real_8)
+                              matrix_type=dbcsr_type_no_symmetry)
          END IF
          CALL copy_fm_to_dbcsr(fm_matrix, dbcsr_matrix)
          CALL cp_fm_release(fm_matrix)

@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2025 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2026 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -19,7 +19,8 @@ MODULE input_cp2k_motion
                            Ceriotti2014, &
                            Henkelman1999, &
                            Henkelman2014, &
-                           Kapil2016
+                           Kapil2016, &
+                           Lindh1995
    USE cp_output_handling, ONLY: add_last_numeric, &
                                  cp_print_key_section_create, &
                                  debug_print_level, &
@@ -28,8 +29,7 @@ MODULE input_cp2k_motion
                                  medium_print_level
    USE cp_units, ONLY: cp_unit_to_cp2k
    USE input_constants, ONLY: &
-      default_bfgs_method_id, default_cell_direct_id, default_cell_geo_opt_id, &
-      default_cell_md_id, default_cg_method_id, default_dimer_method_id, &
+      debug_lbfgs, default_bfgs_method_id, default_cg_method_id, default_dimer_method_id, &
       default_lbfgs_method_id, default_minimization_method_id, default_ts_method_id, &
       do_mc_gemc_npt, do_mc_gemc_nvt, do_mc_traditional, do_mc_virial, fix_none, fix_x, fix_xy, &
       fix_xz, fix_y, fix_yz, fix_z, fmt_id_pdb, fmt_id_xyz, gaussian, helium_cell_shape_cube, &
@@ -37,9 +37,10 @@ MODULE input_cp2k_motion
       helium_mdist_exponential, helium_mdist_gaussian, helium_mdist_linear, &
       helium_mdist_quadratic, helium_mdist_singlev, helium_mdist_uniform, &
       helium_sampling_ceperley, helium_sampling_worm, helium_solute_intpot_mwater, helium_solute_intpot_nnp, &
-      helium_solute_intpot_none, integrate_exact, integrate_numeric, ls_2pnt, ls_3pnt, ls_fit, &
-      ls_gold, ls_none, matrix_init_cholesky, matrix_init_diagonal, numerical, perm_cycle, &
-      perm_plain, propagator_pimd, propagator_rpmd, propagator_cmd, transformation_normal, transformation_stage
+      helium_solute_intpot_none, high_lbfgs, integrate_exact, integrate_numeric, low_lbfgs, ls_2pnt, ls_3pnt, ls_fit, &
+      ls_gold, ls_none, matrix_init_cholesky, matrix_init_diagonal, medium_lbfgs, numerical, perm_cycle, &
+      perm_plain, propagator_pimd, propagator_rpmd, propagator_cmd, propagator_bcmd, silent_lbfgs, &
+      transformation_normal, transformation_stage
    USE input_cp2k_constraints, ONLY: create_constraint_section
    USE input_cp2k_free_energy, ONLY: create_fe_section
    USE input_cp2k_md, ONLY: create_md_section
@@ -64,7 +65,8 @@ MODULE input_cp2k_motion
                               real_t, &
                               char_t
    USE kinds, ONLY: dp
-   USE string_utilities, ONLY: s2a
+   USE string_utilities, ONLY: newline, &
+                               s2a
 #include "../base/base_uses.f90"
 
    IMPLICIT NONE
@@ -242,9 +244,9 @@ CONTAINS
 
       CALL keyword_create(keyword, __LOCATION__, name="ENSEMBLE", &
                           description="Specify the type of simulation", &
-                          usage="PROGRAM (TRADITIONAL|GEMC_NVT|GEMC_NPT|VIRIAL)", &
+                          usage="ENSEMBLE (TRADITIONAL|GEMC_NVT|GEMC_NPT|VIRIAL)", &
                           enum_c_vals=s2a("TRADITIONAL", "GEMC_NVT", "GEMC_NPT", "VIRIAL"), &
-                          enum_i_vals=(/do_mc_traditional, do_mc_gemc_nvt, do_mc_gemc_npt, do_mc_virial/), &
+                          enum_i_vals=[do_mc_traditional, do_mc_gemc_nvt, do_mc_gemc_npt, do_mc_virial], &
                           default_i_val=do_mc_traditional)
       CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
@@ -799,7 +801,7 @@ CONTAINS
                              enum_c_vals=s2a("MINIMIZATION", "TRANSITION_STATE"), &
                              enum_desc=s2a("Performs a geometry minimization.", &
                                            "Performs a transition state optimization."), &
-                             enum_i_vals=(/default_minimization_method_id, default_ts_method_id/), &
+                             enum_i_vals=[default_minimization_method_id, default_ts_method_id], &
                              default_i_val=default_minimization_method_id)
          CALL section_add_keyword(section, keyword)
          CALL keyword_release(keyword)
@@ -807,8 +809,8 @@ CONTAINS
 
       CALL keyword_create( &
          keyword, __LOCATION__, name="OPTIMIZER", &
-         variants=(/"MINIMIZER"/), &
-         citations=(/Byrd1995/), &
+         variants=["MINIMIZER"], &
+         citations=[Byrd1995], &
          description="Specify which method to use to perform a geometry optimization.", &
          usage="OPTIMIZER {BFGS|LBFGS|CG}", &
          enum_c_vals=s2a("BFGS", "LBFGS", "CG"), &
@@ -817,7 +819,7 @@ CONTAINS
                        "Limited-memory variant of BFGS suitable for large systems. "// &
                        "Not as well fine-tuned but can be more robust.", &
                        "conjugate gradients, robust minimizer (depending on the line search) also OK for large systems"), &
-         enum_i_vals=(/default_bfgs_method_id, default_lbfgs_method_id, default_cg_method_id/), &
+         enum_i_vals=[default_bfgs_method_id, default_lbfgs_method_id, default_cg_method_id], &
          default_i_val=default_bfgs_method_id)
       CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
@@ -878,6 +880,17 @@ CONTAINS
       CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
 
+      ! collects keywords related to Space Group Symmetry analysis
+      CALL keyword_create( &
+         keyword, __LOCATION__, name="SHOW_SPACE_GROUP", &
+         description="Detect and show space group of the system after optimization. "// &
+         "It works for supercell. It does not affect/reduce computational cost. "// &
+         "Use EPS_SYMMETRY to adjust the detection threshold.", &
+         usage="SHOW_SPACE_GROUP .TRUE.", &
+         default_l_val=.FALSE., lone_keyword_l_val=.TRUE., repeats=.FALSE.)
+      CALL section_add_keyword(section, keyword)
+      CALL keyword_release(keyword)
+
       ! collects keywords related to precision for finding the space group
       CALL keyword_create( &
          keyword, __LOCATION__, name="EPS_SYMMETRY", &
@@ -896,7 +909,7 @@ CONTAINS
          "These operations are used when enforcing the space group.", &
          usage="SYMM_REDUCTION  0.0 0.0 0.0", &
          repeats=.FALSE., n_var=3, &
-         type_of_var=real_t, default_r_vals=(/0.0_dp, 0.0_dp, 0.0_dp/))
+         type_of_var=real_t, default_r_vals=[0.0_dp, 0.0_dp, 0.0_dp])
       CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
 
@@ -1002,27 +1015,24 @@ CONTAINS
       TYPE(section_type), POINTER                        :: print_key, subsection
 
       CALL create_geoopt_section(section, __LOCATION__, label="CELL_OPT", &
-                                 description="This section sets the environment for the optimization of the simulation cell."// &
-                                 " Two possible schemes are available: (1) Zero temperature optimization;"// &
-                                 " (2) Finite temperature optimization.", &
-                                 just_optimizers=.TRUE., &
-                                 use_model_hessian=.FALSE.)
+                                 description="This section sets the environment for the optimization "// &
+                                 "of the simulation cell. As is noted in FORCE_EVAL/SUBSYS/CELL, the "// &
+                                 "program convention is that the first cell vector A lies along the "// &
+                                 "X-axis and the second cell vector B is in the XY plane, such that "// &
+                                 "the cell vector matrix is a lower triangle. There is no complete, "// &
+                                 "official algorithm support and/or tests for updating the three "// &
+                                 "upper triangular components during a cell optimization; please "// &
+                                 "prepare input accordingly with these three components precisely 0 "// &
+                                 "even for cases like the primitive rhombohedral cell of the FCC lattice.", &
+                                 just_optimizers=.TRUE., use_model_hessian=.FALSE.)
 
       NULLIFY (keyword, print_key, subsection)
       CALL keyword_create( &
-         keyword, __LOCATION__, name="TYPE", &
-         description="Specify which kind of method to use for the optimization of the simulation cell", &
-         usage="TYPE (GEO_OPT|MD|DIRECT_CELL_OPT)", &
-         enum_c_vals=s2a("GEO_OPT", "MD", "DIRECT_CELL_OPT"), &
-         enum_desc=s2a( &
-         "Performs a geometry optimization (the GEO_OPT section must be defined) between cell optimization steps."// &
-         " The stress tensor is computed at the optimized geometry.", &
-         "Performs a molecular dynamics run (the MD section needs must defined) for computing the stress tensor"// &
-         " used for the cell optimization.", &
-         "Performs a geometry and cell optimization at the same time."// &
-         " The stress tensor is computed at every step"), &
-         enum_i_vals=(/default_cell_geo_opt_id, default_cell_md_id, default_cell_direct_id/), &
-         default_i_val=default_cell_direct_id)
+         keyword, __LOCATION__, name="TYPE", removed=.TRUE., description="", &
+         deprecation_notice="The keyword MOTION/CELL_OPT/TYPE has been removed because "// &
+         "cell optimizations now always use DIRECT_CELL_OPT.", &
+         enum_c_vals=s2a("DIRECT_CELL_OPT", "GEO_OPT", "MD"), &
+         enum_i_vals=[1, 2, 3], default_i_val=1)
       CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
 
@@ -1031,25 +1041,40 @@ CONTAINS
          description="Specifies the external pressure (1 value or the full 9 components of the pressure tensor) "// &
          "applied during the cell optimization.", &
          usage="EXTERNAL_PRESSURE {REAL} .. {REAL}", unit_str="bar", &
-         default_r_vals=(/cp_unit_to_cp2k(100.0_dp, "bar"), 0.0_dp, 0.0_dp, &
-                          0.0_dp, cp_unit_to_cp2k(100.0_dp, "bar"), 0.0_dp, &
-                          0.0_dp, 0.0_dp, cp_unit_to_cp2k(100.0_dp, "bar")/), n_var=-1)
+         default_r_vals=[cp_unit_to_cp2k(100.0_dp, "bar"), 0.0_dp, 0.0_dp, &
+                         0.0_dp, cp_unit_to_cp2k(100.0_dp, "bar"), 0.0_dp, &
+                         0.0_dp, 0.0_dp, cp_unit_to_cp2k(100.0_dp, "bar")], n_var=-1)
       CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
 
-      CALL keyword_create( &
-         keyword, __LOCATION__, name="KEEP_ANGLES", &
-         description="Keep angles between the cell vectors constant, but allow the lengths of the"// &
-         " cell vectors to change independently."// &
-         " Albeit general, this is most useful for triclinic cells, to enforce higher symmetry, see KEEP_SYMMETRY.", &
-         usage="KEEP_ANGLES TRUE", default_l_val=.FALSE., lone_keyword_l_val=.TRUE.)
+      CALL keyword_create(keyword, __LOCATION__, name="KEEP_VOLUME", &
+                          description="Keep the volume of the cell constant during cell optimization. "// &
+                          "This is implemented by comparing the cell volumes and scaling the new "// &
+                          "cell vectors just before updating the cell information, and can be "// &
+                          "used together with KEEP_ANGLES or KEEP_SYMMETRY.", &
+                          usage="KEEP_VOLUME TRUE", default_l_val=.FALSE., lone_keyword_l_val=.TRUE.)
+      CALL section_add_keyword(section, keyword)
+      CALL keyword_release(keyword)
+
+      CALL keyword_create(keyword, __LOCATION__, name="KEEP_ANGLES", &
+                          description="Keep angles between the cell vectors constant, but "// &
+                          "allow the lengths of the cell vectors to change independently "// &
+                          "during cell optimization. This is implemented by projecting out "// &
+                          "the components of angles in the cell gradient before the cell "// &
+                          "is updated. Albeit general, this is most useful for triclinic "// &
+                          "cells; to enforce higher symmetry, see KEEP_SYMMETRY.", &
+                          usage="KEEP_ANGLES TRUE", default_l_val=.FALSE., lone_keyword_l_val=.TRUE.)
       CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
 
       CALL keyword_create(keyword, __LOCATION__, name="KEEP_SYMMETRY", &
-                          description="Keep the requested initial cell symmetry (e.g. during a cell optimisation). "// &
-                          "The initial symmetry must be specified in the &CELL section.", &
-                          usage="KEEP_SYMMETRY yes", default_l_val=.FALSE., lone_keyword_l_val=.TRUE.)
+                          description="Keep the requested initial cell symmetry as specified "// &
+                          "in the FORCE_EVAL/SUBSYS/CELL section during cell optimization. "// &
+                          "This is implemented by removing symmetry-breaking components and "// &
+                          "taking averages of components if necessary in the cell gradient "// &
+                          "before the cell is updated. To enforce the space group (which "// &
+                          "requires spglib package), see KEEP_SPACE_GROUP.", &
+                          usage="KEEP_SYMMETRY TRUE", default_l_val=.FALSE., lone_keyword_l_val=.TRUE.)
       CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
 
@@ -1065,7 +1090,7 @@ CONTAINS
                        "Fix x and z component", &
                        "Fix y and z component"), &
          enum_c_vals=s2a("NONE", "X", "Y", "Z", "XY", "XZ", "YZ"), &
-         enum_i_vals=(/fix_none, fix_x, fix_y, fix_z, fix_xy, fix_xz, fix_yz/), &
+         enum_i_vals=[fix_none, fix_x, fix_y, fix_z, fix_xy, fix_xz, fix_yz], &
          default_i_val=fix_none)
       CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
@@ -1121,11 +1146,11 @@ CONTAINS
 
       CALL keyword_create(keyword, __LOCATION__, name="METHOD", &
                           description="Specify which kind of method to use for locating transition states", &
-                          citations=(/Henkelman1999/), &
-                          usage="TYPE (DIMER)", &
+                          citations=[Henkelman1999], &
+                          usage="METHOD (DIMER)", &
                           enum_c_vals=s2a("DIMER"), &
                           enum_desc=s2a("Uses the dimer method to optimize transition states."), &
-                          enum_i_vals=(/default_dimer_method_id/), &
+                          enum_i_vals=[default_dimer_method_id], &
                           default_i_val=default_dimer_method_id)
       CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
@@ -1152,7 +1177,7 @@ CONTAINS
       CALL keyword_create(keyword, __LOCATION__, name="ANGLE_TOLERANCE", &
                           description="This keyword sets the value of the tolerance angle for the line search"// &
                           " performed to optimize the orientation of the dimer.", &
-                          usage="ANGLE_TOL {real}", unit_str='rad', &
+                          usage="ANGLE_TOLERANCE {real}", unit_str='rad', &
                           default_r_val=cp_unit_to_cp2k(5.0_dp, "deg"))
       CALL section_add_keyword(subsection, keyword)
       CALL keyword_release(keyword)
@@ -1160,7 +1185,7 @@ CONTAINS
       CALL keyword_create(keyword, __LOCATION__, name="K-DIMER", &
                           description="This keyword activates the constrained k-dimer translation"// &
                           " J. Chem. Phys. 141, 164111 (2014).", &
-                          citations=(/Henkelman2014/), &
+                          citations=[Henkelman2014], &
                           usage="K-DIMER {logica}", &
                           default_l_val=.FALSE., &
                           lone_keyword_l_val=.FALSE.)
@@ -1258,6 +1283,7 @@ CONTAINS
                           description="Uses a model Hessian as initial guess instead of a unit matrix."// &
                           " Should lead in general to improved convergence might be switched off for exotic cases", &
                           usage="USE_MODEL_HESSIAN", &
+                          citations=[Lindh1995], &
                           default_l_val=use_model_hessian, lone_keyword_l_val=.TRUE.)
       CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
@@ -1331,7 +1357,7 @@ CONTAINS
 
       CALL keyword_create(keyword, __LOCATION__, name="FLETCHER_REEVES", &
                           description="Uses FLETCHER-REEVES instead of POLAK-RIBIERE when using Conjugate Gradients", &
-                          usage="FLETCHER-REEVES", &
+                          usage="FLETCHER_REEVES", &
                           default_l_val=.FALSE., lone_keyword_l_val=.TRUE.)
       CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
@@ -1346,14 +1372,12 @@ CONTAINS
                           " in increasing order of robustness and cost. ", &
                           usage="TYPE GOLD", &
                           default_i_val=ls_gold, &
-                          enum_c_vals=s2a("NONE", "2PNT", "3PNT", "GOLD", "FIT"), &
-                          enum_desc=s2a("take fixed length steps", &
-                                        "extrapolate based on 2 points", &
-                                        "extrapolate based on on 3 points", &
+                          enum_c_vals=s2a("2PNT", "GOLD", "FIT"), &
+                          enum_desc=s2a("extrapolate based on 2 points", &
                                         "perform 1D golden section search of the minimum (very expensive)", &
                                         "perform 1D fit of a parabola on several evaluation of energy "// &
                                         "(very expensive and more robust vs numerical noise)"), &
-                          enum_i_vals=(/ls_none, ls_2pnt, ls_3pnt, ls_gold, ls_fit/))
+                          enum_i_vals=[ls_2pnt, ls_gold, ls_fit])
       CALL section_add_keyword(subsection, keyword)
       CALL keyword_release(keyword)
 
@@ -1439,7 +1463,7 @@ CONTAINS
       CALL section_create(section, __LOCATION__, name="LBFGS", &
                           description="Provides parameters to tune the limited memory BFGS (LBFGS) optimization", &
                           n_keywords=0, n_subsections=1, repeats=.FALSE., &
-                          citations=(/Byrd1995/))
+                          citations=[Byrd1995])
 
       CALL keyword_create(keyword, __LOCATION__, name="MAX_H_RANK", &
                           description="Maximum rank (and consequently size) of the "// &
@@ -1456,6 +1480,21 @@ CONTAINS
                           " (used for the line search)", &
                           usage="MAX_F_PER_ITER {integer}", &
                           default_i_val=20)
+      CALL section_add_keyword(section, keyword)
+      CALL keyword_release(keyword)
+
+      CALL keyword_create(keyword, __LOCATION__, name="PRINT_LEVEL", &
+                          description="How much output is written out by the LBFGS algorithm. ", &
+                          usage="PRINT_LEVEL MEDIUM", &
+                          enum_c_vals=s2a("SILENT", "LOW", "MEDIUM", "HIGH", "DEBUG"), &
+                          enum_desc=s2a("Almost no output", &
+                                        "Little output about f and |proj g| every iteration", &
+                                        "Quite some output about details every iteration", &
+                                        "Lots of output about changes of active set and final x", &
+                                        "Everything is written out, useful for debugging purposes only"), &
+                          enum_i_vals=[silent_lbfgs, low_lbfgs, medium_lbfgs, &
+                                       high_lbfgs, debug_lbfgs], &
+                          default_i_val=low_print_level)
       CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
 
@@ -1482,6 +1521,14 @@ CONTAINS
          description="Trust radius used in LBFGS. Not completely in depth tested. Negativ values means no trust radius is used.", &
          usage="TRUST_RADIUS {real}", unit_str='angstrom', &
          default_r_val=-1.0_dp)
+      CALL section_add_keyword(section, keyword)
+      CALL keyword_release(keyword)
+
+      CALL keyword_create(keyword, __LOCATION__, name="__CONTROL_VAL", &
+                          description="Hidden parameter that controls the printing behavior "// &
+                          "of the LBFGS optimizer for advanced debug purposes. This option "// &
+                          "overrides PRINT_LEVEL setting if explicit.", &
+                          default_i_val=-1)
       CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
 
@@ -1594,7 +1641,7 @@ CONTAINS
       CPASSERT(.NOT. ASSOCIATED(section))
       CALL section_create(section, __LOCATION__, name="DRIVER", &
                           description="This section defines the parameters needed to run in i-PI driver mode.", &
-                          citations=(/Ceriotti2014, Kapil2016/), &
+                          citations=[Ceriotti2014, Kapil2016], &
                           n_keywords=3, n_subsections=0, repeats=.FALSE.)
 
       NULLIFY (keyword)
@@ -1684,7 +1731,7 @@ CONTAINS
                           repeats=.FALSE., default_l_val=.FALSE.)
       CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
-      CALL keyword_create(keyword, __LOCATION__, name="T_tol", variants=(/"temp_to"/), &
+      CALL keyword_create(keyword, __LOCATION__, name="T_tol", variants=["temp_to"], &
                           description="threshold for the oscillations of the temperature "// &
                           "excedeed which the temperature is rescaled. 0 means no rescaling.", &
                           default_r_val=0._dp, unit_str="K")
@@ -1702,7 +1749,7 @@ CONTAINS
                           usage="HARM_INT (NUMERIC|EXACT)", &
                           default_i_val=integrate_numeric, &
                           enum_c_vals=s2a("NUMERIC", "EXACT"), &
-                          enum_i_vals=(/integrate_numeric, integrate_exact/))
+                          enum_i_vals=[integrate_numeric, integrate_exact])
       CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
       CALL keyword_create(keyword, __LOCATION__, name="nrespa", &
@@ -1716,16 +1763,16 @@ CONTAINS
                           usage="TRANSFORMATION (NORMAL|STAGE)", &
                           default_i_val=transformation_normal, &
                           enum_c_vals=s2a("NORMAL", "STAGE"), &
-                          enum_i_vals=(/transformation_normal, transformation_stage/))
+                          enum_i_vals=[transformation_normal, transformation_stage])
 
       CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
       CALL keyword_create(keyword, __LOCATION__, name="propagator", &
                           description="Specifies the real time propagator to use", &
-                          usage="PROPAGATOR (PIMD|RPMD|CMD)", &
+                          usage="PROPAGATOR (PIMD|RPMD|CMD|BCMD)", &
                           default_i_val=propagator_pimd, &
-                          enum_c_vals=s2a("PIMD", "RPMD", "CMD"), &
-                          enum_i_vals=(/propagator_pimd, propagator_rpmd, propagator_cmd/))
+                          enum_c_vals=s2a("PIMD", "RPMD", "CMD", "BCMD"), &
+                          enum_i_vals=[propagator_pimd, propagator_rpmd, propagator_cmd, propagator_bcmd])
       CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
       CALL keyword_create(keyword, __LOCATION__, name="FIX_CENTROID_POS", &
@@ -1822,7 +1869,7 @@ CONTAINS
                           " Needs the exact harmonic integrator."// &
                           " May lead to unphysical motions if constraint e.g. FIXED_ATOMS, is applied."// &
                           " RESTART_HELIUM section has to be .FALSE. when restarting the PIGLET job.", &
-                          citations=(/Ceriotti2010/), &
+                          citations=[Ceriotti2010], &
                           n_keywords=3, n_subsections=1, &
                           repeats=.FALSE.)
       CALL create_rng_section(subsubsection)
@@ -1854,7 +1901,7 @@ CONTAINS
       CALL section_create(subsection, __LOCATION__, name="PIGLET", &
                           description="Controls the PI Generalized Langevin Equation thermostat."// &
                           " Needs the exact harmonic integrator", &
-                          citations=(/Ceriotti2012/), &
+                          citations=[Ceriotti2012], &
                           n_keywords=4, n_subsections=2, &
                           repeats=.FALSE.)
       CALL create_rng_section(subsubsection)
@@ -1888,7 +1935,7 @@ CONTAINS
                           usage="SMATRIX_INIT (CHOLESKY|DIAGONAL)", &
                           default_i_val=matrix_init_cholesky, &
                           enum_c_vals=s2a("CHOLESKY", "DIAGONAL"), &
-                          enum_i_vals=(/matrix_init_cholesky, matrix_init_diagonal/))
+                          enum_i_vals=[matrix_init_cholesky, matrix_init_diagonal])
       CALL section_add_keyword(subsection, keyword)
       CALL keyword_release(keyword)
       CALL keyword_create(keyword, __LOCATION__, name="THERMOSTAT_ENERGY", &
@@ -1904,7 +1951,7 @@ CONTAINS
       CALL section_create(subsection, __LOCATION__, name="QTB", &
                           description="Controls the QTB-PILE thermostat."// &
                           " Needs the exact harmonic integrator", &
-                          citations=(/Brieuc2016/), &
+                          citations=[Brieuc2016], &
                           n_keywords=7, n_subsections=1, &
                           repeats=.FALSE.)
       CALL create_rng_section(subsubsection)
@@ -2151,7 +2198,7 @@ CONTAINS
                           usage="GET_FORCES (AVERAGE|LAST)", &
                           default_i_val=helium_forces_average, &
                           enum_c_vals=s2a("AVERAGE", "LAST"), &
-                          enum_i_vals=(/helium_forces_average, helium_forces_last/))
+                          enum_i_vals=[helium_forces_average, helium_forces_last])
       CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
 
@@ -2160,10 +2207,10 @@ CONTAINS
                           usage="SOLUTE_INTERACTION (NONE | MWATER | NNP)", &
                           default_i_val=helium_solute_intpot_none, &
                           enum_c_vals=s2a("NONE", "MWATER", "NNP"), &
-                          enum_i_vals=(/ &
+                          enum_i_vals=[ &
                           helium_solute_intpot_none, &
                           helium_solute_intpot_mwater, &
-                          helium_solute_intpot_nnp/), &
+                          helium_solute_intpot_nnp], &
                           enum_desc=s2a( &
                           "No interaction with solute", &
                           "Test interaction with wrong Water", &
@@ -2212,7 +2259,7 @@ CONTAINS
                           usage="SAMPLING_METHOD (CEPERLEY|WORM)", &
                           default_i_val=helium_sampling_ceperley, &
                           enum_c_vals=s2a("CEPERLEY", "WORM"), &
-                          enum_i_vals=(/helium_sampling_ceperley, helium_sampling_worm/))
+                          enum_i_vals=[helium_sampling_ceperley, helium_sampling_worm])
       CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
 
@@ -2360,13 +2407,13 @@ CONTAINS
                           "QUADRATIC", &
                           "EXPONENTIAL", &
                           "GAUSSIAN"), &
-                          enum_i_vals=(/ &
+                          enum_i_vals=[ &
                           helium_mdist_singlev, &
                           helium_mdist_uniform, &
                           helium_mdist_linear, &
                           helium_mdist_quadratic, &
                           helium_mdist_exponential, &
-                          helium_mdist_gaussian/))
+                          helium_mdist_gaussian])
       CALL section_add_keyword(subsubsection, keyword)
       CALL keyword_release(keyword)
       CALL keyword_create(keyword, __LOCATION__, name="M-VALUE", &
@@ -2498,7 +2545,7 @@ CONTAINS
                           usage="CELL_SHAPE (CUBE|OCTAHEDRON)", &
                           default_i_val=helium_cell_shape_cube, &
                           enum_c_vals=s2a("CUBE", "OCTAHEDRON"), &
-                          enum_i_vals=(/helium_cell_shape_cube, helium_cell_shape_octahedron/))
+                          enum_i_vals=[helium_cell_shape_cube, helium_cell_shape_octahedron])
       CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
 
@@ -2584,7 +2631,7 @@ CONTAINS
       CALL keyword_create(keyword, __LOCATION__, name="MIN_CYCLE_LENGTHS_WDG", &
                           description="Density of winding paths "// &
                           "not shorter than the given length", &
-                          repeats=.FALSE., usage="<INT> <INT> .. <INT>", &
+                          repeats=.FALSE., usage="MIN_CYCLE_LENGTHS_WDG <INT> <INT> .. <INT>", &
                           type_of_var=integer_t, n_var=-1)
       CALL section_add_keyword(subsection, keyword)
       CALL keyword_release(keyword)
@@ -2592,7 +2639,7 @@ CONTAINS
       CALL keyword_create(keyword, __LOCATION__, name="MIN_CYCLE_LENGTHS_NON", &
                           description="Density of non-winding paths "// &
                           "not shorter than the given length", &
-                          repeats=.FALSE., usage="<INT> <INT> .. <INT>", &
+                          repeats=.FALSE., usage="MIN_CYCLE_LENGTHS_NON <INT> <INT> .. <INT>", &
                           type_of_var=integer_t, n_var=-1)
       CALL section_add_keyword(subsection, keyword)
       CALL keyword_release(keyword)
@@ -2600,7 +2647,7 @@ CONTAINS
       CALL keyword_create(keyword, __LOCATION__, name="MIN_CYCLE_LENGTHS_ALL", &
                           description="Density of all paths "// &
                           "not shorter than the given length", &
-                          repeats=.FALSE., usage="<INT> <INT> .. <INT>", &
+                          repeats=.FALSE., usage="MIN_CYCLE_LENGTHS_ALL <INT> <INT> .. <INT>", &
                           type_of_var=integer_t, n_var=-1)
       CALL section_add_keyword(subsection, keyword)
       CALL keyword_release(keyword)
@@ -2675,37 +2722,37 @@ CONTAINS
                           n_keywords=7, n_subsections=0, repeats=.FALSE.)
       CALL keyword_create(keyword, __LOCATION__, name="PROJECTED_AREA", &
                           description="Projected area vector for all environments", &
-                          repeats=.TRUE., usage="<REAL> <REAL> .. <REAL>", &
+                          repeats=.TRUE., usage="PROJECTED_AREA <REAL> <REAL> .. <REAL>", &
                           type_of_var=real_t, n_var=-1)
       CALL section_add_keyword(subsection, keyword)
       CALL keyword_release(keyword)
       CALL keyword_create(keyword, __LOCATION__, name="PROJECTED_AREA_2", &
                           description="Projected area vector squared for all environments", &
-                          repeats=.TRUE., usage="<REAL> <REAL> .. <REAL>", &
+                          repeats=.TRUE., usage="PROJECTED_AREA_2 <REAL> <REAL> .. <REAL>", &
                           type_of_var=real_t, n_var=-1)
       CALL section_add_keyword(subsection, keyword)
       CALL keyword_release(keyword)
       CALL keyword_create(keyword, __LOCATION__, name="WINDING_NUMBER_2", &
                           description="Winding number vector squared for all environments", &
-                          repeats=.TRUE., usage="<REAL> <REAL> .. <REAL>", &
+                          repeats=.TRUE., usage="WINDING_NUMBER_2 <REAL> <REAL> .. <REAL>", &
                           type_of_var=real_t, n_var=-1)
       CALL section_add_keyword(subsection, keyword)
       CALL keyword_release(keyword)
       CALL keyword_create(keyword, __LOCATION__, name="MOMENT_OF_INERTIA", &
                           description="Moment of inertia vector for all environments", &
-                          repeats=.TRUE., usage="<REAL> <REAL> .. <REAL>", &
+                          repeats=.TRUE., usage="MOMENT_OF_INERTIA <REAL> <REAL> .. <REAL>", &
                           type_of_var=real_t, n_var=-1)
       CALL section_add_keyword(subsection, keyword)
       CALL keyword_release(keyword)
       CALL keyword_create(keyword, __LOCATION__, name="RDF", &
                           description="Radial distributions averaged over all environments", &
-                          repeats=.TRUE., usage="<REAL> <REAL> .. <REAL>", &
+                          repeats=.TRUE., usage="RDF <REAL> <REAL> .. <REAL>", &
                           type_of_var=real_t, n_var=-1)
       CALL section_add_keyword(subsection, keyword)
       CALL keyword_release(keyword)
       CALL keyword_create(keyword, __LOCATION__, name="RHO", &
                           description="Spatial distributions averaged over all environments", &
-                          repeats=.TRUE., usage="<REAL> <REAL> .. <REAL>", &
+                          repeats=.TRUE., usage="RHO <REAL> <REAL> .. <REAL>", &
                           type_of_var=real_t, n_var=-1)
       CALL section_add_keyword(subsection, keyword)
       CALL keyword_release(keyword)
@@ -2796,7 +2843,7 @@ CONTAINS
       CALL cp_print_key_section_create(print_key, __LOCATION__, "RHO", &
                                        description="Controls the output of the helium density "// &
                                        "(Gaussian cube file format)", &
-                                       each_iter_names=s2a("PINT"), each_iter_values=(/100/), &
+                                       each_iter_names=s2a("PINT"), each_iter_values=[100], &
                                        print_level=medium_print_level, common_iter_levels=1, &
                                        add_last=add_last_numeric)
       CALL keyword_create(keyword, __LOCATION__, name="BACKUP_COPIES", &
@@ -2848,7 +2895,7 @@ CONTAINS
                           usage="FORMAT (PDB|XYZ)", &
                           default_i_val=fmt_id_pdb, &
                           enum_c_vals=s2a("PDB", "XYZ"), &
-                          enum_i_vals=(/fmt_id_pdb, fmt_id_xyz/), &
+                          enum_i_vals=[fmt_id_pdb, fmt_id_xyz], &
                           enum_desc=s2a("Bead coordinates and connectivity is written in PDB format", &
                                         "Only bead coordinates are written in XYZ format"))
       CALL section_add_keyword(print_key, keyword)
@@ -2864,7 +2911,7 @@ CONTAINS
                           usage="FORMAT (CYCLE|PLAIN)", &
                           default_i_val=perm_cycle, &
                           enum_c_vals=s2a("CYCLE", "PLAIN"), &
-                          enum_i_vals=(/perm_cycle, perm_plain/), &
+                          enum_i_vals=[perm_cycle, perm_plain], &
                           enum_desc=s2a( &
                           "Cycle notation with winding cycles enclosed"// &
                           " in '[...]' and non-winding ones enclosed in '(...)'", &

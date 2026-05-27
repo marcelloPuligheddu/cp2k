@@ -14,10 +14,6 @@ source "${INSTALLDIR}"/toolchain.env
 
 [ -f "${BUILDDIR}/setup_mkl" ] && rm "${BUILDDIR}/setup_mkl"
 
-MKL_CFLAGS=""
-MKL_LDFLAGS=""
-MKL_LIBS=""
-
 MKL_FFTW="yes"
 if [ "${with_libvdwxc}" != "__DONTUSE__" ] && [ "${MPI_MODE}" != "no" ]; then
   report_warning ${LINENO} "MKL FFTW3 interface is present, but FFTW library is needed for FFTW-MPI wrappers."
@@ -30,7 +26,7 @@ cd "${BUILDDIR}"
 case "${with_mkl}" in
   __INSTALL__)
     echo "==================== Installing MKL ===================="
-    report_error ${LINENO} "To install MKL, please contact your system administrator."
+    report_error ${LINENO} "__INSTALL__ is not supported; please manually install Intel MKL."
     exit 1
     ;;
   __SYSTEM__)
@@ -70,7 +66,12 @@ if [ "${with_mkl}" != "__DONTUSE__" ]; then
   esac
   mkl_lib_dir="${MKLROOT}/lib/${mkl_arch_dir}"
   # check we have required libraries
-  mkl_required_libs="libmkl_gf_lp64.so libmkl_sequential.so libmkl_core.so"
+  if [ ${with_intel} != "__DONTUSE__" ]; then
+    mkl_interface_lib="mkl_intel_lp64"
+  else
+    mkl_interface_lib="mkl_gf_lp64"
+  fi
+  mkl_required_libs="lib${mkl_interface_lib}.so libmkl_sequential.so libmkl_core.so"
   for ii in $mkl_required_libs; do
     if [ ! -f "$mkl_lib_dir/${ii}" ]; then
       report_error $LINENO "missing MKL library ${ii}"
@@ -96,7 +97,7 @@ if [ "${with_mkl}" != "__DONTUSE__" ]; then
 
   # set the correct lib flags from MLK link adviser
   MKL_LIBS="-L${mkl_lib_dir} -Wl,-rpath,${mkl_lib_dir} ${mkl_scalapack_lib}"
-  MKL_LIBS+=" -Wl,--start-group -lmkl_gf_lp64 -lmkl_sequential -lmkl_core"
+  MKL_LIBS+=" -Wl,--start-group -l${mkl_interface_lib} -lmkl_sequential -lmkl_core"
   MKL_LIBS+=" ${mkl_blacs_lib} -Wl,--end-group -lpthread -lm -ldl"
   # setup_mkl disables using separate FFTW library (see below)
   MKL_CFLAGS="${MKL_CFLAGS} -I${MKLROOT}/include"
@@ -128,7 +129,7 @@ export FFTW_LDFLAGS="${MKL_LDFLAGS}"
 export FFTW_LIBS="${MKL_LIBS}"
 EOF
   fi
-  cat "${BUILDDIR}/setup_mkl" >> ${SETUPFILE}
+  filter_setup "${BUILDDIR}/setup_mkl" "${SETUPFILE}"
 fi
 
 load "${BUILDDIR}/setup_mkl"

@@ -21,18 +21,13 @@ cd "${BUILDDIR}"
 
 case "${with_spla}" in
   __INSTALL__)
-    echo "==================== Installing spla ===================="
+    echo "==================== Installing SpLA ===================="
     pkg_install_dir="${INSTALLDIR}/SpLA-${spla_ver}"
     install_lock_file="$pkg_install_dir/install_successful"
     if verify_checksums "${install_lock_file}"; then
       echo "SpLA-${spla_ver} is already installed, skipping it."
     else
-      if [ -f SpLA-${spla_ver}.tar.gz ]; then
-        echo "SpLA-${spla_ver}.tar.gz is found"
-      else
-        download_pkg_from_cp2k_org "${spla_sha256}" "SpLA-${spla_ver}.tar.gz"
-
-      fi
+      retrieve_package "${spla_sha256}" "SpLA-${spla_ver}.tar.gz"
       echo "Installing from scratch into ${pkg_install_dir}"
       [ -d SpLA-${spla_ver} ] && rm -rf SpLA-${spla_ver}
       tar -xzf SpLA-${spla_ver}.tar.gz
@@ -49,9 +44,9 @@ case "${with_spla}" in
         -DSPLA_INSTALL=ON \
         -DSPLA_STATIC=ON \
         .. \
-        > cmake.log 2>&1 || tail -n ${LOG_LINES} cmake.log
-      make -j $(get_nprocs) > make.log 2>&1 || tail -n ${LOG_LINES} make.log
-      make -j $(get_nprocs) install > install.log 2>&1 || tail -n ${LOG_LINES} install.log
+        > cmake.log 2>&1 || tail_excerpt cmake.log
+      make -j $(get_nprocs) > make.log 2>&1 || tail_excerpt make.log
+      make -j $(get_nprocs) install > install.log 2>&1 || tail_excerpt install.log
       cd ..
 
       if [ "$ENABLE_CUDA" = "__TRUE__" ]; then
@@ -59,7 +54,7 @@ case "${with_spla}" in
         mkdir build-cuda
         cd build-cuda
         cmake \
-          -DCMAKE_INSTALL_PREFIX="${pkg_install_dir}" \
+          -DCMAKE_INSTALL_PREFIX="${pkg_install_dir}-cuda" \
           -DCMAKE_INSTALL_LIBDIR=lib \
           -DCMAKE_VERBOSE_MAKEFILE=ON \
           -DCMAKE_BUILD_TYPE="RelWithDebInfo" \
@@ -69,11 +64,9 @@ case "${with_spla}" in
           -DSPLA_STATIC=ON \
           -DSPLA_GPU_BACKEND=CUDA \
           .. \
-          > cmake.log 2>&1 || tail -n ${LOG_LINES} cmake.log
-        make -j $(get_nprocs) > make.log 2>&1 || tail -n ${LOG_LINES} make.log
-        install -d ${pkg_install_dir}/lib/cuda
-        [ -f src/libspla.a ] && install -m 644 src/*.a ${pkg_install_dir}/lib/cuda >> install.log 2>&1
-        [ -f src/libspla.so ] && install -m 644 src/*.so ${pkg_install_dir}/lib/cuda >> install.log 2>&1
+          > cmake.log 2>&1 || tail_excerpt cmake.log
+        make -j $(get_nprocs) > make.log 2>&1 || tail_excerpt make.log
+        make -j $(get_nprocs) install > install.log 2>&1 || tail_excerpt install.log
       fi
 
       if [ "$ENABLE_HIP" = "__TRUE__" ]; then
@@ -84,7 +77,7 @@ case "${with_spla}" in
             mkdir build-cuda
             cd build-cuda
             cmake \
-              -DCMAKE_INSTALL_PREFIX="${pkg_install_dir}" \
+              -DCMAKE_INSTALL_PREFIX="${pkg_install_dir}-hip" \
               -DCMAKE_INSTALL_LIBDIR=lib \
               -DCMAKE_VERBOSE_MAKEFILE=ON \
               -DCMAKE_BUILD_TYPE="RelWithDebInfo" \
@@ -94,18 +87,16 @@ case "${with_spla}" in
               -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
               -DSPLA_GPU_BACKEND=CUDA \
               .. \
-              > cmake.log 2>&1 || tail -n ${LOG_LINES} cmake.log
-            make -j $(get_nprocs) > make.log 2>&1 || tail -n ${LOG_LINES} make.log
-            install -d ${pkg_install_dir}/lib/hip
-            [ -f src/libspla.a ] && install -m 644 src/*.a ${pkg_install_dir}/lib/hip >> install.log 2>&1
-            [ -f src/libspla.so ] && install -m 644 src/*.so ${pkg_install_dir}/lib/hip >> install.log 2>&1
+              > cmake.log 2>&1 || tail_excerpt cmake.log
+            make -j $(get_nprocs) > make.log 2>&1 || tail_excerpt make.log
+            make -j $(get_nprocs) install > install.log 2>&1 || tail_excerpt install.log
             ;;
           Mi50 | Mi100 | Mi200 | Mi250)
             [ -d build-hip ] && rm -rf "build-hip"
             mkdir build-hip
             cd build-hip
             cmake \
-              -DCMAKE_INSTALL_PREFIX="${pkg_install_dir}" \
+              -DCMAKE_INSTALL_PREFIX="${pkg_install_dir}-hip" \
               -DCMAKE_INSTALL_LIBDIR=lib \
               -DCMAKE_VERBOSE_MAKEFILE=ON \
               -DCMAKE_BUILD_TYPE="RelWithDebInfo" \
@@ -115,11 +106,9 @@ case "${with_spla}" in
               -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
               -DSPLA_GPU_BACKEND=ROCM \
               .. \
-              > cmake.log 2>&1 || tail -n ${LOG_LINES} cmake.log
-            make -j $(get_nprocs) > make.log 2>&1 || tail -n ${LOG_LINES} make.log
-            install -d ${pkg_install_dir}/lib/hip
-            [ -f src/libspla.a ] && install -m 644 src/*.a ${pkg_install_dir}/lib/hip >> install.log 2>&1
-            [ -f src/libspla.so ] && install -m 644 src/*.so ${pkg_install_dir}/lib/hip >> install.log 2>&1
+              > cmake.log 2>&1 || tail_excerpt cmake.log
+            make -j $(get_nprocs) > make.log 2>&1 || tail_excerpt make.log
+            make -j $(get_nprocs) install > install.log 2>&1 || tail_excerpt install.log
             ;;
           *) ;;
         esac
@@ -133,7 +122,7 @@ case "${with_spla}" in
     SPLA_HIP_LDFLAGS="-L'${pkg_install_dir}/lib/hip' -Wl,-rpath,'${pkg_install_dir}/lib/hip'"
     ;;
   __SYSTEM__)
-    echo "==================== Finding spla from system paths ===================="
+    echo "==================== Finding SpLA from system paths ===================="
     check_command pkg-config --modversion spla
     add_include_from_paths SPLA_CFLAGS "spla.h" $INCLUDE_PATHS
     add_lib_from_paths SPLA_LDFLAGS "libspla.*" $LIB_PATHS
@@ -142,7 +131,7 @@ case "${with_spla}" in
     # Nothing to do
     ;;
   *)
-    echo "==================== Linking spla to user paths ===================="
+    echo "==================== Linking SpLA to user paths ===================="
     pkg_install_dir="$with_spla"
 
     # use the lib64 directory if present (multi-abi distros may link lib/ to lib32/ instead)
@@ -196,7 +185,7 @@ EOF
 export CP_LDFLAGS="\${CP_LDFLAGS} ${SPLA_LDFLAGS}"
 EOF
   fi
-  cat "${BUILDDIR}/setup_spla" >> $SETUPFILE
+  filter_setup "${BUILDDIR}/setup_spla" "${SETUPFILE}"
 fi
 
 load "${BUILDDIR}/setup_spla"

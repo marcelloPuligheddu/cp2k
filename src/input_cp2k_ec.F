@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2025 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2026 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -18,6 +18,7 @@ MODULE input_cp2k_ec
    USE cp_output_handling,              ONLY: cp_print_key_section_create,&
                                               debug_print_level,&
                                               high_print_level
+   USE cp_units,                        ONLY: cp_unit_to_cp2k
    USE input_constants,                 ONLY: &
         bqb_opt_exhaustive, bqb_opt_normal, bqb_opt_off, bqb_opt_patient, bqb_opt_quick, &
         ec_diagonalization, ec_functional_dc, ec_functional_ext, ec_functional_harris, &
@@ -28,6 +29,7 @@ MODULE input_cp2k_ec
         ls_scf_sign_ns, ls_scf_sign_proot, ot_precond_full_all, ot_precond_full_kinetic, &
         ot_precond_full_single, ot_precond_full_single_inverse, ot_precond_none, &
         ot_precond_s_inverse, precond_mlp
+   USE input_cp2k_kpoints,              ONLY: create_kpoints_section
    USE input_cp2k_mm,                   ONLY: create_dipoles_section
    USE input_cp2k_voronoi,              ONLY: create_print_voronoi_section
    USE input_cp2k_xc,                   ONLY: create_xc_section
@@ -40,7 +42,8 @@ MODULE input_cp2k_ec
                                               section_release,&
                                               section_type
    USE input_val_types,                 ONLY: char_t,&
-                                              integer_t
+                                              integer_t,&
+                                              real_t
    USE kinds,                           ONLY: dp
    USE string_utilities,                ONLY: s2a
 #include "./base/base_uses.f90"
@@ -86,6 +89,12 @@ CONTAINS
       CALL section_add_subsection(section, subsection)
       CALL section_release(subsection)
 
+      ! add a special kpoint section
+      NULLIFY (subsection)
+      CALL create_kpoints_section(subsection)
+      CALL section_add_subsection(section, subsection)
+      CALL section_release(subsection)
+
       ! add a section for solver keywords
       NULLIFY (subsection)
       CALL create_ec_solver_section(subsection)
@@ -106,7 +115,7 @@ CONTAINS
                           enum_desc=s2a("Harris functional", &
                                         "Density-corrected DFT", &
                                         "External calculated energy"), &
-                          enum_i_vals=(/ec_functional_harris, ec_functional_dc, ec_functional_ext/))
+                          enum_i_vals=[ec_functional_harris, ec_functional_dc, ec_functional_ext])
       CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
 
@@ -173,6 +182,20 @@ CONTAINS
       CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
 
+      CALL keyword_create(keyword, __LOCATION__, &
+                          name="ELECTRONIC_TEMPERATURE", &
+                          variants=s2a("ELEC_TEMP", "FD_TEMP"), &
+                          description="Electronic temperature for Harris functional with "// &
+                          "Fermi-Dirac smearing.", &
+                          repeats=.FALSE., &
+                          n_var=1, &
+                          type_of_var=real_t, &
+                          default_r_val=cp_unit_to_cp2k(value=0.0_dp, unit_str="K"), &
+                          unit_str="K", &
+                          usage="ELECTRONIC_TEMPERATURE [K] 300")
+      CALL section_add_keyword(section, keyword)
+      CALL keyword_release(keyword)
+
       CALL keyword_create(keyword, __LOCATION__, name="ALGORITHM", &
                           description="Algorithm used to solve KS equation", &
                           usage="ALGORITHM DIAGONALIZATION", &
@@ -184,8 +207,8 @@ CONTAINS
                                         "Trace resetting trs4 algorithm", &
                                         "Trace resetting tc2 algorithm", &
                                         "OT diagonalization"), &
-                          enum_i_vals=(/ec_diagonalization, ec_matrix_sign, &
-                                        ec_matrix_trs4, ec_matrix_tc2, ec_ot_diag/))
+                          enum_i_vals=[ec_diagonalization, ec_matrix_sign, &
+                                       ec_matrix_trs4, ec_matrix_tc2, ec_ot_diag])
       CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
 
@@ -195,7 +218,7 @@ CONTAINS
                           default_i_val=kg_cholesky, &
                           enum_c_vals=s2a("CHOLESKY"), &
                           enum_desc=s2a("Cholesky factorization of overlap matrix"), &
-                          enum_i_vals=(/kg_cholesky/))
+                          enum_i_vals=[kg_cholesky])
       CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
 
@@ -246,7 +269,7 @@ CONTAINS
                           enum_desc=s2a("No preconditioner", &
                                         "Using atomic blocks", &
                                         "Using molecular sub-blocks. Recommended if molecules are defined and not too large."), &
-                          enum_i_vals=(/ls_s_preconditioner_none, ls_s_preconditioner_atomic, ls_s_preconditioner_molecular/))
+                          enum_i_vals=[ls_s_preconditioner_none, ls_s_preconditioner_atomic, ls_s_preconditioner_molecular])
       CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
 
@@ -257,7 +280,7 @@ CONTAINS
                           enum_c_vals=s2a("NEWTONSCHULZ", "PROOT"), &
                           enum_desc=s2a("Using a Newton-Schulz-like iteration", &
                                         "Using the p-th root method."), &
-                          enum_i_vals=(/ls_s_sqrt_ns, ls_s_sqrt_proot/))
+                          enum_i_vals=[ls_s_sqrt_ns, ls_s_sqrt_proot])
       CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
 
@@ -272,11 +295,11 @@ CONTAINS
                           description="Method used for the computation of the sign matrix.", &
                           usage="SIGN_METHOD NEWTONSCHULZ", &
                           default_i_val=ls_scf_sign_ns, &
-                          citations=(/VandeVondele2012, Niklasson2003/), &
+                          citations=[VandeVondele2012, Niklasson2003], &
                           enum_c_vals=s2a("NEWTONSCHULZ", "PROOT"), &
                           enum_desc=s2a("Newton-Schulz iteration.", &
                                         "p-th order root iteration"), &
-                          enum_i_vals=(/ls_scf_sign_ns, ls_scf_sign_proot/))
+                          enum_i_vals=[ls_scf_sign_ns, ls_scf_sign_proot])
       CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
 
@@ -310,18 +333,18 @@ CONTAINS
          enum_c_vals=s2a("ATOMIC", "MOLECULAR"), &
          enum_desc=s2a("Using atomic blocks", &
                        "Using molecular blocks."), &
-         enum_i_vals=(/ls_cluster_atomic, ls_cluster_molecular/))
+         enum_i_vals=[ls_cluster_atomic, ls_cluster_molecular])
       CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
 
       CALL keyword_create(keyword, __LOCATION__, name="S_INVERSION", &
                           description="Method used to compute the inverse of S.", &
-                          usage="S_PRECONDITIONER MOLECULAR", &
+                          usage="S_INVERSION MOLECULAR", &
                           default_i_val=ls_s_inversion_sign_sqrt, &
                           enum_c_vals=s2a("SIGN_SQRT", "HOTELLING"), &
                           enum_desc=s2a("Using the inverse sqrt as obtained from sign function iterations.", &
                                         "Using the Hotellign iteration."), &
-                          enum_i_vals=(/ls_s_inversion_sign_sqrt, ls_s_inversion_hotelling/))
+                          enum_i_vals=[ls_s_inversion_sign_sqrt, ls_s_inversion_hotelling])
       CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
 
@@ -344,7 +367,7 @@ CONTAINS
                           enum_c_vals=s2a("ATOMIC", "GROUND_STATE"), &
                           enum_desc=s2a("Generate an atomic density using the atomic code", &
                                         "Using the ground-state density."), &
-                          enum_i_vals=(/ec_ot_atomic, ec_ot_gs/))
+                          enum_i_vals=[ec_ot_atomic, ec_ot_gs])
       CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
 
@@ -358,6 +381,59 @@ CONTAINS
          usage="ADMM", &
          default_l_val=.FALSE., &
          lone_keyword_l_val=.TRUE.)
+      CALL section_add_keyword(section, keyword)
+      CALL keyword_release(keyword)
+
+      CALL keyword_create(keyword, __LOCATION__, name="EXTERNAL_RESPONSE_FILENAME", &
+                          description="Name of the file that contains response information.", &
+                          usage="EXTERNAL_RESPONSE_FILENAME <FILENAME>", &
+                          default_c_val="TREXIO")
+      CALL section_add_keyword(section, keyword)
+      CALL keyword_release(keyword)
+
+      CALL keyword_create(keyword, __LOCATION__, name="EXTERNAL_RESPONSE_ERROR_FILENAME", &
+                          description="Name of the file that contains response error information.", &
+                          usage="EXTERNAL_RESPONSE_ERROR_FILENAME <FILENAME>", &
+                          default_c_val="TREXIO")
+      CALL section_add_keyword(section, keyword)
+      CALL keyword_release(keyword)
+
+      CALL keyword_create(keyword, __LOCATION__, name="EXTERNAL_RESULT_FILENAME", &
+                          description="Name of the file that contains results from external response calculation.", &
+                          usage="EXTERNAL_RESULT_FILENAME <FILENAME>", &
+                          default_c_val="CP2K_EXRESP.result")
+      CALL section_add_keyword(section, keyword)
+      CALL keyword_release(keyword)
+
+      CALL keyword_create( &
+         keyword, __LOCATION__, &
+         name="ERROR_ESTIMATION", &
+         description="Perform an error estimation for the response forces/stress. "// &
+         "Requires error estimates for the RHS of the response equation from input. ", &
+         usage="ERROR_ESTIMATION", &
+         default_l_val=.FALSE., &
+         lone_keyword_l_val=.TRUE.)
+      CALL section_add_keyword(section, keyword)
+      CALL keyword_release(keyword)
+
+      CALL keyword_create(keyword, __LOCATION__, name="ERROR_ESTIMATION_METHOD", &
+                          description="Method used for error estimation: F(ull); D(ifferenc); E(xtrapolate).", &
+                          usage="ERROR_ESTIMATION_METHOD E", &
+                          default_c_val="E")
+      CALL section_add_keyword(section, keyword)
+      CALL keyword_release(keyword)
+
+      CALL keyword_create(keyword, __LOCATION__, name="ERROR_CUTOFF", &
+                          description="Cutoff value for error estimation.", &
+                          usage="ERROR_CUTOFF 1.E-6", &
+                          default_r_val=1.E-5_dp)
+      CALL section_add_keyword(section, keyword)
+      CALL keyword_release(keyword)
+
+      CALL keyword_create(keyword, __LOCATION__, name="ERROR_SUBSPACE_SIZE", &
+                          description="MAX. size of subspace for response vector extrapolation.", &
+                          usage="ERROR_SUBSPACE_SIZE 100", &
+                          default_i_val=250)
       CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
 
@@ -377,7 +453,7 @@ CONTAINS
       CALL section_create(section, __LOCATION__, name="RESPONSE_SOLVER", &
                           description="Specifies the parameters of the linear scaling solver routines", &
                           n_keywords=24, n_subsections=3, repeats=.FALSE., &
-                          citations=(/VandeVondele2012/))
+                          citations=[VandeVondele2012])
 
       NULLIFY (keyword)
 
@@ -421,7 +497,7 @@ CONTAINS
                           enum_c_vals=s2a("MO_SOLVER", "AO_ORTHO"), &
                           enum_desc=s2a("Solver based on MO (vector) formalism", &
                                         "Solver based on density matrix formalism"), &
-                          enum_i_vals=(/ec_mo_solver, ec_ls_solver/))
+                          enum_i_vals=[ec_mo_solver, ec_ls_solver])
       CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
 
@@ -448,8 +524,8 @@ CONTAINS
                        "Cholesky inversion of S, not as good as FULL_KINETIC, yet equally expensive.", &
                        "Based on same CG as AO-solver itself, but uses cheaper linear transformation", &
                        "skip preconditioning"), &
-         enum_i_vals=(/ot_precond_full_all, ot_precond_full_single_inverse, ot_precond_full_single, &
-                       ot_precond_full_kinetic, ot_precond_s_inverse, precond_mlp, ot_precond_none/))
+         enum_i_vals=[ot_precond_full_all, ot_precond_full_single_inverse, ot_precond_full_single, &
+                      ot_precond_full_kinetic, ot_precond_s_inverse, precond_mlp, ot_precond_none])
       CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
 
@@ -461,7 +537,7 @@ CONTAINS
                           enum_desc=s2a("No preconditioner", &
                                         "Using atomic blocks", &
                                         "Using molecular sub-blocks. Recommended if molecules are defined and not too large."), &
-                          enum_i_vals=(/ls_s_preconditioner_none, ls_s_preconditioner_atomic, ls_s_preconditioner_molecular/))
+                          enum_i_vals=[ls_s_preconditioner_none, ls_s_preconditioner_atomic, ls_s_preconditioner_molecular])
       CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
 
@@ -472,7 +548,7 @@ CONTAINS
                           enum_c_vals=s2a("NEWTONSCHULZ", "PROOT"), &
                           enum_desc=s2a("Using a Newton-Schulz-like iteration", &
                                         "Using the p-th root method."), &
-                          enum_i_vals=(/ls_s_sqrt_ns, ls_s_sqrt_proot/))
+                          enum_i_vals=[ls_s_sqrt_ns, ls_s_sqrt_proot])
       CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
 
@@ -494,18 +570,18 @@ CONTAINS
          enum_c_vals=s2a("ATOMIC", "MOLECULAR"), &
          enum_desc=s2a("Using atomic blocks", &
                        "Using molecular blocks."), &
-         enum_i_vals=(/ls_cluster_atomic, ls_cluster_molecular/))
+         enum_i_vals=[ls_cluster_atomic, ls_cluster_molecular])
       CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
 
       CALL keyword_create(keyword, __LOCATION__, name="S_INVERSION", &
                           description="Method used to compute the inverse of S.", &
-                          usage="S_PRECONDITIONER MOLECULAR", &
+                          usage="S_INVERSION MOLECULAR", &
                           default_i_val=ls_s_inversion_sign_sqrt, &
                           enum_c_vals=s2a("SIGN_SQRT", "HOTELLING"), &
                           enum_desc=s2a("Using the inverse sqrt as obtained from sign function iterations.", &
                                         "Using the Hotellign iteration."), &
-                          enum_i_vals=(/ls_s_inversion_sign_sqrt, ls_s_inversion_hotelling/))
+                          enum_i_vals=[ls_s_inversion_sign_sqrt, ls_s_inversion_hotelling])
       CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
 
@@ -542,6 +618,13 @@ CONTAINS
 
       NULLIFY (print_key, keyword)
 
+      CALL cp_print_key_section_create(print_key, __LOCATION__, "HARRIS_OUTPUT_WFN", &
+                                       description="Controls printing the Harris output density/wfn "// &
+                                       "information to a [kpoint] restart file.", &
+                                       print_level=debug_print_level + 1, filename="")
+      CALL section_add_subsection(section, print_key)
+      CALL section_release(print_key)
+
       ! Output of BQB volumetric files
       CALL cp_print_key_section_create(print_key, __LOCATION__, name="E_DENSITY_BQB", &
                                        description="Controls the output of the electron density to the losslessly"// &
@@ -549,7 +632,7 @@ CONTAINS
                                        " (via LibBQB see <https://brehm-research.de/bqb>)."// &
                                        " Currently does not work with changing cell vector (NpT ensemble).", &
                                        print_level=debug_print_level + 1, filename="", &
-                                       citations=(/Brehm2018/))
+                                       citations=[Brehm2018])
 
       CALL keyword_create(keyword, __LOCATION__, name="SKIP_FIRST", &
                           description="Skips the first step of a MD run (avoids duplicate step if restarted).", &
@@ -601,7 +684,7 @@ CONTAINS
                           enum_c_vals=s2a("OFF", "QUICK", "NORMAL", "PATIENT", "EXHAUSTIVE"), &
                           enum_desc=s2a("No optimization (use defaults)", "Quick optimization", &
                                         "Standard optimization", "Precise optimization", "Exhaustive optimization"), &
-                          enum_i_vals=(/bqb_opt_off, bqb_opt_quick, bqb_opt_normal, bqb_opt_patient, bqb_opt_exhaustive/))
+                          enum_i_vals=[bqb_opt_off, bqb_opt_quick, bqb_opt_normal, bqb_opt_patient, bqb_opt_exhaustive])
       CALL section_add_keyword(print_key, keyword)
       CALL keyword_release(keyword)
 

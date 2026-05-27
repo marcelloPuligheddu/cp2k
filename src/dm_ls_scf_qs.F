@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2025 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2026 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -19,8 +19,7 @@ MODULE dm_ls_scf_qs
         dbcsr_complete_redistribute, dbcsr_copy, dbcsr_create, dbcsr_desymmetrize, &
         dbcsr_distribution_get, dbcsr_distribution_hold, dbcsr_distribution_new, &
         dbcsr_distribution_release, dbcsr_distribution_type, dbcsr_finalize, dbcsr_get_info, &
-        dbcsr_multiply, dbcsr_nblkrows_total, dbcsr_p_type, dbcsr_release, dbcsr_set, dbcsr_type, &
-        dbcsr_type_real_8
+        dbcsr_multiply, dbcsr_p_type, dbcsr_release, dbcsr_set, dbcsr_type
    USE cp_dbcsr_cp2k_link,              ONLY: cp_dbcsr_alloc_block_from_nbl
    USE cp_dbcsr_operations,             ONLY: dbcsr_allocate_matrix_set
    USE cp_log_handling,                 ONLY: cp_get_default_logger,&
@@ -72,6 +71,8 @@ MODULE dm_ls_scf_qs
                                               qs_rho_type
    USE qs_subsys_types,                 ONLY: qs_subsys_get,&
                                               qs_subsys_type
+   USE tblite_interface,                ONLY: tb_get_energy
+   USE tblite_types,                    ONLY: tblite_type
 #include "./base/base_uses.f90"
 
    IMPLICIT NONE
@@ -103,8 +104,7 @@ CONTAINS
       CHARACTER(len=*), PARAMETER                        :: routineN = 'matrix_ls_create'
 
       CHARACTER(len=default_string_length)               :: name
-      INTEGER                                            :: handle, iatom, imol, jatom, &
-                                                            ls_data_type, natom, nmol
+      INTEGER                                            :: handle, iatom, imol, jatom, natom, nmol
       INTEGER, ALLOCATABLE, DIMENSION(:), TARGET         :: atom_to_cluster, atom_to_cluster_primus, &
                                                             clustered_blk_sizes, primus_of_mol
       INTEGER, DIMENSION(:), POINTER                     :: clustered_col_dist, clustered_row_dist, &
@@ -117,7 +117,6 @@ CONTAINS
       CALL dbcsr_get_info(matrix_qs, col_blk_size=ls_blk_sizes, distribution=ls_dist)
       CALL dbcsr_distribution_hold(ls_dist)
       CALL dbcsr_distribution_get(ls_dist, row_dist=ls_row_dist, col_dist=ls_col_dist)
-      ls_data_type = dbcsr_type_real_8
 
       ! PAO ----------------------------------------------------------------------------------------
       IF (ls_mstruct%do_pao) THEN
@@ -130,7 +129,7 @@ CONTAINS
          ! do nothing
       CASE (ls_cluster_molecular)
          ! create format of the clustered matrix
-         natom = dbcsr_nblkrows_total(matrix_qs)
+         CALL dbcsr_get_info(matrix_qs, nblkrows_total=natom)
          nmol = MAXVAL(ls_mstruct%atom_to_molecule)
          ALLOCATE (atom_to_cluster_primus(natom))
          ALLOCATE (atom_to_cluster(natom))
@@ -189,7 +188,6 @@ CONTAINS
                         name=name, &
                         dist=ls_dist, &
                         matrix_type="S", &
-                        data_type=ls_data_type, &
                         row_blk_size=ls_blk_sizes, &
                         col_blk_size=ls_blk_sizes)
       CALL dbcsr_distribution_release(ls_dist)
@@ -273,7 +271,7 @@ CONTAINS
 
       SELECT CASE (ls_mstruct%cluster_type)
       CASE (ls_cluster_atomic)
-         CALL dbcsr_copy(matrix_out, matrix_in) ! takes care of an eventual data_type conversion
+         CALL dbcsr_copy(matrix_out, matrix_in)
 
       CASE (ls_cluster_molecular)
          ! desymmetrize the qs matrix
@@ -281,7 +279,7 @@ CONTAINS
          CALL dbcsr_desymmetrize(matrix_in, matrix_in_nosym)
 
          ! perform the magic complete redistribute copy
-         CALL dbcsr_complete_redistribute(matrix_in_nosym, matrix_out); 
+         CALL dbcsr_complete_redistribute(matrix_in_nosym, matrix_out)
          CALL dbcsr_release(matrix_in_nosym)
 
       CASE DEFAULT
@@ -377,7 +375,7 @@ CONTAINS
 
       SELECT CASE (ls_mstruct%cluster_type)
       CASE (ls_cluster_atomic)
-         CALL dbcsr_copy(matrix_out, matrix_in) ! takes care of an eventual data_type conversion
+         CALL dbcsr_copy(matrix_out, matrix_in)
 
       CASE (ls_cluster_molecular)
          ! perform the magic complete redistribute copy
@@ -526,6 +524,7 @@ CONTAINS
          CALL qs_rho_update_rho(rho, qs_env=qs_env)
          CALL qs_ks_did_change(qs_env%ks_env, rho_changed=.TRUE.)
          CALL qs_ks_update_qs_env(qs_env, calculate_forces=.FALSE., just_energy=.FALSE.)
+         CALL ls_scf_tblite_energy(qs_env, qs_energy)
          energy = qs_energy%total
       ELSE
          CALL ls_nonscf_ks(qs_env, ls_scf_env, energy)
@@ -584,10 +583,10 @@ CONTAINS
       ! compute the corresponding KS matrix and new energy, mix density if requested
       CALL qs_rho_update_rho(rho, qs_env=qs_env)
       IF (ls_scf_env%do_rho_mixing) THEN
-         IF (ls_scf_env%density_mixing_method .EQ. direct_mixing_nr) &
+         IF (ls_scf_env%density_mixing_method == direct_mixing_nr) &
             CPABORT("Direct P mixing not implemented in linear scaling SCF. ")
          IF (ls_scf_env%density_mixing_method >= gspace_mixing_nr) THEN
-            IF (iscf .GT. MAX(ls_scf_env%mixing_store%nskip_mixing, 1)) THEN
+            IF (iscf > MAX(ls_scf_env%mixing_store%nskip_mixing, 1)) THEN
                CALL gspace_mixing(qs_env, ls_scf_env%density_mixing_method, &
                                   ls_scf_env%mixing_store, rho, para_env, &
                                   iscf - 1)
@@ -610,6 +609,7 @@ CONTAINS
       CALL qs_ks_did_change(qs_env%ks_env, rho_changed=.TRUE.)
       CALL qs_ks_update_qs_env(qs_env, calculate_forces=.FALSE., &
                                just_energy=.FALSE., print_active=.TRUE.)
+      CALL ls_scf_tblite_energy(qs_env, energy)
       energy_new = energy%total
 
       CALL timestop(handle)
@@ -662,6 +662,7 @@ CONTAINS
       CALL qs_ks_did_change(qs_env%ks_env, rho_changed=.TRUE.)
       CALL qs_ks_update_qs_env(qs_env, calculate_forces=.FALSE., &
                                just_energy=.FALSE., print_active=.TRUE.)
+      CALL ls_scf_tblite_energy(qs_env, energy)
       energy_new = energy%total
 
       CALL timestop(handle)
@@ -705,7 +706,7 @@ CONTAINS
 
       ! band energy : Tr(PH)
       CALL get_qs_env(qs_env, matrix_ks=matrix_ks)
-      CALL calculate_ptrace(matrix_ks, rho_ao, energy%band, nspin)
+      CALL calculate_ptrace(matrix_ks, rho_ao, energy%band, nspin, .TRUE.)
       ! core energy : Tr(Ph)
       energy%total = energy%total - energy%core
       CALL get_qs_env(qs_env, matrix_h=matrix_h)
@@ -714,6 +715,28 @@ CONTAINS
       CALL timestop(handle)
 
    END SUBROUTINE ls_nonscf_energy
+
+! **************************************************************************************************
+!> \brief update CP2K/tblite total energy after an LS_SCF KS rebuild.
+!> \param qs_env ...
+!> \param energy ...
+! **************************************************************************************************
+   SUBROUTINE ls_scf_tblite_energy(qs_env, energy)
+      TYPE(qs_environment_type), POINTER                 :: qs_env
+      TYPE(qs_energy_type), POINTER                      :: energy
+
+      TYPE(dft_control_type), POINTER                    :: dft_control
+      TYPE(tblite_type), POINTER                         :: tb
+
+      NULLIFY (dft_control, tb)
+      CALL get_qs_env(qs_env, dft_control=dft_control, tb_tblite=tb)
+
+      IF (dft_control%qs_control%xtb .AND. dft_control%qs_control%xtb_control%do_tblite) THEN
+         CPASSERT(ASSOCIATED(tb))
+         CALL tb_get_energy(qs_env, tb, energy)
+      END IF
+
+   END SUBROUTINE ls_scf_tblite_energy
 
 ! **************************************************************************************************
 !> \brief ...

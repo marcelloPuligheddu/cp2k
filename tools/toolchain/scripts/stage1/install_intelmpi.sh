@@ -15,9 +15,6 @@ source "${INSTALLDIR}"/toolchain.env
 [ ${MPI_MODE} != "intelmpi" ] && exit 0
 rm -f "${BUILDDIR}/setup_intelmpi"
 
-INTELMPI_CFLAGS=""
-INTELMPI_LDFLAGS=""
-INTELMPI_LIBS=""
 mkdir -p "${BUILDDIR}"
 cd "${BUILDDIR}"
 
@@ -29,16 +26,16 @@ case "${with_intelmpi}" in
     ;;
   __SYSTEM__)
     echo "==================== Finding Intel MPI from system paths ===================="
-    check_command mpiexec "intelmpi" && MPIEXEC="$(realpath $(command -v mpiexec))"
+    check_command mpiexec "intelmpi" && MPIEXEC="$(real_path $(command -v mpiexec))"
     if [ "${with_intel}" != "__DONTUSE__" ]; then
       if [ "${with_ifx}" = "yes" ]; then
-        check_command mpiicx "intelmpi" && MPICC="$(realpath $(command -v mpiicx))" || exit 1
-        check_command mpiicpx "intelmpi" && MPICXX="$(realpath $(command -v mpiicpx))" || exit 1
-        check_command mpiifx "intelmpi" && MPIFC="$(realpath $(command -v mpiifx))" || exit 1
+        check_command mpiicx "intelmpi" && MPICC="$(real_path $(command -v mpiicx))" || exit 1
+        check_command mpiicpx "intelmpi" && MPICXX="$(real_path $(command -v mpiicpx))" || exit 1
+        check_command mpiifx "intelmpi" && MPIFC="$(real_path $(command -v mpiifx))" || exit 1
       else
-        check_command mpiicc "intelmpi" && MPICC="$(realpath $(command -v mpiicc))" || exit 1
-        check_command mpiicpc "intelmpi" && MPICXX="$(realpath $(command -v mpiicpc))" || exit 1
-        check_command mpiifort "intelmpi" && MPIFC="$(realpath $(command -v mpiifort))" || exit 1
+        check_command mpiicc "intelmpi" && MPICC="$(real_path $(command -v mpiicc))" || exit 1
+        check_command mpiicpc "intelmpi" && MPICXX="$(real_path $(command -v mpiicpc))" || exit 1
+        check_command mpiifort "intelmpi" && MPIFC="$(real_path $(command -v mpiifort))" || exit 1
       fi
     else
       echo "The use of Intel MPI is only supported with the Intel compiler"
@@ -56,7 +53,7 @@ case "${with_intelmpi}" in
     # Nothing to do
     ;;
   *)
-    echo "==================== Linking INTELMPI to user paths ===================="
+    echo "==================== Linking Intel MPI to user paths ===================="
     pkg_install_dir="${with_intelmpi}"
     check_dir "${pkg_install_dir}/bin"
     check_dir "${pkg_install_dir}/lib"
@@ -123,7 +120,7 @@ prepend_path LIBRARY_PATH "${pkg_install_dir}/lib"
 prepend_path CPATH "${pkg_install_dir}/include"
 EOF
   fi
-  cat "${BUILDDIR}/setup_intelmpi" >> ${SETUPFILE}
+  filter_setup "${BUILDDIR}/setup_intelmpi" "${SETUPFILE}"
 fi
 
 load "${BUILDDIR}/setup_intelmpi"

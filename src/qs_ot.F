@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2025 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2026 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -15,15 +15,19 @@
 MODULE qs_ot
    USE arnoldi_api,                     ONLY: arnoldi_extremal
    USE cp_dbcsr_api,                    ONLY: &
-        dbcsr_add, dbcsr_add_on_diag, dbcsr_copy, dbcsr_distribution_type, dbcsr_filter, &
-        dbcsr_frobenius_norm, dbcsr_gershgorin_norm, dbcsr_get_block_p, dbcsr_get_info, &
-        dbcsr_get_occupation, dbcsr_hadamard_product, dbcsr_init_p, dbcsr_iterator_blocks_left, &
+        dbcsr_add, dbcsr_copy, dbcsr_distribution_type, dbcsr_filter, dbcsr_get_block_p, &
+        dbcsr_get_info, dbcsr_get_occupation, dbcsr_init_p, dbcsr_iterator_blocks_left, &
         dbcsr_iterator_next_block, dbcsr_iterator_start, dbcsr_iterator_stop, dbcsr_iterator_type, &
-        dbcsr_multiply, dbcsr_release, dbcsr_release_p, dbcsr_scale, dbcsr_scale_by_vector, &
-        dbcsr_set, dbcsr_transposed, dbcsr_type
+        dbcsr_multiply, dbcsr_release, dbcsr_release_p, dbcsr_scale, dbcsr_set, dbcsr_transposed, &
+        dbcsr_type
    USE cp_dbcsr_cholesky,               ONLY: cp_dbcsr_cholesky_decompose,&
                                               cp_dbcsr_cholesky_invert,&
                                               cp_dbcsr_cholesky_restore
+   USE cp_dbcsr_contrib,                ONLY: dbcsr_add_on_diag,&
+                                              dbcsr_frobenius_norm,&
+                                              dbcsr_gershgorin_norm,&
+                                              dbcsr_hadamard_product,&
+                                              dbcsr_scale_by_vector
    USE cp_dbcsr_diag,                   ONLY: cp_dbcsr_heevd,&
                                               cp_dbcsr_syevd
    USE kinds,                           ONLY: dp
@@ -112,9 +116,9 @@ CONTAINS
       INTEGER, PARAMETER                                 :: taylor_order = 50
       REAL(KIND=dp), PARAMETER                           :: alpha = 0.1_dp, f2_eps = 0.01_dp
 
-      INTEGER                                            :: blk, col, col_size, group_handle, &
-                                                            handle, i, k, n, p, row, row_size
-      REAL(dp), DIMENSION(:, :), POINTER                 :: DATA
+      INTEGER                                            :: col, col_size, handle, i, k, n, p, row, &
+                                                            row_size
+      REAL(dp), DIMENSION(:, :), POINTER                 :: block
       REAL(KIND=dp)                                      :: expfactor, f2, norm_fro, norm_gct, tmp
       TYPE(dbcsr_distribution_type)                      :: dist
       TYPE(dbcsr_iterator_type)                          :: iter
@@ -140,19 +144,17 @@ CONTAINS
       CALL dbcsr_copy(C, C_NEW)
       CALL dbcsr_iterator_start(iter, C)
       DO WHILE (dbcsr_iterator_blocks_left(iter))
-         CALL dbcsr_iterator_next_block(iter, row, col, DATA, blk, &
-                                        row_size=row_size, col_size=col_size)
+         CALL dbcsr_iterator_next_block(iter, row, col, block, row_size=row_size, col_size=col_size)
          DO p = 1, col_size ! p
          DO i = 1, row_size ! i
-            tmp = SQRT(DATA(i, p)**2 + f2_eps)
+            tmp = SQRT(block(i, p)**2 + f2_eps)
             f2 = f2 + tmp
-            DATA(i, p) = DATA(i, p)/tmp
+            block(i, p) = block(i, p)/tmp
          END DO
          END DO
       END DO
       CALL dbcsr_iterator_stop(iter)
-      CALL dbcsr_get_info(C, group=group_handle)
-      CALL group%set_handle(group_handle)
+      CALL dbcsr_get_info(C, group=group)
       CALL group%sum(f2)
       !
       !
@@ -194,7 +196,7 @@ CONTAINS
          CALL dbcsr_add(U, Gp1, alpha_scalar=1.0_dp, beta_scalar=expfactor)
          norm_fro = dbcsr_frobenius_norm(Gp1)
          !write(*,*) 'Taylor expansion i=',i,' norm(X^i)/i!=',norm_fro*expfactor
-         IF (norm_fro*expfactor .LT. 1.0E-10_dp) EXIT
+         IF (norm_fro*expfactor < 1.0E-10_dp) EXIT
       END DO
       !
       ! rotate MOs
@@ -293,9 +295,9 @@ CONTAINS
       !
       ! compute the P^(-1/2)
       DO i = 1, k
-         IF (eig(i) .LE. 0.0_dp) &
+         IF (eig(i) <= 0.0_dp) &
             CPABORT("P not positive definite")
-         IF (eig(i) .LT. 1.0E-8_dp) THEN
+         IF (eig(i) < 1.0E-8_dp) THEN
             fun(i) = 0.0_dp
          ELSE
             fun(i) = 1.0_dp/SQRT(eig(i))
@@ -361,14 +363,14 @@ CONTAINS
       !
       ! can we do a quick exit?
       quick_exit = .FALSE.
-      IF (norm .LT. qs_ot_env%settings%eps_irac_quick_exit) quick_exit = .TRUE.
+      IF (norm < qs_ot_env%settings%eps_irac_quick_exit) quick_exit = .TRUE.
       !
       ! lets refine
       rescale = 1.0_dp
       DO irefine = 1, qs_ot_env%settings%max_irac
          !
          ! rescaling
-         IF (norm .GT. 1.0_dp) THEN
+         IF (norm > 1.0_dp) THEN
             CALL dbcsr_scale(P, 1.0_dp/norm)
             rescale = rescale/SQRT(norm)
          END IF
@@ -378,11 +380,11 @@ CONTAINS
                            qs_ot_env%settings%eps_irac_filter_matrix)
          !
          ! collect the transformation
-         IF (irefine .EQ. 1) THEN
+         IF (irefine == 1) THEN
             CALL dbcsr_copy(FT, FY, name='FT')
          ELSE
             CALL dbcsr_multiply('N', 'N', 1.0_dp, FT, FY, 0.0_dp, BUF1)
-            IF (qs_ot_env%settings%eps_irac_filter_matrix .GT. 0.0_dp) THEN
+            IF (qs_ot_env%settings%eps_irac_filter_matrix > 0.0_dp) THEN
                occ_in = dbcsr_get_occupation(buf1)
                CALL dbcsr_filter(buf1, qs_ot_env%settings%eps_irac_filter_matrix)
                occ_out = dbcsr_get_occupation(buf1)
@@ -397,13 +399,13 @@ CONTAINS
          !
          ! P = FY^T * P * FY
          CALL dbcsr_multiply('N', 'N', 1.0_dp, P, FY, 0.0_dp, BUF_NOSYM)
-         IF (qs_ot_env%settings%eps_irac_filter_matrix .GT. 0.0_dp) THEN
+         IF (qs_ot_env%settings%eps_irac_filter_matrix > 0.0_dp) THEN
             occ_in = dbcsr_get_occupation(buf_nosym)
             CALL dbcsr_filter(buf_nosym, qs_ot_env%settings%eps_irac_filter_matrix)
             occ_out = dbcsr_get_occupation(buf_nosym)
          END IF
          CALL dbcsr_multiply('N', 'N', 1.0_dp, FY, BUF_NOSYM, 0.0_dp, P)
-         IF (qs_ot_env%settings%eps_irac_filter_matrix .GT. 0.0_dp) THEN
+         IF (qs_ot_env%settings%eps_irac_filter_matrix > 0.0_dp) THEN
             occ_in = dbcsr_get_occupation(p)
             CALL dbcsr_filter(p, qs_ot_env%settings%eps_irac_filter_matrix)
             occ_out = dbcsr_get_occupation(p)
@@ -427,16 +429,16 @@ CONTAINS
          END IF
          !
          ! can we do a quick exit next step?
-         IF (norm .LT. qs_ot_env%settings%eps_irac_quick_exit) quick_exit = .TRUE.
+         IF (norm < qs_ot_env%settings%eps_irac_quick_exit) quick_exit = .TRUE.
          !
          ! are we done?
-         IF (norm .LT. qs_ot_env%settings%eps_irac) EXIT
+         IF (norm < qs_ot_env%settings%eps_irac) EXIT
          !
       END DO
       !
       ! C_NEW = C_NEW * FT * rescale
       CALL dbcsr_multiply('N', 'N', rescale, C_OLD, FT, 0.0_dp, C_NEW)
-      IF (qs_ot_env%settings%eps_irac_filter_matrix .GT. 0.0_dp) THEN
+      IF (qs_ot_env%settings%eps_irac_filter_matrix > 0.0_dp) THEN
          occ_in = dbcsr_get_occupation(c_new)
          CALL dbcsr_filter(c_new, qs_ot_env%settings%eps_irac_filter_matrix)
          occ_out = dbcsr_get_occupation(c_new)
@@ -445,7 +447,7 @@ CONTAINS
       ! update SC = SC * FY * rescale
       IF (update) THEN
          CALL dbcsr_multiply('N', 'N', rescale, SC, FT, 0.0_dp, C_TMP)
-         IF (qs_ot_env%settings%eps_irac_filter_matrix .GT. 0.0_dp) THEN
+         IF (qs_ot_env%settings%eps_irac_filter_matrix > 0.0_dp) THEN
             occ_in = dbcsr_get_occupation(c_tmp)
             CALL dbcsr_filter(c_tmp, qs_ot_env%settings%eps_irac_filter_matrix)
             occ_out = dbcsr_get_occupation(c_tmp)
@@ -471,7 +473,7 @@ CONTAINS
       CASE ("CG")
          SELECT CASE (qs_ot_env1%settings%line_search_method)
          CASE ("2PNT")
-            IF (qs_ot_env1%line_search_count .EQ. 2) update = .TRUE.
+            IF (qs_ot_env1%line_search_count == 2) update = .TRUE.
          CASE DEFAULT
             CPABORT("NYI")
          END SELECT
@@ -495,7 +497,7 @@ CONTAINS
       CHARACTER(LEN=*), INTENT(INOUT)                    :: ortho_irac
 
       ortho_irac = qs_ot_env1%settings%ortho_irac
-      IF (norm_in .LT. qs_ot_env1%settings%eps_irac_switch) ortho_irac = "POLY"
+      IF (norm_in < qs_ot_env1%settings%eps_irac_switch) ortho_irac = "POLY"
    END SUBROUTINE qs_ot_ref_decide
 
 ! **************************************************************************************************
@@ -550,7 +552,7 @@ CONTAINS
       ! compute SC = S*C
       IF (ASSOCIATED(S)) THEN
          CALL dbcsr_multiply('N', 'N', 1.0_dp, S, C_OLD, 0.0_dp, SC)
-         IF (qs_ot_env1%settings%eps_irac_filter_matrix .GT. 0.0_dp) THEN
+         IF (qs_ot_env1%settings%eps_irac_filter_matrix > 0.0_dp) THEN
             occ_in = dbcsr_get_occupation(sc)
             CALL dbcsr_filter(sc, qs_ot_env1%settings%eps_irac_filter_matrix)
             occ_out = dbcsr_get_occupation(sc)
@@ -561,7 +563,7 @@ CONTAINS
       !
       ! compute P = C'*SC
       CALL dbcsr_multiply('T', 'N', 1.0_dp, C_OLD, SC, 0.0_dp, P)
-      IF (qs_ot_env1%settings%eps_irac_filter_matrix .GT. 0.0_dp) THEN
+      IF (qs_ot_env1%settings%eps_irac_filter_matrix > 0.0_dp) THEN
          occ_in = dbcsr_get_occupation(p)
          CALL dbcsr_filter(p, qs_ot_env1%settings%eps_irac_filter_matrix)
          occ_out = dbcsr_get_occupation(p)
@@ -625,7 +627,7 @@ CONTAINS
          ! C_out = C_in * ( 15/8 * I - 10/8 * P + 3/8 * P^2)
          r = 3.0_dp/8.0_dp
          CALL dbcsr_multiply('N', 'N', r, P, P, 0.0_dp, FY)
-         IF (eps_irac_filter_matrix .GT. 0.0_dp) THEN
+         IF (eps_irac_filter_matrix > 0.0_dp) THEN
             occ_in = dbcsr_get_occupation(fy)
             CALL dbcsr_filter(fy, eps_irac_filter_matrix)
             occ_out = dbcsr_get_occupation(fy)
@@ -633,18 +635,18 @@ CONTAINS
          r = -10.0_dp/8.0_dp
          CALL dbcsr_add(FY, P, alpha_scalar=1.0_dp, beta_scalar=r)
          r = 15.0_dp/8.0_dp
-         CALL dbcsr_add_on_diag(FY, alpha_scalar=r)
+         CALL dbcsr_add_on_diag(FY, alpha=r)
       CASE (3)
          ! C_out = C_in * ( 35/16 * I - 35/16 * P + 21/16 * P^2 - 5/16 P^3)
          CALL dbcsr_multiply('N', 'N', 1.0_dp, P, P, 0.0_dp, P2)
-         IF (eps_irac_filter_matrix .GT. 0.0_dp) THEN
+         IF (eps_irac_filter_matrix > 0.0_dp) THEN
             occ_in = dbcsr_get_occupation(p2)
             CALL dbcsr_filter(p2, eps_irac_filter_matrix)
             occ_out = dbcsr_get_occupation(p2)
          END IF
          r = -5.0_dp/16.0_dp
          CALL dbcsr_multiply('N', 'N', r, P2, P, 0.0_dp, FY)
-         IF (eps_irac_filter_matrix .GT. 0.0_dp) THEN
+         IF (eps_irac_filter_matrix > 0.0_dp) THEN
             occ_in = dbcsr_get_occupation(fy)
             CALL dbcsr_filter(fy, eps_irac_filter_matrix)
             occ_out = dbcsr_get_occupation(fy)
@@ -654,12 +656,12 @@ CONTAINS
          r = -35.0_dp/16.0_dp
          CALL dbcsr_add(FY, P, alpha_scalar=1.0_dp, beta_scalar=r)
          r = 35.0_dp/16.0_dp
-         CALL dbcsr_add_on_diag(FY, alpha_scalar=r)
+         CALL dbcsr_add_on_diag(FY, alpha=r)
       CASE (4)
          ! C_out = C_in * ( 315/128 * I - 420/128 * P + 378/128 * P^2 - 180/128 P^3 + 35/128 P^4 )
          !       = C_in * ( 315/128 * I - 420/128 * P + 378/128 * P^2 + ( - 180/128 * P + 35/128 * P^2 ) * P^2 )
          CALL dbcsr_multiply('N', 'N', 1.0_dp, P, P, 0.0_dp, P2) ! P^2
-         IF (eps_irac_filter_matrix .GT. 0.0_dp) THEN
+         IF (eps_irac_filter_matrix > 0.0_dp) THEN
             occ_in = dbcsr_get_occupation(p2)
             CALL dbcsr_filter(p2, eps_irac_filter_matrix)
             occ_out = dbcsr_get_occupation(p2)
@@ -669,7 +671,7 @@ CONTAINS
          r = 35.0_dp/128.0_dp
          CALL dbcsr_add(T, P2, alpha_scalar=1.0_dp, beta_scalar=r) ! T=T+35/128*P^2
          CALL dbcsr_multiply('N', 'N', 1.0_dp, T, P2, 0.0_dp, FY) ! Y=T*P^2
-         IF (eps_irac_filter_matrix .GT. 0.0_dp) THEN
+         IF (eps_irac_filter_matrix > 0.0_dp) THEN
             occ_in = dbcsr_get_occupation(fy)
             CALL dbcsr_filter(fy, eps_irac_filter_matrix)
             occ_out = dbcsr_get_occupation(fy)
@@ -679,7 +681,7 @@ CONTAINS
          r = -420.0_dp/128.0_dp
          CALL dbcsr_add(FY, P, alpha_scalar=1.0_dp, beta_scalar=r) ! Y=Y-420/128*P
          r = 315.0_dp/128.0_dp
-         CALL dbcsr_add_on_diag(FY, alpha_scalar=r) ! Y=Y+315/128*I
+         CALL dbcsr_add_on_diag(FY, alpha=r) ! Y=Y+315/128*I
       CASE DEFAULT
          CPABORT("This irac_order NYI")
       END SELECT
@@ -718,14 +720,14 @@ CONTAINS
 
       ! C'*(H*C)
       CALL dbcsr_multiply('T', 'N', 1.0_dp, C, HC, 0.0_dp, CHC)
-      IF (qs_ot_env%settings%eps_irac_filter_matrix .GT. 0.0_dp) THEN
+      IF (qs_ot_env%settings%eps_irac_filter_matrix > 0.0_dp) THEN
          occ_in = dbcsr_get_occupation(chc)
          CALL dbcsr_filter(chc, qs_ot_env%settings%eps_irac_filter_matrix)
          occ_out = dbcsr_get_occupation(chc)
       END IF
       ! (S*C)*(C'*H*C)
       CALL dbcsr_multiply('N', 'N', 1.0_dp, SC, CHC, 0.0_dp, G)
-      IF (qs_ot_env%settings%eps_irac_filter_matrix .GT. 0.0_dp) THEN
+      IF (qs_ot_env%settings%eps_irac_filter_matrix > 0.0_dp) THEN
          occ_in = dbcsr_get_occupation(g)
          CALL dbcsr_filter(g, qs_ot_env%settings%eps_irac_filter_matrix)
          occ_out = dbcsr_get_occupation(g)
@@ -869,7 +871,7 @@ CONTAINS
       TYPE(dbcsr_iterator_type)                :: iter
       INTEGER, DIMENSION(:), POINTER           :: row_blk_offset, col_blk_offset
       REAL(dp), DIMENSION(:, :), POINTER       :: block_in_re, block_in_im, block_out_re, block_out_im
-      INTEGER                                  :: row, col, blk
+      INTEGER                                  :: row, col
       LOGICAL                                  :: found
       COMPLEX(dp)                              :: cval_in, cval_out
       TYPE(dbcsr_distribution_type)            :: dist
@@ -901,7 +903,7 @@ CONTAINS
          CALL dbcsr_get_info(qs_ot_env%rot_mat_dedu, row_blk_offset=row_blk_offset, col_blk_offset=col_blk_offset)
          CALL dbcsr_iterator_start(iter, qs_ot_env%rot_mat_dedu)
          DO WHILE (dbcsr_iterator_blocks_left(iter))
-            CALL dbcsr_iterator_next_block(iter, row, col, blk)
+            CALL dbcsr_iterator_next_block(iter, row, col)
             CALL dbcsr_get_block_p(inner_deriv_re, row, col, block_in_re, found)
             CALL dbcsr_get_block_p(inner_deriv_im, row, col, block_in_im, found)
             CALL dbcsr_get_block_p(outer_deriv_re, row, col, block_out_re, found)
@@ -963,7 +965,7 @@ CONTAINS
 
          l1 = (0.0_dp, -1.0_dp)*e1
          l2 = (0.0_dp, -1.0_dp)*e2
-         IF (ABS(l1 - l2) .GT. 0.5_dp) THEN
+         IF (ABS(l1 - l2) > 0.5_dp) THEN
             cint = (EXP(l1) - EXP(l2))/(l1 - l2)
          ELSE
             x = 1.0_dp
@@ -1127,7 +1129,7 @@ CONTAINS
                                           para_env=qs_ot_env%para_env, blacs_env=qs_ot_env%blacs_env)
          CALL cp_dbcsr_cholesky_invert(qs_ot_env%matrix_os, &
                                        para_env=qs_ot_env%para_env, blacs_env=qs_ot_env%blacs_env, &
-                                       upper_to_full=.TRUE.)
+                                       uplo_to_full=.TRUE.)
          qs_ot_env%os_valid = .TRUE.
       END IF
       CALL dbcsr_multiply('T', 'N', rone, matrix_target, matrix_gx, &
@@ -1253,7 +1255,7 @@ CONTAINS
       ! this de/dc*(dX/dx)*sinp i.e. zeroth order
       CALL dbcsr_multiply('N', 'N', rone, matrix_hc, qs_ot_env%matrix_sinp, rzero, matrix_gx)
 
-      IF (qs_ot_env%taylor_order .LE. 0) THEN
+      IF (qs_ot_env%taylor_order <= 0) THEN
          CALL timestop(handle)
          RETURN
       END IF
@@ -1351,7 +1353,7 @@ CONTAINS
       CALL dbcsr_add_on_diag(qs_ot_env%matrix_cosp, rone)
       CALL dbcsr_add_on_diag(qs_ot_env%matrix_sinp, rone)
 
-      IF (qs_ot_env%taylor_order .LE. 0) THEN
+      IF (qs_ot_env%taylor_order <= 0) THEN
          CALL timestop(handle)
          RETURN
       END IF
@@ -1361,7 +1363,7 @@ CONTAINS
       sinfactor = -1.0_dp/(2.0_dp*3.0_dp)
       CALL dbcsr_add(qs_ot_env%matrix_cosp, qs_ot_env%matrix_p, alpha_scalar=1.0_dp, beta_scalar=cosfactor)
       CALL dbcsr_add(qs_ot_env%matrix_sinp, qs_ot_env%matrix_p, alpha_scalar=1.0_dp, beta_scalar=sinfactor)
-      IF (qs_ot_env%taylor_order .LE. 1) THEN
+      IF (qs_ot_env%taylor_order <= 1) THEN
          CALL timestop(handle)
          RETURN
       END IF
@@ -1403,9 +1405,9 @@ CONTAINS
       CHARACTER(len=*), PARAMETER                        :: routineN = 'qs_ot_p2m_diag'
       REAL(KIND=dp), PARAMETER                           :: rone = 1.0_dp, rzero = 0.0_dp
 
-      INTEGER                                            :: blk, col, col_offset, col_size, handle, &
-                                                            i, j, k, row, row_offset, row_size
-      REAL(dp), DIMENSION(:, :), POINTER                 :: DATA
+      INTEGER                                            :: col, col_offset, col_size, handle, i, j, &
+                                                            k, row, row_offset, row_size
+      REAL(dp), DIMENSION(:, :), POINTER                 :: block
       REAL(KIND=dp)                                      :: a, b
       TYPE(dbcsr_iterator_type)                          :: iter
 
@@ -1440,8 +1442,8 @@ CONTAINS
       CALL dbcsr_copy(qs_ot_env%matrix_cosp_b, qs_ot_env%matrix_cosp)
       CALL dbcsr_iterator_start(iter, qs_ot_env%matrix_cosp_b)
       DO WHILE (dbcsr_iterator_blocks_left(iter))
-         CALL dbcsr_iterator_next_block(iter, row, col, DATA, &
-                                        block_number=blk, row_size=row_size, col_size=col_size, &
+         CALL dbcsr_iterator_next_block(iter, row, col, block, &
+                                        row_size=row_size, col_size=col_size, &
                                         row_offset=row_offset, col_offset=col_offset)
          DO j = 1, col_size
          DO i = 1, row_size
@@ -1449,7 +1451,7 @@ CONTAINS
                  - SQRT(qs_ot_env%evals(col_offset + j - 1)))/2.0_dp
             b = (SQRT(qs_ot_env%evals(row_offset + i - 1)) &
                  + SQRT(qs_ot_env%evals(col_offset + j - 1)))/2.0_dp
-            DATA(i, j) = -0.5_dp*qs_ot_sinc(a)*qs_ot_sinc(b)
+            block(i, j) = -0.5_dp*qs_ot_sinc(a)*qs_ot_sinc(b)
          END DO
          END DO
       END DO
@@ -1458,14 +1460,14 @@ CONTAINS
       CALL dbcsr_copy(qs_ot_env%matrix_sinp_b, qs_ot_env%matrix_sinp)
       CALL dbcsr_iterator_start(iter, qs_ot_env%matrix_sinp_b)
       DO WHILE (dbcsr_iterator_blocks_left(iter))
-         CALL dbcsr_iterator_next_block(iter, row, col, DATA, &
-                                        block_number=blk, row_size=row_size, col_size=col_size, &
+         CALL dbcsr_iterator_next_block(iter, row, col, block, &
+                                        row_size=row_size, col_size=col_size, &
                                         row_offset=row_offset, col_offset=col_offset)
          DO j = 1, col_size
          DO i = 1, row_size
             a = SQRT(qs_ot_env%evals(row_offset + i - 1))
             b = SQRT(qs_ot_env%evals(col_offset + j - 1))
-            DATA(i, j) = qs_ot_sincf(a, b)
+            block(i, j) = qs_ot_sincf(a, b)
          END DO
          END DO
       END DO
@@ -1515,10 +1517,10 @@ CONTAINS
       REAL(KIND=dp)                                      :: a, b, rs, sf, x, xs, y, ybx, ybxs
 
       ! this is currently a limit of the routine, could be removed rather easily
-      IF (xa .LT. 0) CPABORT("x is negative")
-      IF (ya .LT. 0) CPABORT("y is negative")
+      IF (xa < 0) CPABORT("x is negative")
+      IF (ya < 0) CPABORT("y is negative")
 
-      IF (xa .LT. ya) THEN
+      IF (xa < ya) THEN
          x = ya
          y = xa
       ELSE
@@ -1526,10 +1528,10 @@ CONTAINS
          y = ya
       END IF
 
-      IF (x .LT. 0.5_dp) THEN ! use series, keeping in mind that x,y,x+y,x-y can all be zero
+      IF (x < 0.5_dp) THEN ! use series, keeping in mind that x,y,x+y,x-y can all be zero
 
          qs_ot_sincf = 0.0_dp
-         IF (x .GT. 0.0_dp) THEN
+         IF (x > 0.0_dp) THEN
             ybx = y/x
          ELSE ! should be irrelevant  !?
             ybx = 0.0_dp
@@ -1549,7 +1551,7 @@ CONTAINS
          END DO
 
       ELSE ! no series expansion
-         IF (x - y .GT. 0.1_dp) THEN ! safe to use the normal form
+         IF (x - y > 0.1_dp) THEN ! safe to use the normal form
             qs_ot_sincf = (qs_ot_sinc(x) - qs_ot_sinc(y))/((x + y)*(x - y))
          ELSE
             a = (x + y)/2.0_dp

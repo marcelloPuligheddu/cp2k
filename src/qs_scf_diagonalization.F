@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2025 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2026 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -14,17 +14,20 @@
 ! **************************************************************************************************
 MODULE qs_scf_diagonalization
    USE cp_array_utils,                  ONLY: cp_1d_r_p_type
-   USE cp_cfm_basic_linalg,             ONLY: cp_cfm_scale,&
+   USE cp_cfm_basic_linalg,             ONLY: cp_cfm_column_scale,&
                                               cp_cfm_scale_and_add,&
                                               cp_cfm_scale_and_add_fm
    USE cp_cfm_diag,                     ONLY: cp_cfm_geeig,&
-                                              cp_cfm_geeig_canon
+                                              cp_cfm_geeig_canon,&
+                                              cp_cfm_heevd
    USE cp_cfm_types,                    ONLY: cp_cfm_create,&
                                               cp_cfm_release,&
+                                              cp_cfm_set_all,&
                                               cp_cfm_to_cfm,&
                                               cp_cfm_to_fm,&
                                               cp_cfm_type
-   USE cp_control_types,                ONLY: dft_control_type
+   USE cp_control_types,                ONLY: dft_control_type,&
+                                              hairy_probes_type
    USE cp_dbcsr_api,                    ONLY: &
         dbcsr_copy, dbcsr_create, dbcsr_deallocate_matrix, dbcsr_desymmetrize, dbcsr_p_type, &
         dbcsr_set, dbcsr_type, dbcsr_type_antisymmetric, dbcsr_type_no_symmetry, &
@@ -34,13 +37,18 @@ MODULE qs_scf_diagonalization
                                               copy_fm_to_dbcsr,&
                                               cp_dbcsr_sm_fm_multiply,&
                                               dbcsr_allocate_matrix_set
-   USE cp_fm_basic_linalg,              ONLY: cp_fm_symm,&
-                                              cp_fm_upper_to_full
+   USE cp_fm_basic_linalg,              ONLY: cp_fm_column_scale,&
+                                              cp_fm_symm,&
+                                              cp_fm_uplo_to_full
    USE cp_fm_cholesky,                  ONLY: cp_fm_cholesky_reduce,&
                                               cp_fm_cholesky_restore
-   USE cp_fm_diag,                      ONLY: choose_eigv_solver,&
+   USE cp_fm_diag,                      ONLY: FM_DIAG_TYPE_CUSOLVER,&
+                                              choose_eigv_solver,&
                                               cp_fm_geeig,&
-                                              cp_fm_geeig_canon
+                                              cp_fm_geeig_canon,&
+                                              cusolver_n_min,&
+                                              diag_type,&
+                                              direct_generalized_diagonalization
    USE cp_fm_pool_types,                ONLY: cp_fm_pool_p_type,&
                                               fm_pool_create_fm,&
                                               fm_pool_give_back_fm
@@ -70,6 +78,9 @@ MODULE qs_scf_diagonalization
                                               kpoint_type
    USE machine,                         ONLY: m_flush,&
                                               m_walltime
+   USE mathconstants,                   ONLY: gaussi,&
+                                              z_one,&
+                                              z_zero
    USE message_passing,                 ONLY: mp_para_env_type
    USE parallel_gemm_api,               ONLY: parallel_gemm
    USE preconditioner,                  ONLY: prepare_preconditioner,&
@@ -111,6 +122,7 @@ MODULE qs_scf_diagonalization
    USE qs_scf_methods,                  ONLY: combine_ks_matrices,&
                                               eigensolver,&
                                               eigensolver_dbcsr,&
+                                              eigensolver_generalized,&
                                               eigensolver_simple,&
                                               eigensolver_symm,&
                                               scf_env_density_mixing
@@ -127,7 +139,8 @@ MODULE qs_scf_diagonalization
 
    PUBLIC :: do_general_diag, do_general_diag_kp, do_roks_diag, &
              do_special_diag, do_ot_diag, do_block_davidson_diag, &
-             do_block_krylov_diag, do_scf_diag_subspace, diag_subspace_allocate, general_eigenproblem
+             do_block_krylov_diag, do_scf_diag_subspace, diag_subspace_allocate, &
+             general_eigenproblem, diag_kp_smat, diag_kp_basic
 
 CONTAINS
 
@@ -156,7 +169,7 @@ CONTAINS
       TYPE(section_vals_type), POINTER                   :: scf_section
       LOGICAL, INTENT(INOUT)                             :: diis_step
 
-      INTEGER                                            :: ispin, nspin
+      INTEGER                                            :: ispin, nao, nspin
       LOGICAL                                            :: do_level_shift, owns_ortho, use_jacobi
       REAL(KIND=dp)                                      :: diis_error, eps_diis
       TYPE(cp_fm_type), POINTER                          :: ortho
@@ -243,25 +256,34 @@ CONTAINS
          END IF
 
          DO ispin = 1, nspin
-            IF (do_level_shift) THEN
-               CALL eigensolver(matrix_ks_fm=scf_env%scf_work1(ispin), &
-                                mo_set=mos(ispin), &
-                                ortho=ortho, &
-                                work=scf_env%scf_work2, &
-                                cholesky_method=scf_env%cholesky_method, &
-                                do_level_shift=do_level_shift, &
-                                level_shift=scf_control%level_shift, &
-                                matrix_u_fm=scf_env%ortho, &
-                                use_jacobi=use_jacobi)
+            CALL cp_fm_get_info(scf_env%scf_work1(ispin), nrow_global=nao)
+            IF (diag_type == FM_DIAG_TYPE_CUSOLVER .AND. direct_generalized_diagonalization .AND. &
+                nao >= cusolver_n_min .AND. .NOT. do_level_shift) THEN
+               CALL eigensolver_generalized(matrix_ks_fm=scf_env%scf_work1(ispin), &
+                                            matrix_s=matrix_s(ispin)%matrix, &
+                                            mo_set=mos(ispin), &
+                                            work=scf_env%scf_work2)
             ELSE
-               CALL eigensolver(matrix_ks_fm=scf_env%scf_work1(ispin), &
-                                mo_set=mos(ispin), &
-                                ortho=ortho, &
-                                work=scf_env%scf_work2, &
-                                cholesky_method=scf_env%cholesky_method, &
-                                do_level_shift=do_level_shift, &
-                                level_shift=scf_control%level_shift, &
-                                use_jacobi=use_jacobi)
+               IF (do_level_shift) THEN
+                  CALL eigensolver(matrix_ks_fm=scf_env%scf_work1(ispin), &
+                                   mo_set=mos(ispin), &
+                                   ortho=ortho, &
+                                   work=scf_env%scf_work2, &
+                                   cholesky_method=scf_env%cholesky_method, &
+                                   do_level_shift=do_level_shift, &
+                                   level_shift=scf_control%level_shift, &
+                                   matrix_u_fm=scf_env%ortho, &
+                                   use_jacobi=use_jacobi)
+               ELSE
+                  CALL eigensolver(matrix_ks_fm=scf_env%scf_work1(ispin), &
+                                   mo_set=mos(ispin), &
+                                   ortho=ortho, &
+                                   work=scf_env%scf_work2, &
+                                   cholesky_method=scf_env%cholesky_method, &
+                                   do_level_shift=do_level_shift, &
+                                   level_shift=scf_control%level_shift, &
+                                   use_jacobi=use_jacobi)
+               END IF
             END IF
          END DO
 
@@ -277,6 +299,22 @@ CONTAINS
 
          IF (do_level_shift) THEN
          DO ispin = 1, nspin
+         IF (ASSOCIATED(scf_env%scf_work1_red) .AND. ASSOCIATED(scf_env%scf_work2_red) &
+             .AND. ASSOCIATED(scf_env%ortho_red) .AND. ASSOCIATED(scf_env%ortho_m1_red)) THEN
+            CALL eigensolver_symm(matrix_ks_fm=scf_env%scf_work1(ispin), &
+                                  mo_set=mos(ispin), &
+                                  ortho=ortho, &
+                                  work=scf_env%scf_work2, &
+                                  do_level_shift=do_level_shift, &
+                                  level_shift=scf_control%level_shift, &
+                                  matrix_u_fm=scf_env%ortho_m1, &
+                                  use_jacobi=use_jacobi, &
+                                  jacobi_threshold=scf_control%diagonalization%jacobi_threshold, &
+                                  matrix_ks_fm_red=scf_env%scf_work1_red(ispin), &
+                                  ortho_red=scf_env%ortho_red, &
+                                  work_red=scf_env%scf_work2_red, &
+                                  matrix_u_fm_red=scf_env%ortho_m1_red)
+         ELSE
             CALL eigensolver_symm(matrix_ks_fm=scf_env%scf_work1(ispin), &
                                   mo_set=mos(ispin), &
                                   ortho=ortho, &
@@ -286,9 +324,24 @@ CONTAINS
                                   matrix_u_fm=scf_env%ortho_m1, &
                                   use_jacobi=use_jacobi, &
                                   jacobi_threshold=scf_control%diagonalization%jacobi_threshold)
+         END IF
          END DO
          ELSE
          DO ispin = 1, nspin
+         IF (ASSOCIATED(scf_env%scf_work1_red) .AND. ASSOCIATED(scf_env%scf_work2_red) &
+             .AND. ASSOCIATED(scf_env%ortho_red)) THEN
+            CALL eigensolver_symm(matrix_ks_fm=scf_env%scf_work1(ispin), &
+                                  mo_set=mos(ispin), &
+                                  ortho=ortho, &
+                                  work=scf_env%scf_work2, &
+                                  do_level_shift=do_level_shift, &
+                                  level_shift=scf_control%level_shift, &
+                                  use_jacobi=use_jacobi, &
+                                  jacobi_threshold=scf_control%diagonalization%jacobi_threshold, &
+                                  matrix_ks_fm_red=scf_env%scf_work1_red(ispin), &
+                                  ortho_red=scf_env%ortho_red, &
+                                  work_red=scf_env%scf_work2_red)
+         ELSE
             CALL eigensolver_symm(matrix_ks_fm=scf_env%scf_work1(ispin), &
                                   mo_set=mos(ispin), &
                                   ortho=ortho, &
@@ -297,6 +350,7 @@ CONTAINS
                                   level_shift=scf_control%level_shift, &
                                   use_jacobi=use_jacobi, &
                                   jacobi_threshold=scf_control%diagonalization%jacobi_threshold)
+         END IF
          END DO
          END IF
 
@@ -314,10 +368,11 @@ CONTAINS
 !> \param scf_control ...
 !> \param scf_section ...
 !> \param diis_step ...
+!> \param probe ...
 ! **************************************************************************************************
    SUBROUTINE do_general_diag(scf_env, mos, matrix_ks, &
                               matrix_s, scf_control, scf_section, &
-                              diis_step)
+                              diis_step, probe)
 
       TYPE(qs_scf_env_type), POINTER                     :: scf_env
       TYPE(mo_set_type), DIMENSION(:), INTENT(INOUT)     :: mos
@@ -325,6 +380,8 @@ CONTAINS
       TYPE(scf_control_type), POINTER                    :: scf_control
       TYPE(section_vals_type), POINTER                   :: scf_section
       LOGICAL, INTENT(INOUT)                             :: diis_step
+      TYPE(hairy_probes_type), DIMENSION(:), OPTIONAL, &
+         POINTER                                         :: probe
 
       INTEGER                                            :: ispin, nspin
       REAL(KIND=dp)                                      :: total_zeff_corr
@@ -341,8 +398,15 @@ CONTAINS
          CALL set_mo_occupation(mo_array=mos, &
                                 smear=scf_control%smear, tot_zeff_corr=total_zeff_corr)
       ELSE
-         CALL set_mo_occupation(mo_array=mos, &
-                                smear=scf_control%smear)
+         IF (PRESENT(probe) .EQV. .TRUE.) THEN
+            scf_control%smear%do_smear = .FALSE.
+            CALL set_mo_occupation(mo_array=mos, &
+                                   smear=scf_control%smear, &
+                                   probe=probe)
+         ELSE
+            CALL set_mo_occupation(mo_array=mos, &
+                                   smear=scf_control%smear)
+         END IF
       END IF
 
       DO ispin = 1, nspin
@@ -367,11 +431,12 @@ CONTAINS
 !> \param diis_step ...
 !> \param diis_error ...
 !> \param qs_env ...
+!> \param probe ...
 !> \par History
 !>      08.2014 created [JGH]
 ! **************************************************************************************************
    SUBROUTINE do_general_diag_kp(matrix_ks, matrix_s, kpoints, scf_env, scf_control, update_p, &
-                                 diis_step, diis_error, qs_env)
+                                 diis_step, diis_error, qs_env, probe)
 
       TYPE(dbcsr_p_type), DIMENSION(:, :), POINTER       :: matrix_ks, matrix_s
       TYPE(kpoint_type), POINTER                         :: kpoints
@@ -381,10 +446,10 @@ CONTAINS
       LOGICAL, INTENT(INOUT)                             :: diis_step
       REAL(dp), INTENT(INOUT), OPTIONAL                  :: diis_error
       TYPE(qs_environment_type), OPTIONAL, POINTER       :: qs_env
+      TYPE(hairy_probes_type), DIMENSION(:), OPTIONAL, &
+         POINTER                                         :: probe
 
       CHARACTER(len=*), PARAMETER :: routineN = 'do_general_diag_kp'
-      COMPLEX(KIND=dp), PARAMETER :: cone = CMPLX(1.0_dp, 0.0_dp, KIND=dp), &
-         czero = CMPLX(0.0_dp, 0.0_dp, KIND=dp), ione = CMPLX(0.0_dp, 1.0_dp, KIND=dp)
 
       COMPLEX(KIND=dp), ALLOCATABLE, DIMENSION(:)        :: coeffs
       INTEGER                                            :: handle, ib, igroup, ik, ikp, indx, &
@@ -548,13 +613,13 @@ CONTAINS
                   indx = indx + 1
                   IF (my_kpgrp) THEN
                      CALL cp_fm_finish_copy_general(fmlocal, info(indx, 1))
-                     CALL cp_cfm_scale_and_add_fm(czero, cksmat, cone, fmlocal)
+                     CALL cp_cfm_scale_and_add_fm(z_zero, cksmat, z_one, fmlocal)
                      CALL cp_fm_finish_copy_general(fmlocal, info(indx, 2))
-                     CALL cp_cfm_scale_and_add_fm(cone, cksmat, ione, fmlocal)
+                     CALL cp_cfm_scale_and_add_fm(z_one, cksmat, gaussi, fmlocal)
                      CALL cp_fm_finish_copy_general(fmlocal, info(indx, 3))
-                     CALL cp_cfm_scale_and_add_fm(czero, csmat, cone, fmlocal)
+                     CALL cp_cfm_scale_and_add_fm(z_zero, csmat, z_one, fmlocal)
                      CALL cp_fm_finish_copy_general(fmlocal, info(indx, 4))
-                     CALL cp_cfm_scale_and_add_fm(cone, csmat, ione, fmlocal)
+                     CALL cp_cfm_scale_and_add_fm(z_one, csmat, gaussi, fmlocal)
                   END IF
                END DO  !igroup
 
@@ -570,15 +635,15 @@ CONTAINS
                                 diis_step, scf_control%eps_diis, nspin, nkp, kplocal, scf_control%nmixing, &
                                 scf_section, para_env_global)
 
-         !build the ks matrices and idagonalize
+         !build the ks matrices and diagonalize
          DO ikp = 1, kplocal
             DO ispin = 1, nspin
                kp => kpoints%kp_env(ikp)%kpoint_env
                CALL cp_cfm_to_cfm(kpoints%scf_diis_buffer%smat(ikp), csmat)
 
-               CALL cp_cfm_scale(czero, cksmat)
+               CALL cp_cfm_set_all(cksmat, z_zero)
                DO jb = 1, nb
-                  CALL cp_cfm_scale_and_add(cone, cksmat, coeffs(jb), kpoints%scf_diis_buffer%param(jb, ispin, ikp))
+                  CALL cp_cfm_scale_and_add(z_one, cksmat, coeffs(jb), kpoints%scf_diis_buffer%param(jb, ispin, ikp))
                END DO
 
                CALL get_mo_set(kp%mos(1, ispin), mo_coeff=rmos, eigenvalues=eigenvalues)
@@ -612,13 +677,13 @@ CONTAINS
                         CALL cp_fm_finish_copy_general(rsmat, info(indx, 2))
                      ELSE
                         CALL cp_fm_finish_copy_general(fmlocal, info(indx, 1))
-                        CALL cp_cfm_scale_and_add_fm(czero, cksmat, cone, fmlocal)
+                        CALL cp_cfm_scale_and_add_fm(z_zero, cksmat, z_one, fmlocal)
                         CALL cp_fm_finish_copy_general(fmlocal, info(indx, 2))
-                        CALL cp_cfm_scale_and_add_fm(cone, cksmat, ione, fmlocal)
+                        CALL cp_cfm_scale_and_add_fm(z_one, cksmat, gaussi, fmlocal)
                         CALL cp_fm_finish_copy_general(fmlocal, info(indx, 3))
-                        CALL cp_cfm_scale_and_add_fm(czero, csmat, cone, fmlocal)
+                        CALL cp_cfm_scale_and_add_fm(z_zero, csmat, z_one, fmlocal)
                         CALL cp_fm_finish_copy_general(fmlocal, info(indx, 4))
-                        CALL cp_cfm_scale_and_add_fm(cone, csmat, ione, fmlocal)
+                        CALL cp_cfm_scale_and_add_fm(z_one, csmat, gaussi, fmlocal)
                      END IF
                   END IF
                END DO
@@ -679,8 +744,13 @@ CONTAINS
 
       IF (update_p) THEN
          ! MO occupations
-         CALL kpoint_set_mo_occupation(kpoints, scf_control%smear)
-
+         IF (PRESENT(probe) .EQV. .TRUE.) THEN
+            scf_control%smear%do_smear = .FALSE.
+            CALL kpoint_set_mo_occupation(kpoints, scf_control%smear, &
+                                          probe=probe)
+         ELSE
+            CALL kpoint_set_mo_occupation(kpoints, scf_control%smear)
+         END IF
          ! density matrices
          CALL kpoint_density_matrices(kpoints)
          ! density matrices in real space
@@ -706,6 +776,251 @@ CONTAINS
       CALL timestop(handle)
 
    END SUBROUTINE do_general_diag_kp
+
+! **************************************************************************************************
+!> \brief Kpoint diagonalization routine
+!>        Transforms matrices to kpoint, distributes kpoint groups, performs
+!>        general diagonalization (no storgae of overlap decomposition), stores
+!>        MOs, calculates occupation numbers, calculates density matrices
+!>        in kpoint representation, transforms density matrices to real space
+!> \param matrix_ks    Kohn-sham matrices (RS indices, global)
+!> \param matrix_s     Overlap matrices (RS indices, global)
+!> \param kpoints      Kpoint environment
+!> \param fmwork       FM work matrices [at least dimension 4] in full para_env
+!> \par History
+!>      08.2014 created [JGH]
+! **************************************************************************************************
+   SUBROUTINE diag_kp_basic(matrix_ks, matrix_s, kpoints, fmwork)
+
+      TYPE(dbcsr_p_type), DIMENSION(:, :), POINTER       :: matrix_ks, matrix_s
+      TYPE(kpoint_type), POINTER                         :: kpoints
+      TYPE(cp_fm_type), DIMENSION(:), POINTER            :: fmwork
+
+      CHARACTER(len=*), PARAMETER                        :: routineN = 'diag_kp_basic'
+
+      INTEGER                                            :: handle, igroup, ik, ikp, indx, ispin, &
+                                                            kplocal, nkp, nkp_groups, nspin
+      INTEGER, DIMENSION(2)                              :: kp_range
+      INTEGER, DIMENSION(:, :), POINTER                  :: kp_dist
+      INTEGER, DIMENSION(:, :, :), POINTER               :: cell_to_index
+      LOGICAL                                            :: my_kpgrp, use_real_wfn
+      REAL(KIND=dp), DIMENSION(:), POINTER               :: eigenvalues
+      REAL(KIND=dp), DIMENSION(:, :), POINTER            :: xkp
+      TYPE(copy_info_type), ALLOCATABLE, DIMENSION(:, :) :: info
+      TYPE(cp_cfm_type)                                  :: cksmat, cmos, csmat, cwork
+      TYPE(cp_fm_pool_p_type), DIMENSION(:), POINTER     :: ao_ao_fm_pools
+      TYPE(cp_fm_struct_type), POINTER                   :: matrix_struct, mo_struct
+      TYPE(cp_fm_type)                                   :: fmdummy, fmlocal, rksmat, rsmat
+      TYPE(cp_fm_type), POINTER                          :: imos, mo_coeff, rmos
+      TYPE(dbcsr_type), POINTER                          :: cmatrix, rmatrix, tempmat, tmpmat
+      TYPE(kpoint_env_type), POINTER                     :: kp
+      TYPE(mp_para_env_type), POINTER                    :: para_env
+      TYPE(neighbor_list_set_p_type), DIMENSION(:), &
+         POINTER                                         :: sab_nl
+      TYPE(qs_matrix_pools_type), POINTER                :: mpools
+
+      CALL timeset(routineN, handle)
+
+      NULLIFY (sab_nl)
+      CALL get_kpoint_info(kpoints, nkp=nkp, xkp=xkp, use_real_wfn=use_real_wfn, kp_range=kp_range, &
+                           nkp_groups=nkp_groups, kp_dist=kp_dist, sab_nl=sab_nl, &
+                           cell_to_index=cell_to_index)
+      CPASSERT(ASSOCIATED(sab_nl))
+      kplocal = kp_range(2) - kp_range(1) + 1
+
+      ! use as template
+      tempmat => matrix_ks(1, 1)%matrix
+
+      ! allocate some work matrices
+      ALLOCATE (rmatrix, cmatrix, tmpmat)
+      CALL dbcsr_create(rmatrix, template=tempmat, matrix_type=dbcsr_type_symmetric)
+      CALL dbcsr_create(cmatrix, template=tempmat, matrix_type=dbcsr_type_antisymmetric)
+      CALL dbcsr_create(tmpmat, template=tempmat, matrix_type=dbcsr_type_no_symmetry)
+      CALL cp_dbcsr_alloc_block_from_nbl(rmatrix, sab_nl)
+      CALL cp_dbcsr_alloc_block_from_nbl(cmatrix, sab_nl)
+
+      ! fm pools to be used within a kpoint group
+      CALL get_kpoint_info(kpoints, mpools=mpools)
+      CALL mpools_get(mpools, ao_ao_fm_pools=ao_ao_fm_pools)
+
+      CALL fm_pool_create_fm(ao_ao_fm_pools(1)%pool, fmlocal)
+      CALL cp_fm_get_info(fmlocal, matrix_struct=matrix_struct)
+
+      IF (use_real_wfn) THEN
+         CALL cp_fm_create(rksmat, matrix_struct)
+         CALL cp_fm_create(rsmat, matrix_struct)
+      ELSE
+         CALL cp_cfm_create(cksmat, matrix_struct)
+         CALL cp_cfm_create(csmat, matrix_struct)
+         CALL cp_cfm_create(cwork, matrix_struct)
+         kp => kpoints%kp_env(1)%kpoint_env
+         CALL get_mo_set(kp%mos(1, 1), mo_coeff=mo_coeff)
+         CALL cp_fm_get_info(mo_coeff, matrix_struct=mo_struct)
+         CALL cp_cfm_create(cmos, mo_struct)
+      END IF
+
+      para_env => kpoints%blacs_env_all%para_env
+      nspin = SIZE(matrix_ks, 1)
+      ALLOCATE (info(kplocal*nspin*nkp_groups, 4))
+
+      ! Setup and start all the communication
+      indx = 0
+      DO ikp = 1, kplocal
+         DO ispin = 1, nspin
+            DO igroup = 1, nkp_groups
+               ! number of current kpoint
+               ik = kp_dist(1, igroup) + ikp - 1
+               my_kpgrp = (ik >= kpoints%kp_range(1) .AND. ik <= kpoints%kp_range(2))
+               indx = indx + 1
+               IF (use_real_wfn) THEN
+                  ! FT of matrices KS and S, then transfer to FM type
+                  CALL dbcsr_set(rmatrix, 0.0_dp)
+                  CALL rskp_transform(rmatrix=rmatrix, rsmat=matrix_ks, ispin=ispin, &
+                                      xkp=xkp(1:3, ik), cell_to_index=cell_to_index, sab_nl=sab_nl)
+                  CALL dbcsr_desymmetrize(rmatrix, tmpmat)
+                  CALL copy_dbcsr_to_fm(tmpmat, fmwork(1))
+                  ! s matrix is not spin dependent
+                  CALL dbcsr_set(rmatrix, 0.0_dp)
+                  CALL rskp_transform(rmatrix=rmatrix, rsmat=matrix_s, ispin=1, &
+                                      xkp=xkp(1:3, ik), cell_to_index=cell_to_index, sab_nl=sab_nl)
+                  CALL dbcsr_desymmetrize(rmatrix, tmpmat)
+                  CALL copy_dbcsr_to_fm(tmpmat, fmwork(3))
+               ELSE
+                  ! FT of matrices KS and S, then transfer to FM type
+                  CALL dbcsr_set(rmatrix, 0.0_dp)
+                  CALL dbcsr_set(cmatrix, 0.0_dp)
+                  CALL rskp_transform(rmatrix=rmatrix, cmatrix=cmatrix, rsmat=matrix_ks, ispin=ispin, &
+                                      xkp=xkp(1:3, ik), cell_to_index=cell_to_index, sab_nl=sab_nl)
+                  CALL dbcsr_desymmetrize(rmatrix, tmpmat)
+                  CALL copy_dbcsr_to_fm(tmpmat, fmwork(1))
+                  CALL dbcsr_desymmetrize(cmatrix, tmpmat)
+                  CALL copy_dbcsr_to_fm(tmpmat, fmwork(2))
+                  ! s matrix is not spin dependent, double the work
+                  CALL dbcsr_set(rmatrix, 0.0_dp)
+                  CALL dbcsr_set(cmatrix, 0.0_dp)
+                  CALL rskp_transform(rmatrix=rmatrix, cmatrix=cmatrix, rsmat=matrix_s, ispin=1, &
+                                      xkp=xkp(1:3, ik), cell_to_index=cell_to_index, sab_nl=sab_nl)
+                  CALL dbcsr_desymmetrize(rmatrix, tmpmat)
+                  CALL copy_dbcsr_to_fm(tmpmat, fmwork(3))
+                  CALL dbcsr_desymmetrize(cmatrix, tmpmat)
+                  CALL copy_dbcsr_to_fm(tmpmat, fmwork(4))
+               END IF
+               ! transfer to kpoint group
+               ! redistribution of matrices, new blacs environment
+               ! fmwork -> fmlocal -> rksmat/cksmat
+               ! fmwork -> fmlocal -> rsmat/csmat
+               IF (use_real_wfn) THEN
+                  IF (my_kpgrp) THEN
+                     CALL cp_fm_start_copy_general(fmwork(1), rksmat, para_env, info(indx, 1))
+                     CALL cp_fm_start_copy_general(fmwork(3), rsmat, para_env, info(indx, 2))
+                  ELSE
+                     CALL cp_fm_start_copy_general(fmwork(1), fmdummy, para_env, info(indx, 1))
+                     CALL cp_fm_start_copy_general(fmwork(3), fmdummy, para_env, info(indx, 2))
+                  END IF
+               ELSE
+                  IF (my_kpgrp) THEN
+                     CALL cp_fm_start_copy_general(fmwork(1), fmlocal, para_env, info(indx, 1))
+                     CALL cp_fm_start_copy_general(fmwork(2), fmlocal, para_env, info(indx, 2))
+                     CALL cp_fm_start_copy_general(fmwork(3), fmlocal, para_env, info(indx, 3))
+                     CALL cp_fm_start_copy_general(fmwork(4), fmlocal, para_env, info(indx, 4))
+                  ELSE
+                     CALL cp_fm_start_copy_general(fmwork(1), fmdummy, para_env, info(indx, 1))
+                     CALL cp_fm_start_copy_general(fmwork(2), fmdummy, para_env, info(indx, 2))
+                     CALL cp_fm_start_copy_general(fmwork(3), fmdummy, para_env, info(indx, 3))
+                     CALL cp_fm_start_copy_general(fmwork(4), fmdummy, para_env, info(indx, 4))
+                  END IF
+               END IF
+            END DO
+         END DO
+      END DO
+
+      ! Finish communication then diagonalise in each group
+      indx = 0
+      DO ikp = 1, kplocal
+         DO ispin = 1, nspin
+            DO igroup = 1, nkp_groups
+               ! number of current kpoint
+               ik = kp_dist(1, igroup) + ikp - 1
+               my_kpgrp = (ik >= kpoints%kp_range(1) .AND. ik <= kpoints%kp_range(2))
+               indx = indx + 1
+               IF (my_kpgrp) THEN
+                  IF (use_real_wfn) THEN
+                     CALL cp_fm_finish_copy_general(rksmat, info(indx, 1))
+                     CALL cp_fm_finish_copy_general(rsmat, info(indx, 2))
+                  ELSE
+                     CALL cp_fm_finish_copy_general(fmlocal, info(indx, 1))
+                     CALL cp_cfm_scale_and_add_fm(z_zero, cksmat, z_one, fmlocal)
+                     CALL cp_fm_finish_copy_general(fmlocal, info(indx, 2))
+                     CALL cp_cfm_scale_and_add_fm(z_one, cksmat, gaussi, fmlocal)
+                     CALL cp_fm_finish_copy_general(fmlocal, info(indx, 3))
+                     CALL cp_cfm_scale_and_add_fm(z_zero, csmat, z_one, fmlocal)
+                     CALL cp_fm_finish_copy_general(fmlocal, info(indx, 4))
+                     CALL cp_cfm_scale_and_add_fm(z_one, csmat, gaussi, fmlocal)
+                  END IF
+               END IF
+            END DO
+
+            ! Each kpoint group has now information on a kpoint to be diagonalized
+            ! General eigensolver Hermite or Symmetric
+            kp => kpoints%kp_env(ikp)%kpoint_env
+            IF (use_real_wfn) THEN
+               CALL get_mo_set(kp%mos(1, ispin), mo_coeff=mo_coeff, eigenvalues=eigenvalues)
+               CALL cp_fm_geeig(rksmat, rsmat, mo_coeff, eigenvalues, fmlocal)
+            ELSE
+               CALL get_mo_set(kp%mos(1, ispin), mo_coeff=rmos, eigenvalues=eigenvalues)
+               CALL get_mo_set(kp%mos(2, ispin), mo_coeff=imos)
+               CALL cp_cfm_geeig(cksmat, csmat, cmos, eigenvalues, cwork)
+               ! copy eigenvalues to imag set (keep them in sync)
+               kp%mos(2, ispin)%eigenvalues = eigenvalues
+               ! split real and imaginary part of mos
+               CALL cp_cfm_to_fm(cmos, rmos, imos)
+            END IF
+         END DO
+      END DO
+
+      ! Clean up communication
+      indx = 0
+      DO ikp = 1, kplocal
+         DO ispin = 1, nspin
+            DO igroup = 1, nkp_groups
+               ! number of current kpoint
+               ik = kp_dist(1, igroup) + ikp - 1
+               my_kpgrp = (ik >= kpoints%kp_range(1) .AND. ik <= kpoints%kp_range(2))
+               indx = indx + 1
+               IF (use_real_wfn) THEN
+                  CALL cp_fm_cleanup_copy_general(info(indx, 1))
+                  CALL cp_fm_cleanup_copy_general(info(indx, 2))
+               ELSE
+                  CALL cp_fm_cleanup_copy_general(info(indx, 1))
+                  CALL cp_fm_cleanup_copy_general(info(indx, 2))
+                  CALL cp_fm_cleanup_copy_general(info(indx, 3))
+                  CALL cp_fm_cleanup_copy_general(info(indx, 4))
+               END IF
+            END DO
+         END DO
+      END DO
+
+      ! All done
+      DEALLOCATE (info)
+
+      CALL dbcsr_deallocate_matrix(rmatrix)
+      CALL dbcsr_deallocate_matrix(cmatrix)
+      CALL dbcsr_deallocate_matrix(tmpmat)
+
+      IF (use_real_wfn) THEN
+         CALL cp_fm_release(rksmat)
+         CALL cp_fm_release(rsmat)
+      ELSE
+         CALL cp_cfm_release(cksmat)
+         CALL cp_cfm_release(csmat)
+         CALL cp_cfm_release(cwork)
+         CALL cp_cfm_release(cmos)
+      END IF
+      CALL fm_pool_give_back_fm(ao_ao_fm_pools(1)%pool, fmlocal)
+
+      CALL timestop(handle)
+
+   END SUBROUTINE diag_kp_basic
 
 ! **************************************************************************************************
 !> \brief inner loop within MOS subspace, to refine occupation and density,
@@ -960,7 +1275,7 @@ CONTAINS
          DO i = 1, nspin
             ALLOCATE (subspace_env%p_matrix_store(i)%matrix)
             CALL dbcsr_create(matrix=subspace_env%p_matrix_store(i)%matrix, template=matrix_s(1)%matrix, &
-                              name="DENSITY_STORE", matrix_type=dbcsr_type_symmetric, nze=0)
+                              name="DENSITY_STORE", matrix_type=dbcsr_type_symmetric)
             CALL cp_dbcsr_alloc_block_from_nbl(subspace_env%p_matrix_store(i)%matrix, &
                                                sab_orb)
             CALL dbcsr_set(subspace_env%p_matrix_store(i)%matrix, 0.0_dp)
@@ -1168,7 +1483,6 @@ CONTAINS
          CALL calculate_subspace_eigenvalues(mo_coeff, matrix_ks(ispin)%matrix, &
                                              evals_arg=eigenvalues, &
                                              do_rotation=.TRUE.)
-         !MK WRITE(*,*) routinen//' copy_dbcsr_to_fm'
          CALL copy_fm_to_dbcsr(mos(ispin)%mo_coeff, &
                                mos(ispin)%mo_coeff_b)
          !fm->dbcsr
@@ -1307,7 +1621,7 @@ CONTAINS
             ! Q = S*C
             mo2ao => mob
 !MK     CALL copy_sm_to_fm(matrix_s(1)%matrix,work)
-!MK     CALL cp_fm_symm("L","U",nao,nao,1.0_dp,work,moa,0.0_dp,mo2ao)
+!MK     CALL cp_fm_symm("L", "U",nao, nao, 1.0_dp, work, moa, 0.0_dp, mo2ao)
             CALL cp_dbcsr_sm_fm_multiply(matrix_s(1)%matrix, moa, mo2ao, nao)
          END IF
 
@@ -1340,6 +1654,7 @@ CONTAINS
                                 eps_diis=scf_control%eps_diis, &
                                 scf_section=scf_section, &
                                 roks=.TRUE.)
+            CPASSERT(scf_env%iter_delta == scf_env%iter_delta)
          ELSE
             CALL qs_diis_b_step(diis_buffer=scf_env%scf_diis_buffer, &
                                 mo_array=mos, &
@@ -1394,13 +1709,13 @@ CONTAINS
          CASE (cholesky_reduce)
             CALL cp_fm_cholesky_reduce(ksa, ortho)
          CASE (cholesky_restore)
-            CALL cp_fm_upper_to_full(ksa, work)
+            CALL cp_fm_uplo_to_full(ksa, work)
             CALL cp_fm_cholesky_restore(ksa, nao, ortho, work, &
                                         "SOLVE", pos="RIGHT")
             CALL cp_fm_cholesky_restore(work, nao, ortho, ksa, &
                                         "SOLVE", pos="LEFT", transa="T")
          CASE (cholesky_inverse)
-            CALL cp_fm_upper_to_full(ksa, work)
+            CALL cp_fm_uplo_to_full(ksa, work)
             CALL cp_fm_cholesky_restore(ksa, nao, ortho, work, &
                                         "MULTIPLY", pos="RIGHT")
             CALL cp_fm_cholesky_restore(work, nao, ortho, ksa, &
@@ -1534,7 +1849,7 @@ CONTAINS
       DO ispin = 1, SIZE(matrix_ks)
 
          ks => scf_env%scf_work1(ispin)
-         CALL cp_fm_upper_to_full(ks, work)
+         CALL cp_fm_uplo_to_full(ks, work)
 
          CALL get_mo_set(mo_set=mos(ispin), &
                          nao=nao, &
@@ -1549,7 +1864,7 @@ CONTAINS
          SELECT CASE (scf_env%cholesky_method)
          CASE (cholesky_reduce)
             CALL cp_fm_cholesky_reduce(ks, ortho)
-            CALL cp_fm_upper_to_full(ks, work)
+            CALL cp_fm_uplo_to_full(ks, work)
             CALL cp_fm_cholesky_restore(mo_coeff, nmo, ortho, c0, "MULTIPLY")
          CASE (cholesky_restore)
             CALL cp_fm_cholesky_restore(ks, nao, ortho, work, &
@@ -1774,5 +2089,215 @@ CONTAINS
       CALL timestop(handle)
 
    END SUBROUTINE do_block_davidson_diag
+
+! **************************************************************************************************
+!> \brief Kpoint diagonalization routine
+!>        Transforms matrices to kpoint, distributes kpoint groups, performs diagonalization
+!> \param matrix_s     Overlap matrices (RS indices, global)
+!> \param kpoints      Kpoint environment
+!> \param fmwork       full matrices distributed over all groups
+!> \par History
+!>      02.2026 created [JGH]
+! **************************************************************************************************
+   SUBROUTINE diag_kp_smat(matrix_s, kpoints, fmwork)
+
+      TYPE(dbcsr_p_type), DIMENSION(:, :), POINTER       :: matrix_s
+      TYPE(kpoint_type), POINTER                         :: kpoints
+      TYPE(cp_fm_type), DIMENSION(:)                     :: fmwork
+
+      CHARACTER(len=*), PARAMETER                        :: routineN = 'diag_kp_smat'
+      COMPLEX(KIND=dp), PARAMETER                        :: cone = (1.0_dp, 0.0_dp), &
+                                                            czero = (0.0_dp, 0.0_dp)
+
+      COMPLEX(KIND=dp), ALLOCATABLE, DIMENSION(:)        :: ceig
+      INTEGER                                            :: handle, igroup, ik, ikp, indx, kplocal, &
+                                                            nao, nkp, nkp_groups
+      INTEGER, DIMENSION(2)                              :: kp_range
+      INTEGER, DIMENSION(:, :), POINTER                  :: kp_dist
+      INTEGER, DIMENSION(:, :, :), POINTER               :: cell_to_index
+      LOGICAL                                            :: my_kpgrp, use_real_wfn
+      REAL(KIND=dp), ALLOCATABLE, DIMENSION(:)           :: eigenvalues
+      REAL(KIND=dp), DIMENSION(:, :), POINTER            :: xkp
+      TYPE(copy_info_type), ALLOCATABLE, DIMENSION(:, :) :: info
+      TYPE(cp_cfm_type)                                  :: csmat, cwork
+      TYPE(cp_fm_pool_p_type), DIMENSION(:), POINTER     :: ao_ao_fm_pools
+      TYPE(cp_fm_struct_type), POINTER                   :: matrix_struct
+      TYPE(cp_fm_type)                                   :: fmdummy, fmlocal, rsmat
+      TYPE(dbcsr_type), POINTER                          :: cmatrix, rmatrix, tmpmat
+      TYPE(kpoint_env_type), POINTER                     :: kp
+      TYPE(mp_para_env_type), POINTER                    :: para_env
+      TYPE(neighbor_list_set_p_type), DIMENSION(:), &
+         POINTER                                         :: sab_nl
+      TYPE(qs_matrix_pools_type), POINTER                :: mpools
+
+      CALL timeset(routineN, handle)
+
+      NULLIFY (sab_nl)
+      CALL get_kpoint_info(kpoints, nkp=nkp, xkp=xkp, use_real_wfn=use_real_wfn, kp_range=kp_range, &
+                           nkp_groups=nkp_groups, kp_dist=kp_dist, sab_nl=sab_nl, &
+                           cell_to_index=cell_to_index)
+      CPASSERT(ASSOCIATED(sab_nl))
+      kplocal = kp_range(2) - kp_range(1) + 1
+
+      ! allocate some work matrices
+      ALLOCATE (rmatrix, cmatrix, tmpmat)
+      CALL dbcsr_create(rmatrix, template=matrix_s(1, 1)%matrix, &
+                        matrix_type=dbcsr_type_symmetric)
+      CALL dbcsr_create(cmatrix, template=matrix_s(1, 1)%matrix, &
+                        matrix_type=dbcsr_type_antisymmetric)
+      CALL dbcsr_create(tmpmat, template=matrix_s(1, 1)%matrix, &
+                        matrix_type=dbcsr_type_no_symmetry)
+      CALL cp_dbcsr_alloc_block_from_nbl(rmatrix, sab_nl)
+      CALL cp_dbcsr_alloc_block_from_nbl(cmatrix, sab_nl)
+
+      ! fm pools to be used within a kpoint group
+      CALL get_kpoint_info(kpoints, mpools=mpools)
+      CALL mpools_get(mpools, ao_ao_fm_pools=ao_ao_fm_pools)
+
+      CALL fm_pool_create_fm(ao_ao_fm_pools(1)%pool, fmlocal)
+      CALL cp_fm_get_info(fmlocal, matrix_struct=matrix_struct)
+
+      IF (use_real_wfn) THEN
+         CALL cp_fm_create(rsmat, matrix_struct)
+      ELSE
+         CALL cp_cfm_create(csmat, matrix_struct)
+         CALL cp_cfm_create(cwork, matrix_struct)
+      END IF
+
+      CALL cp_fm_get_info(fmwork(1), nrow_global=nao)
+      ALLOCATE (eigenvalues(nao), ceig(nao))
+
+      para_env => kpoints%blacs_env_all%para_env
+      ALLOCATE (info(kplocal*nkp_groups, 2))
+
+      ! Setup and start all the communication
+      indx = 0
+      DO ikp = 1, kplocal
+         DO igroup = 1, nkp_groups
+            ! number of current kpoint
+            ik = kp_dist(1, igroup) + ikp - 1
+            my_kpgrp = (ik >= kpoints%kp_range(1) .AND. ik <= kpoints%kp_range(2))
+            indx = indx + 1
+            IF (use_real_wfn) THEN
+               CALL dbcsr_set(rmatrix, 0.0_dp)
+               CALL rskp_transform(rmatrix=rmatrix, rsmat=matrix_s, ispin=1, &
+                                   xkp=xkp(1:3, ik), cell_to_index=cell_to_index, sab_nl=sab_nl)
+               CALL dbcsr_desymmetrize(rmatrix, tmpmat)
+               CALL copy_dbcsr_to_fm(tmpmat, fmwork(1))
+            ELSE
+               CALL dbcsr_set(rmatrix, 0.0_dp)
+               CALL dbcsr_set(cmatrix, 0.0_dp)
+               CALL rskp_transform(rmatrix=rmatrix, cmatrix=cmatrix, rsmat=matrix_s, ispin=1, &
+                                   xkp=xkp(1:3, ik), cell_to_index=cell_to_index, sab_nl=sab_nl)
+               CALL dbcsr_desymmetrize(rmatrix, tmpmat)
+               CALL copy_dbcsr_to_fm(tmpmat, fmwork(1))
+               CALL dbcsr_desymmetrize(cmatrix, tmpmat)
+               CALL copy_dbcsr_to_fm(tmpmat, fmwork(2))
+            END IF
+            ! transfer to kpoint group
+            ! redistribution of matrices, new blacs environment
+            ! fmwork -> fmlocal -> rsmat/csmat
+            IF (use_real_wfn) THEN
+               IF (my_kpgrp) THEN
+                  CALL cp_fm_start_copy_general(fmwork(1), rsmat, para_env, info(indx, 1))
+               ELSE
+                  CALL cp_fm_start_copy_general(fmwork(1), fmdummy, para_env, info(indx, 1))
+               END IF
+            ELSE
+               IF (my_kpgrp) THEN
+                  CALL cp_fm_start_copy_general(fmwork(1), fmlocal, para_env, info(indx, 1))
+                  CALL cp_fm_start_copy_general(fmwork(2), fmlocal, para_env, info(indx, 2))
+               ELSE
+                  CALL cp_fm_start_copy_general(fmwork(1), fmdummy, para_env, info(indx, 1))
+                  CALL cp_fm_start_copy_general(fmwork(2), fmdummy, para_env, info(indx, 2))
+               END IF
+            END IF
+         END DO
+      END DO
+
+      ! Finish communication then diagonalise in each group
+      indx = 0
+      DO ikp = 1, kplocal
+         DO igroup = 1, nkp_groups
+            ! number of current kpoint
+            ik = kp_dist(1, igroup) + ikp - 1
+            my_kpgrp = (ik >= kpoints%kp_range(1) .AND. ik <= kpoints%kp_range(2))
+            indx = indx + 1
+            IF (my_kpgrp) THEN
+               IF (use_real_wfn) THEN
+                  CALL cp_fm_finish_copy_general(rsmat, info(indx, 1))
+               ELSE
+                  CALL cp_fm_finish_copy_general(fmlocal, info(indx, 1))
+                  CALL cp_cfm_scale_and_add_fm(z_zero, csmat, z_one, fmlocal)
+                  CALL cp_fm_finish_copy_general(fmlocal, info(indx, 2))
+                  CALL cp_cfm_scale_and_add_fm(z_one, csmat, gaussi, fmlocal)
+               END IF
+            END IF
+         END DO
+
+         ! Each kpoint group has now information on a kpoint to be diagonalized
+         ! Eigensolver Hermite or Symmetric
+         kp => kpoints%kp_env(ikp)%kpoint_env
+         IF (use_real_wfn) THEN
+            CALL choose_eigv_solver(rsmat, fmlocal, eigenvalues)
+         ELSE
+            CALL cp_cfm_heevd(csmat, cwork, eigenvalues)
+         END IF
+         CPASSERT(ALL(eigenvalues(1:nao) >= 0.0_dp))
+         IF (use_real_wfn) THEN
+            CALL cp_fm_release(kp%shalf)
+            CALL cp_fm_create(kp%shalf, matrix_struct)
+            eigenvalues(1:nao) = SQRT(eigenvalues(1:nao))
+            CALL cp_fm_to_fm(fmlocal, rsmat)
+            CALL cp_fm_column_scale(rsmat, eigenvalues)
+            CALL parallel_gemm("N", "T", nao, nao, nao, 1.0_dp, rsmat, fmlocal, &
+                               0.0_dp, kp%shalf)
+         ELSE
+            CALL cp_cfm_release(kp%cshalf)
+            CALL cp_cfm_create(kp%cshalf, matrix_struct)
+            ceig(1:nao) = SQRT(eigenvalues(1:nao))
+            CALL cp_cfm_to_cfm(cwork, csmat)
+            CALL cp_cfm_column_scale(csmat, ceig)
+            CALL parallel_gemm("N", "C", nao, nao, nao, cone, csmat, cwork, &
+                               czero, kp%cshalf)
+         END IF
+      END DO
+
+      ! Clean up communication
+      indx = 0
+      DO ikp = 1, kplocal
+         DO igroup = 1, nkp_groups
+            ! number of current kpoint
+            ik = kp_dist(1, igroup) + ikp - 1
+            my_kpgrp = (ik >= kpoints%kp_range(1) .AND. ik <= kpoints%kp_range(2))
+            indx = indx + 1
+            IF (use_real_wfn) THEN
+               CALL cp_fm_cleanup_copy_general(info(indx, 1))
+            ELSE
+               CALL cp_fm_cleanup_copy_general(info(indx, 1))
+               CALL cp_fm_cleanup_copy_general(info(indx, 2))
+            END IF
+         END DO
+      END DO
+
+      ! All done
+      DEALLOCATE (info)
+      DEALLOCATE (eigenvalues, ceig)
+
+      CALL dbcsr_deallocate_matrix(rmatrix)
+      CALL dbcsr_deallocate_matrix(cmatrix)
+      CALL dbcsr_deallocate_matrix(tmpmat)
+
+      IF (use_real_wfn) THEN
+         CALL cp_fm_release(rsmat)
+      ELSE
+         CALL cp_cfm_release(csmat)
+         CALL cp_cfm_release(cwork)
+      END IF
+      CALL fm_pool_give_back_fm(ao_ao_fm_pools(1)%pool, fmlocal)
+
+      CALL timestop(handle)
+
+   END SUBROUTINE diag_kp_smat
 
 END MODULE qs_scf_diagonalization

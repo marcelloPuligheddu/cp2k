@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2025 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2026 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -25,14 +25,49 @@ MODULE realspace_grid_cube
 
    PRIVATE
 
-   PUBLIC :: pw_to_cube, cube_to_pw, pw_to_simple_volumetric
+   PUBLIC :: cube_read_values, cube_value_format, cube_values_format, cube_to_pw, pw_to_cube, &
+             pw_to_simple_volumetric
 
    CHARACTER(len=*), PARAMETER, PRIVATE :: moduleN = 'realspace_grid_cube'
+   INTEGER, PARAMETER, PRIVATE          :: cube_entry_len = 13, &
+                                           cube_num_entries_line = 6
+   INTEGER, PARAMETER, PRIVATE          :: cube_line_len = cube_entry_len*cube_num_entries_line
+   CHARACTER(len=*), PARAMETER          :: cube_value_format = '(E13.5E3)', &
+                                           cube_values_format = '(6E13.5E3)'
    LOGICAL, PARAMETER, PRIVATE          :: debug_this_module = .FALSE.
-   LOGICAL, PRIVATE                     :: parses_linebreaks = .FALSE., &
-                                           parse_test = .TRUE.
 
 CONTAINS
+
+! **************************************************************************************************
+!> \brief Read cube values from a character buffer.
+!> \param values value buffer from one cube line or one z-slice
+!> \param buffer parsed values
+! **************************************************************************************************
+   SUBROUTINE cube_read_values(values, buffer)
+      CHARACTER(LEN=*), INTENT(IN)                       :: values
+      REAL(KIND=dp), DIMENSION(:), INTENT(OUT)           :: buffer
+
+      CHARACTER(LEN=cube_entry_len)                      :: value
+      INTEGER                                            :: i, pos, readstat
+
+      READ (values, *, IOSTAT=readstat) buffer
+      IF (readstat == 0) RETURN
+
+      pos = 1
+      DO i = 1, SIZE(buffer)
+         IF (pos + cube_entry_len - 1 > LEN(values)) CPABORT("Unexpected end of cube data.")
+         value = values(pos:pos + cube_entry_len - 1)
+         READ (value, '(E13.5)', IOSTAT=readstat) buffer(i)
+         IF (readstat /= 0) CPABORT("Bad value while reading cube data.")
+         pos = pos + cube_entry_len
+         IF (MODULO(i, cube_num_entries_line) == 0) THEN
+            IF (pos <= LEN(values)) THEN
+               IF (values(pos:pos) == NEW_LINE('C')) pos = pos + 1
+            END IF
+         END IF
+      END DO
+
+   END SUBROUTINE cube_read_values
 
 ! **************************************************************************************************
 !> \brief ...
@@ -41,20 +76,24 @@ CONTAINS
 !> \param title ...
 !> \param particles_r ...
 !> \param particles_z ...
+!> \param particles_zeff ...
 !> \param stride ...
+!> \param max_file_size_mb ...
 !> \param zero_tails ...
 !> \param silent ...
 !> \param mpi_io ...
 ! **************************************************************************************************
-   SUBROUTINE pw_to_cube(pw, unit_nr, title, particles_r, particles_z, stride, zero_tails, &
-                         silent, mpi_io)
+   SUBROUTINE pw_to_cube(pw, unit_nr, title, particles_r, particles_z, particles_zeff, &
+                         stride, max_file_size_mb, zero_tails, silent, mpi_io)
       TYPE(pw_r3d_rs_type), INTENT(IN)                   :: pw
       INTEGER, INTENT(IN)                                :: unit_nr
       CHARACTER(*), INTENT(IN), OPTIONAL                 :: title
       REAL(KIND=dp), DIMENSION(:, :), INTENT(IN), &
          OPTIONAL                                        :: particles_r
       INTEGER, DIMENSION(:), INTENT(IN), OPTIONAL        :: particles_z
+      REAL(KIND=dp), DIMENSION(:), INTENT(IN), OPTIONAL  :: particles_zeff
       INTEGER, DIMENSION(:), OPTIONAL, POINTER           :: stride
+      REAL(KIND=dp), INTENT(IN), OPTIONAL                :: max_file_size_mb
       LOGICAL, INTENT(IN), OPTIONAL                      :: zero_tails, silent, mpi_io
 
       CHARACTER(len=*), PARAMETER                        :: routineN = 'pw_to_cube'
@@ -63,6 +102,7 @@ CONTAINS
       INTEGER :: checksum, dest, handle, i, I1, I2, I3, iat, ip, L1, L2, L3, msglen, my_rank, &
          my_stride(3), np, num_linebreak, num_pe, rank(2), size_of_z, source, tag, U1, U2, U3
       LOGICAL                                            :: be_silent, my_zero_tails, parallel_write
+      REAL(KIND=dp)                                      :: compression_factor, my_max_file_size_mb
       REAL(KIND=dp), ALLOCATABLE, DIMENSION(:)           :: buf
       TYPE(mp_comm_type)                                 :: gid
       TYPE(mp_file_type)                                 :: mp_unit
@@ -72,9 +112,13 @@ CONTAINS
       my_zero_tails = .FALSE.
       be_silent = .FALSE.
       parallel_write = .FALSE.
+      my_max_file_size_mb = 0.0_dp
       IF (PRESENT(zero_tails)) my_zero_tails = zero_tails
       IF (PRESENT(silent)) be_silent = silent
       IF (PRESENT(mpi_io)) parallel_write = mpi_io
+      IF (PRESENT(max_file_size_mb)) my_max_file_size_mb = max_file_size_mb
+      CPASSERT(my_max_file_size_mb >= 0)
+
       my_stride = 1
       IF (PRESENT(stride)) THEN
          IF (SIZE(stride) /= 1 .AND. SIZE(stride) /= 3) &
@@ -87,10 +131,17 @@ CONTAINS
          ELSE
             my_stride = stride(1:3)
          END IF
-         CPASSERT(my_stride(1) > 0)
-         CPASSERT(my_stride(2) > 0)
-         CPASSERT(my_stride(3) > 0)
       END IF
+
+      IF (my_max_file_size_mb > 0) THEN
+         ! A single grid point takes up 13 bytes, which is 1.3e-05 MB.
+         compression_factor = 1.3e-05_dp*PRODUCT(REAL(pw%pw_grid%npts, dp))/max_file_size_mb
+         my_stride(:) = INT(compression_factor**(1.0/3.0)) + 1
+      END IF
+
+      CPASSERT(my_stride(1) > 0)
+      CPASSERT(my_stride(2) > 0)
+      CPASSERT(my_stride(3) > 0)
 
       IF (.NOT. parallel_write) THEN
          IF (unit_nr > 0) THEN
@@ -125,9 +176,15 @@ CONTAINS
                pw%pw_grid%dh(3, 3)*REAL(my_stride(3), dp)
 
             IF (PRESENT(particles_z)) THEN
-               DO iat = 1, np
-                  WRITE (unit_nr, '(I5,4f12.6)') particles_z(iat), 0._dp, particles_r(:, iat)
-               END DO
+               IF (PRESENT(particles_zeff)) THEN
+                  DO iat = 1, np
+                     WRITE (unit_nr, '(I5,4f12.6)') particles_z(iat), particles_zeff(iat), particles_r(:, iat)
+                  END DO
+               ELSE
+                  DO iat = 1, np
+                     WRITE (unit_nr, '(I5,4f12.6)') particles_z(iat), 0._dp, particles_r(:, iat)
+                  END DO
+               END IF
             END IF
          END IF
 
@@ -162,7 +219,7 @@ CONTAINS
             DO I2 = L2, U2, my_stride(2)
 
                ! cycling through the CPUs, check if the current ray (I1,I2) is local to that CPU
-               IF (pw%pw_grid%para%mode .NE. PW_MODE_LOCAL) THEN
+               IF (pw%pw_grid%para%mode /= PW_MODE_LOCAL) THEN
                   DO ip = 0, num_pe - 1
                      IF (pw%pw_grid%para%bo(1, 1, ip, 1) <= I1 - L1 + 1 .AND. pw%pw_grid%para%bo(2, 1, ip, 1) >= I1 - L1 + 1 .AND. &
                          pw%pw_grid%para%bo(1, 2, ip, 1) <= I2 - L2 + 1 .AND. pw%pw_grid%para%bo(2, 2, ip, 1) >= I2 - L2 + 1) THEN
@@ -193,7 +250,7 @@ CONTAINS
                         IF (buf(I3) < 1.E-7_dp) buf(I3) = 0.0_dp
                      END DO
                   END IF
-                  WRITE (unit_nr, '(6E13.5)') (buf(I3), I3=L3, U3, my_stride(3))
+                  WRITE (unit_nr, cube_values_format) (buf(I3), I3=L3, U3, my_stride(3))
                END IF
 
                ! this double loop generates so many messages that it can overload
@@ -215,7 +272,8 @@ CONTAINS
             num_linebreak = num_linebreak + 1
          msglen = (size_of_z*entry_len + num_linebreak)*mpi_character_size
          CALL mp_unit%set_handle(unit_nr)
-         CALL pw_to_cube_parallel(pw, mp_unit, title, particles_r, particles_z, my_stride, my_zero_tails, msglen)
+         CALL pw_to_cube_parallel(pw, mp_unit, title, particles_r, particles_z, particles_zeff, &
+                                  my_stride, my_zero_tails, msglen)
       END IF
 
       CALL timestop(handle)
@@ -245,9 +303,11 @@ CONTAINS
       CHARACTER(len=*), PARAMETER                        :: routineN = 'cube_to_pw'
       INTEGER, PARAMETER                                 :: entry_len = 13, num_entries_line = 6
 
-      INTEGER                                            :: extunit, handle, i, j, k, msglen, &
-                                                            my_rank, nat, ndum, num_linebreak, &
-                                                            num_pe, output_unit, size_of_z, tag
+      CHARACTER(LEN=cube_line_len)                       :: value_line
+      INTEGER                                            :: extunit, handle, i, j, k, last_z, &
+                                                            msglen, my_rank, nat, ndum, &
+                                                            num_linebreak, num_pe, output_unit, &
+                                                            size_of_z, tag
       INTEGER, DIMENSION(3)                              :: lbounds, lbounds_local, npoints, &
                                                             npoints_local, ubounds, ubounds_local
       LOGICAL                                            :: be_silent
@@ -320,14 +380,18 @@ CONTAINS
          !master sends all data to everyone
          DO i = lbounds(1), ubounds(1)
             DO j = lbounds(2), ubounds(2)
-               IF (my_rank .EQ. 0) THEN
-                  READ (extunit, *) (buffer(k), k=lbounds(3), ubounds(3))
+               IF (my_rank == 0) THEN
+                  DO k = lbounds(3), ubounds(3), cube_num_entries_line
+                     last_z = MIN(k + cube_num_entries_line - 1, ubounds(3))
+                     READ (extunit, '(A)') value_line
+                     CALL cube_read_values(value_line, buffer(k:last_z))
+                  END DO
                END IF
                CALL gid%bcast(buffer(lbounds(3):ubounds(3)), 0)
 
                !only use data that is local to me - i.e. in slice of pencil I own
-               IF ((lbounds_local(1) .LE. i) .AND. (i .LE. ubounds_local(1)) .AND. (lbounds_local(2) .LE. j) &
-                   .AND. (j .LE. ubounds_local(2))) THEN
+               IF ((lbounds_local(1) <= i) .AND. (i <= ubounds_local(1)) .AND. (lbounds_local(2) <= j) &
+                   .AND. (j <= ubounds_local(2))) THEN
                   !allow scaling of external potential values by factor 'scaling' (SCALING_FACTOR in input file)
                   grid%array(i, j, lbounds(3):ubounds(3)) = buffer(lbounds(3):ubounds(3))*scaling
                END IF
@@ -374,18 +438,18 @@ CONTAINS
       INTEGER, INTENT(in)                                :: msglen
       LOGICAL, INTENT(in), OPTIONAL                      :: silent
 
-      INTEGER, PARAMETER                                 :: entry_len = 13, num_entries_line = 6
-
+      CHARACTER(LEN=cube_line_len)                       :: value_line
       INTEGER, DIMENSION(3)                              :: lbounds, lbounds_local, npoints, &
                                                             npoints_local, ubounds, ubounds_local
       INTEGER, ALLOCATABLE, DIMENSION(:), TARGET         :: blocklengths
       INTEGER(kind=file_offset), ALLOCATABLE, &
          DIMENSION(:), TARGET                            :: displacements
       INTEGER(kind=file_offset)                          :: BOF
-      INTEGER :: extunit_handle, i, ientry, islice, j, k, my_rank, nat, ndum, nslices, num_pe, &
-         offset_global, output_unit, pos, readstat, size_of_z, tag
+      INTEGER                                            :: extunit_handle, i, islice, j, k, last_z, &
+                                                            my_rank, nat, ndum, nslices, num_pe, &
+                                                            offset_global, output_unit, size_of_z, &
+                                                            tag
       CHARACTER(LEN=msglen), ALLOCATABLE, DIMENSION(:)   :: readbuffer
-      CHARACTER(LEN=msglen)                              :: tmp
       LOGICAL                                            :: be_silent, should_read(2)
       REAL(kind=dp), ALLOCATABLE, DIMENSION(:)           :: buffer
       REAL(kind=dp), DIMENSION(3)                        :: dr, rdum
@@ -458,21 +522,23 @@ CONTAINS
       END IF
       ! Sync offset and start parallel read
       CALL gid%bcast(offset_global, grid%pw_grid%para%group%source)
-      BOF = offset_global
+      ! INQUIRE(POS=...) returns a 1-based stream position, whereas MPI-IO
+      ! file offsets are 0-based.
+      BOF = offset_global - 1
       CALL extunit%open(groupid=gid, filepath=filename, amode_status=file_amode_rdonly)
       ! Determine byte offsets for each grid z-slice which are local to a process
       ALLOCATE (displacements(nslices))
       displacements = 0
       DO i = lbounds(1), ubounds(1)
          should_read(:) = .TRUE.
-         IF (i .LT. lbounds_local(1)) THEN
+         IF (i < lbounds_local(1)) THEN
             should_read(1) = .FALSE.
-         ELSE IF (i .GT. ubounds_local(1)) THEN
+         ELSE IF (i > ubounds_local(1)) THEN
             EXIT
          END IF
          DO j = lbounds(2), ubounds(2)
             should_read(2) = .TRUE.
-            IF (j .LT. lbounds_local(2) .OR. j .GT. ubounds_local(2)) THEN
+            IF (j < lbounds_local(2) .OR. j > ubounds_local(2)) THEN
                should_read(2) = .FALSE.
             END IF
             IF (ALL(should_read .EQV. .TRUE.)) THEN
@@ -502,39 +568,8 @@ CONTAINS
       j = lbounds_local(2)
       ALLOCATE (buffer(lbounds(3):ubounds(3)))
       buffer = 0.0_dp
-      ! Test if the compiler supports parsing lines with line breaks in them
-      IF (parse_test) THEN
-         READ (readbuffer(1), *, IOSTAT=readstat) (buffer(k), k=lbounds(3), ubounds(3))
-         IF (readstat == 0) THEN
-            parses_linebreaks = .TRUE.
-         ELSE
-            parses_linebreaks = .FALSE.
-         END IF
-         parse_test = .FALSE.
-         buffer = 0.0_dp
-      END IF
       DO islice = 1, nslices
-         IF (parses_linebreaks) THEN
-            ! Use list-directed conversion if supported
-            ! Produces faster code, but maybe the latter method could be optimized
-            READ (readbuffer(islice), *) (buffer(k), k=lbounds(3), ubounds(3))
-         ELSE
-            ! Convert values by going through the z-slice one value at a time
-            tmp = readbuffer(islice)
-            pos = 1
-            ientry = 1
-            DO k = lbounds_local(3), ubounds_local(3)
-               IF (MODULO(ientry, num_entries_line) == 0 .OR. k == ubounds_local(3)) THEN
-                  ! Last value on line, dont read line break
-                  READ (tmp(pos:pos + (entry_len - 2)), '(E12.5)') buffer(k)
-                  pos = pos + (entry_len + 1)
-               ELSE
-                  READ (tmp(pos:pos + (entry_len - 1)), '(E13.5)') buffer(k)
-                  pos = pos + entry_len
-               END IF
-               ientry = ientry + 1
-            END DO
-         END IF
+         CALL cube_read_values(readbuffer(islice), buffer(lbounds(3):ubounds(3)))
          ! Optionally scale cube file values
          grid%array(i, j, lbounds(3):ubounds(3)) = scaling*buffer(lbounds(3):ubounds(3))
          j = j + 1
@@ -582,14 +617,18 @@ CONTAINS
          !master sends all data to everyone
          DO i = lbounds(1), ubounds(1)
             DO j = lbounds(2), ubounds(2)
-               IF (my_rank .EQ. 0) THEN
-                  READ (extunit_handle, *) (buffer(k), k=lbounds(3), ubounds(3))
+               IF (my_rank == 0) THEN
+                  DO k = lbounds(3), ubounds(3), cube_num_entries_line
+                     last_z = MIN(k + cube_num_entries_line - 1, ubounds(3))
+                     READ (extunit_handle, '(A)') value_line
+                     CALL cube_read_values(value_line, buffer(k:last_z))
+                  END DO
                END IF
                CALL gid%bcast(buffer(lbounds(3):ubounds(3)), 0)
 
                !only use data that is local to me - i.e. in slice of pencil I own
-               IF ((lbounds_local(1) .LE. i) .AND. (i .LE. ubounds_local(1)) .AND. (lbounds_local(2) .LE. j) &
-                   .AND. (j .LE. ubounds_local(2))) THEN
+               IF ((lbounds_local(1) <= i) .AND. (i <= ubounds_local(1)) .AND. (lbounds_local(2) <= j) &
+                   .AND. (j <= ubounds_local(2))) THEN
                   !allow scaling of external potential values by factor 'scaling' (SCALING_FACTOR in input file)
                   IF (ANY(grid%array(i, j, lbounds(3):ubounds(3)) /= buffer(lbounds(3):ubounds(3))*scaling)) &
                      CALL cp_abort(__LOCATION__, &
@@ -614,14 +653,15 @@ CONTAINS
 !> \param title       title of the cube file
 !> \param particles_r Cartersian coordinates of the system
 !> \param particles_z atomic masses of atoms in the system
+!> \param particles_zeff effective atomic charges of atoms in the system
 !> \param stride      every stride(i)th value of the potential is outputted (i=x,y,z)
 !> \param zero_tails  flag that determines if small values of the potential should be zeroed
 !> \param msglen      the size of each grid slice along z-axis in bytes
 !> \par History
 !>      Created [Nico Holmberg] (11.2017)
 ! **************************************************************************************************
-   SUBROUTINE pw_to_cube_parallel(grid, unit_nr, title, particles_r, particles_z, stride, zero_tails, &
-                                  msglen)
+   SUBROUTINE pw_to_cube_parallel(grid, unit_nr, title, particles_r, particles_z, particles_zeff, &
+                                  stride, zero_tails, msglen)
 
       TYPE(pw_r3d_rs_type), INTENT(IN)                   :: grid
       TYPE(mp_file_type), INTENT(IN)                     :: unit_nr
@@ -629,6 +669,7 @@ CONTAINS
       REAL(KIND=dp), DIMENSION(:, :), INTENT(IN), &
          OPTIONAL                                        :: particles_r
       INTEGER, DIMENSION(:), INTENT(IN), OPTIONAL        :: particles_z
+      REAL(KIND=dp), DIMENSION(:), INTENT(IN), OPTIONAL  :: particles_zeff
       INTEGER, INTENT(IN)                                :: stride(3)
       LOGICAL, INTENT(IN)                                :: zero_tails
       INTEGER, INTENT(IN)                                :: msglen
@@ -667,14 +708,14 @@ CONTAINS
       islice = 1
       DO i = lbounds(1), ubounds(1), stride(1)
          should_write(:) = .TRUE.
-         IF (i .LT. lbounds_local(1)) THEN
+         IF (i < lbounds_local(1)) THEN
             should_write(1) = .FALSE.
-         ELSE IF (i .GT. ubounds_local(1)) THEN
+         ELSE IF (i > ubounds_local(1)) THEN
             EXIT
          END IF
          DO j = lbounds(2), ubounds(2), stride(2)
             should_write(2) = .TRUE.
-            IF (j .LT. lbounds_local(2) .OR. j .GT. ubounds_local(2)) THEN
+            IF (j < lbounds_local(2) .OR. j > ubounds_local(2)) THEN
                should_write(2) = .FALSE.
             END IF
             IF (ALL(should_write .EQV. .TRUE.)) THEN
@@ -735,11 +776,19 @@ CONTAINS
          BOF = BOF + LEN(header//NEW_LINE("C"))*mpi_character_size
 
          IF (PRESENT(particles_z)) THEN
-            DO i = 1, np
-               WRITE (header_z, '(I5,4f12.6)') particles_z(i), 0._dp, particles_r(:, i)
-               CALL unit_nr%write_at(BOF, header_z//NEW_LINE("C"))
-               BOF = BOF + LEN(header_z//NEW_LINE("C"))*mpi_character_size
-            END DO
+            IF (PRESENT(particles_zeff)) THEN
+               DO i = 1, np
+                  WRITE (header_z, '(I5,4f12.6)') particles_z(i), particles_zeff(i), particles_r(:, i)
+                  CALL unit_nr%write_at(BOF, header_z//NEW_LINE("C"))
+                  BOF = BOF + LEN(header_z//NEW_LINE("C"))*mpi_character_size
+               END DO
+            ELSE
+               DO i = 1, np
+                  WRITE (header_z, '(I5,4f12.6)') particles_z(i), 0._dp, particles_r(:, i)
+                  CALL unit_nr%write_at(BOF, header_z//NEW_LINE("C"))
+                  BOF = BOF + LEN(header_z//NEW_LINE("C"))*mpi_character_size
+               END DO
+            END IF
          END IF
       END IF
       ! Sync offset
@@ -752,14 +801,14 @@ CONTAINS
       writebuffer(:) = ''
       DO i = lbounds(1), ubounds(1), stride(1)
          should_write(:) = .TRUE.
-         IF (i .LT. lbounds_local(1)) THEN
+         IF (i < lbounds_local(1)) THEN
             should_write(1) = .FALSE.
-         ELSE IF (i .GT. ubounds_local(1)) THEN
+         ELSE IF (i > ubounds_local(1)) THEN
             EXIT
          END IF
          DO j = lbounds(2), ubounds(2), stride(2)
             should_write(2) = .TRUE.
-            IF (j .LT. lbounds_local(2) .OR. j .GT. ubounds_local(2)) THEN
+            IF (j < lbounds_local(2) .OR. j > ubounds_local(2)) THEN
                should_write(2) = .FALSE.
             END IF
             IF (ALL(should_write .EQV. .TRUE.)) THEN
@@ -769,9 +818,9 @@ CONTAINS
                counter = 0
                DO k = lbounds(3), ubounds(3), stride(3)
                   IF (zero_tails .AND. grid%array(i, j, k) < 1.E-7_dp) THEN
-                     WRITE (value, '(E13.5)') 0.0_dp
+                     WRITE (value, cube_value_format) 0.0_dp
                   ELSE
-                     WRITE (value, '(E13.5)') grid%array(i, j, k)
+                     WRITE (value, cube_value_format) grid%array(i, j, k)
                   END IF
                   tmp = TRIM(tmp)//TRIM(value)
                   counter = counter + 1
@@ -895,7 +944,7 @@ CONTAINS
          DO I2 = L2, U2, my_stride(2)
 
             ! cycling through the CPUs, check if the current ray (I1,I2) is local to that CPU
-            IF (pw%pw_grid%para%mode .NE. PW_MODE_LOCAL) THEN
+            IF (pw%pw_grid%para%mode /= PW_MODE_LOCAL) THEN
                DO ip = 0, num_pe - 1
                   IF (pw%pw_grid%para%bo(1, 1, ip, 1) <= I1 - L1 + 1 .AND. pw%pw_grid%para%bo(2, 1, ip, 1) >= I1 - L1 + 1 .AND. &
                       pw%pw_grid%para%bo(1, 2, ip, 1) <= I2 - L2 + 1 .AND. pw%pw_grid%para%bo(2, 2, ip, 1) >= I2 - L2 + 1) THEN
@@ -941,7 +990,7 @@ CONTAINS
                       pw%pw_grid%dh(3, 3)*I3
 
                   IF (unit_nr > 0) THEN
-                     WRITE (unit_nr, '(6E13.5, 6E13.5, 6E13.5, 6E13.5)') x, y, z, buf(I3)
+                     WRITE (unit_nr, '(6E13.5E3, 6E13.5E3, 6E13.5E3, 6E13.5E3)') x, y, z, buf(I3)
                   END IF
                END DO
 
@@ -961,7 +1010,7 @@ CONTAINS
                       pw%pw_grid%dh(3, 3)*I3
 
                   IF (unit_nr > 0) THEN
-                     WRITE (unit_nr, '(6E13.5, 6E13.5, 6E13.5, 6E13.5)') x, y, z, buf(I3), buf2(I3)
+                     WRITE (unit_nr, '(6E13.5E3, 6E13.5E3, 6E13.5E3, 6E13.5E3)') x, y, z, buf(I3), buf2(I3)
                   END IF
                END DO
 

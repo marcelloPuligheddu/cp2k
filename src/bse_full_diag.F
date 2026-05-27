@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2025 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2026 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -29,6 +29,8 @@ MODULE bse_full_diag
    USE cp_blacs_env,                    ONLY: cp_blacs_env_create,&
                                               cp_blacs_env_release,&
                                               cp_blacs_env_type
+   USE cp_control_types,                ONLY: dft_control_type,&
+                                              tddfpt2_control_type
    USE cp_fm_basic_linalg,              ONLY: cp_fm_scale_and_add
    USE cp_fm_diag,                      ONLY: choose_eigv_solver,&
                                               cp_fm_power
@@ -41,6 +43,7 @@ MODULE bse_full_diag
                                               cp_fm_set_all,&
                                               cp_fm_to_fm,&
                                               cp_fm_type
+   USE exstates_types,                  ONLY: excited_energy_type
    USE input_constants,                 ONLY: bse_screening_alpha,&
                                               bse_screening_rpa,&
                                               bse_singlet,&
@@ -49,7 +52,8 @@ MODULE bse_full_diag
    USE message_passing,                 ONLY: mp_para_env_type
    USE mp2_types,                       ONLY: mp2_type
    USE parallel_gemm_api,               ONLY: parallel_gemm
-   USE qs_environment_types,            ONLY: qs_environment_type
+   USE qs_environment_types,            ONLY: get_qs_env,&
+                                              qs_environment_type
 #include "./base/base_uses.f90"
 
    IMPLICIT NONE
@@ -81,11 +85,12 @@ CONTAINS
 !> \param dimen_RI ...
 !> \param mp2_env ...
 !> \param para_env ...
+!> \param qs_env ...
 ! **************************************************************************************************
    SUBROUTINE create_A(fm_mat_S_ia_bse, fm_mat_S_bar_ij_bse, fm_mat_S_ab_bse, &
                        fm_A, Eigenval, unit_nr, &
                        homo, virtual, dimen_RI, mp2_env, &
-                       para_env)
+                       para_env, qs_env)
 
       TYPE(cp_fm_type), INTENT(IN)                       :: fm_mat_S_ia_bse, fm_mat_S_bar_ij_bse, &
                                                             fm_mat_S_ab_bse
@@ -94,20 +99,28 @@ CONTAINS
       INTEGER, INTENT(IN)                                :: unit_nr, homo, virtual, dimen_RI
       TYPE(mp2_type), INTENT(INOUT)                      :: mp2_env
       TYPE(mp_para_env_type), INTENT(INOUT)              :: para_env
+      TYPE(qs_environment_type), POINTER                 :: qs_env
 
       CHARACTER(LEN=*), PARAMETER                        :: routineN = 'create_A'
 
       INTEGER                                            :: a_virt_row, handle, i_occ_row, &
                                                             i_row_global, ii, j_col_global, jj, &
-                                                            ncol_local_A, nrow_local_A
+                                                            ncol_local_A, nrow_local_A, sizeeigen
       INTEGER, DIMENSION(4)                              :: reordering
       INTEGER, DIMENSION(:), POINTER                     :: col_indices_A, row_indices_A
       REAL(KIND=dp)                                      :: alpha, alpha_screening, eigen_diff
       TYPE(cp_blacs_env_type), POINTER                   :: blacs_env
       TYPE(cp_fm_struct_type), POINTER                   :: fm_struct_A, fm_struct_W
-      TYPE(cp_fm_type)                                   :: fm_W
+      TYPE(cp_fm_type)                                   :: fm_A_copy, fm_W
+      TYPE(dft_control_type), POINTER                    :: dft_control
+      TYPE(excited_energy_type), POINTER                 :: ex_env
+      TYPE(tddfpt2_control_type), POINTER                :: tddfpt_control
 
       CALL timeset(routineN, handle)
+
+      NULLIFY (dft_control, tddfpt_control)
+      CALL get_qs_env(qs_env, dft_control=dft_control)
+      tddfpt_control => dft_control%tddfpt2_control
 
       IF (unit_nr > 0 .AND. mp2_env%bse%bse_debug_print) THEN
          WRITE (unit_nr, '(T2,A10,T13,A10)') 'BSE|DEBUG|', 'Creating A'
@@ -140,6 +153,10 @@ CONTAINS
                                ncol_global=homo*virtual, para_env=fm_mat_S_ia_bse%matrix_struct%para_env)
       CALL cp_fm_create(fm_A, fm_struct_A, name="fm_A_iajb")
       CALL cp_fm_set_all(fm_A, 0.0_dp)
+      IF (tddfpt_control%do_bse_w_only) THEN
+         CALL cp_fm_create(fm_A_copy, fm_struct_A, name="fm_A_iajb")
+         CALL cp_fm_set_all(fm_A_copy, 0.0_dp)
+      END IF
 
       CALL cp_fm_struct_create(fm_struct_W, context=fm_mat_S_ab_bse%matrix_struct%context, nrow_global=homo**2, &
                                ncol_global=virtual**2, para_env=fm_mat_S_ab_bse%matrix_struct%para_env)
@@ -149,9 +166,11 @@ CONTAINS
       ! Create A matrix from GW Energies, v_ia,jb and W_ij,ab (different blacs_env!)
       ! v_ia,jb, which is directly initialized in A (with a factor of alpha)
       ! v_ia,jb = \sum_P B^P_ia B^P_jb
-      CALL parallel_gemm(transa="T", transb="N", m=homo*virtual, n=homo*virtual, k=dimen_RI, alpha=alpha, &
-                         matrix_a=fm_mat_S_ia_bse, matrix_b=fm_mat_S_ia_bse, beta=0.0_dp, &
-                         matrix_c=fm_A)
+      IF ((.NOT. tddfpt_control%do_bse) .AND. (.NOT. tddfpt_control%do_bse_w_only)) THEN
+         CALL parallel_gemm(transa="T", transb="N", m=homo*virtual, n=homo*virtual, k=dimen_RI, alpha=alpha, &
+                            matrix_a=fm_mat_S_ia_bse, matrix_b=fm_mat_S_ia_bse, beta=0.0_dp, &
+                            matrix_c=fm_A)
+      END IF
 
       IF (unit_nr > 0 .AND. mp2_env%bse%bse_debug_print) THEN
          WRITE (unit_nr, '(T2,A10,T13,A16)') 'BSE|DEBUG|', 'Allocated A_iajb'
@@ -181,14 +200,37 @@ CONTAINS
 
       ! If infinite screening is applied, fm_W is simply 0 - Otherwise it needs to be computed from 3c integrals
       IF (mp2_env%bse%screening_method /= bse_screening_rpa) THEN
-         reordering = (/1, 3, 2, 4/)
+         reordering = [1, 3, 2, 4]
          CALL fm_general_add_bse(fm_A, fm_W, -1.0_dp, homo, virtual, &
                                  virtual, virtual, unit_nr, reordering, mp2_env)
+         IF (tddfpt_control%do_bse_w_only) THEN
+            CALL fm_general_add_bse(fm_A_copy, fm_W, -1.0_dp, homo, virtual, &
+                                    virtual, virtual, unit_nr, reordering, mp2_env)
+         END IF
       END IF
       !full matrix W is not needed anymore, release it to save memory
+      IF (tddfpt_control%do_bse .OR. tddfpt_control%do_bse_w_only .OR. &
+          tddfpt_control%do_bse_gw_only) THEN
+         NULLIFY (ex_env)
+         CALL get_qs_env(qs_env, exstate_env=ex_env)
+         IF (.NOT. tddfpt_control%do_bse_gw_only) THEN
+            ALLOCATE (ex_env%bse_w_matrix_MO(1, 1)) ! for now only closed-shell
+            ALLOCATE (ex_env%bse_a_matrix_MO(1, 1)) ! for now only closed-shell
+            CALL cp_fm_create(ex_env%bse_w_matrix_MO(1, 1), fm_struct_W)
+            CALL cp_fm_create(ex_env%bse_a_matrix_MO(1, 1), fm_struct_A)
+            CALL cp_fm_to_fm(fm_W, ex_env%bse_w_matrix_MO(1, 1))
+            IF (tddfpt_control%do_bse_w_only) THEN
+               CALL cp_fm_to_fm(fm_A_copy, ex_env%bse_a_matrix_MO(1, 1))
+            ELSE
+               CALL cp_fm_to_fm(fm_A, ex_env%bse_a_matrix_MO(1, 1))
+            END IF
+         END IF
+      END IF
       CALL cp_fm_release(fm_W)
+      IF (tddfpt_control%do_bse_w_only) CALL cp_fm_release(fm_A_copy)
 
       !Now add the energy differences (ε_a-ε_i) on the diagonal (i.e. δ_ij δ_ab) of A_ia,jb
+      IF (.NOT. tddfpt_control%do_bse) THEN
       DO ii = 1, nrow_local_A
 
          i_row_global = row_indices_A(ii)
@@ -206,6 +248,13 @@ CONTAINS
             END IF
          END DO
       END DO
+      END IF
+
+      IF (tddfpt_control%do_bse .OR. tddfpt_control%do_bse_w_only .OR. tddfpt_control%do_bse_gw_only) THEN
+         sizeeigen = SIZE(Eigenval)
+         ALLOCATE (ex_env%gw_eigen(sizeeigen)) ! for now only closed-shell
+         ex_env%gw_eigen(:) = Eigenval(:)
+      END IF
 
       CALL cp_fm_struct_release(fm_struct_A)
       CALL cp_fm_struct_release(fm_struct_W)
@@ -294,7 +343,7 @@ CONTAINS
          ! Writing -1.0_dp * W_ib,ja to A_ia,jb, i.e. beta = -1.0_dp,
          ! W_ib,ja: nrow_secidx_in  = virtual,    ncol_secidx_in  = virtual
          ! A_ia,jb: nrow_secidx_out = virtual, ncol_secidx_out = virtual
-         reordering = (/1, 4, 3, 2/)
+         reordering = [1, 4, 3, 2]
          CALL fm_general_add_bse(fm_B, fm_W, -1.0_dp, virtual, virtual, &
                                  virtual, virtual, unit_nr, reordering, mp2_env)
       END IF
@@ -422,7 +471,7 @@ CONTAINS
       END IF
 
       CALL timestop(handle)
-   END SUBROUTINE
+   END SUBROUTINE create_hermitian_form_of_ABBA
 
 ! **************************************************************************************************
 !> \brief Solving eigenvalue equation C Z^n = (Ω^n)^2 Z^n .
@@ -475,7 +524,12 @@ CONTAINS
       ALLOCATE (Exc_ens(homo*virtual))
 
       CALL choose_eigv_solver(fm_C, fm_eigvec_Z, Exc_ens, diag_info)
-      CPASSERT(diag_info == 0)
+
+      IF (diag_info /= 0) THEN
+         CALL cp_abort(__LOCATION__, &
+                       "Diagonalization of C=(A-B)^0.5 (A+B) (A-B)^0.5 failed in BSE")
+      END IF
+
       ! C could have negative eigenvalues, since we do not explicitly check A+B
       ! for positive definiteness (would make another O(N^6) Diagon. necessary)
       ! Instead, we include a check here
@@ -589,7 +643,12 @@ CONTAINS
       ALLOCATE (Exc_ens(homo*virtual))
 
       CALL choose_eigv_solver(fm_A, fm_eigvec, Exc_ens, diag_info)
-      CPASSERT(diag_info == 0)
+
+      IF (diag_info /= 0) THEN
+         CALL cp_abort(__LOCATION__, &
+                       "Diagonalization of A failed in TDA-BSE")
+      END IF
+
       CALL postprocess_bse(Exc_ens, fm_eigvec, mp2_env, qs_env, mo_coeff, &
                            homo, virtual, homo_irred, unit_nr, .TRUE.)
 

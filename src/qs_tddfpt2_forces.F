@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2025 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2026 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -11,11 +11,16 @@ MODULE qs_tddfpt2_forces
    USE atomic_kind_types,               ONLY: atomic_kind_type,&
                                               get_atomic_kind,&
                                               get_atomic_kind_set
+   USE bibliography,                    ONLY: Hehn2022,&
+                                              Hehn2024,&
+                                              Sertcan2024,&
+                                              cite_reference
    USE cp_control_types,                ONLY: dft_control_type,&
                                               tddfpt2_control_type
    USE cp_dbcsr_api,                    ONLY: &
-        dbcsr_add, dbcsr_complete_redistribute, dbcsr_copy, dbcsr_create, dbcsr_dot, dbcsr_p_type, &
+        dbcsr_add, dbcsr_complete_redistribute, dbcsr_copy, dbcsr_create, dbcsr_p_type, &
         dbcsr_release, dbcsr_scale, dbcsr_set, dbcsr_type, dbcsr_type_antisymmetric
+   USE cp_dbcsr_contrib,                ONLY: dbcsr_dot
    USE cp_dbcsr_cp2k_link,              ONLY: cp_dbcsr_alloc_block_from_nbl
    USE cp_dbcsr_operations,             ONLY: copy_dbcsr_to_fm,&
                                               copy_fm_to_dbcsr,&
@@ -46,6 +51,7 @@ MODULE qs_tddfpt2_forces
    USE hfx_ri,                          ONLY: hfx_ri_update_ks
    USE hfx_types,                       ONLY: hfx_type
    USE input_constants,                 ONLY: do_admm_aux_exch_func_none,&
+                                              no_sf_tddfpt,&
                                               oe_shift,&
                                               tddfpt_kernel_full,&
                                               tddfpt_kernel_none,&
@@ -122,6 +128,8 @@ MODULE qs_tddfpt2_forces
                                               tddfpt_work_matrices
    USE qs_vxc_atom,                     ONLY: calculate_xc_2nd_deriv_atom
    USE task_list_types,                 ONLY: task_list_type
+   USE xc_derivatives,                  ONLY: xc_functionals_get_needs
+   USE xc_rho_cflags_types,             ONLY: xc_rho_cflags_type
    USE xtb_ehess,                       ONLY: xtb_coulomb_hessian
    USE xtb_types,                       ONLY: get_xtb_atom_param,&
                                               xtb_atom_type
@@ -140,10 +148,14 @@ MODULE qs_tddfpt2_forces
 CONTAINS
 
 ! **************************************************************************************************
-!> \brief Perform TDDFPT gradient calculation.
+!> \brief Perform TDDFPT gradient calculation. This routine calculates the response vector R of Eq. 49
+!>        in J. Chem. Theory Comput. 2022, 18, 4186−4202 (https://doi.org/10.1021/acs.jctc.2c00144)
+!>        in ex_env%cpmos and a few contributions to the gradient.
 !> \param qs_env  Quickstep environment
 !> \param gs_mos ...
-!> \param ex_env ...
+!> \param ex_env Holds: Response vector ex_env%cpmos = R
+!>                      Difference density ex_env%matrix_pe = T
+!>                      Matrix ex_env%matrix_hz = H_munu[T]
 !> \param kernel_env ...
 !> \param sub_env ...
 !> \param work_matrices ...
@@ -161,7 +173,8 @@ CONTAINS
 
       CHARACTER(LEN=*), PARAMETER :: routineN = 'tddfpt_forces_main'
 
-      INTEGER                                            :: handle, ispin, nspins
+      INTEGER                                            :: handle, ispin, nspins, spin
+      LOGICAL                                            :: do_sf
       TYPE(admm_type), POINTER                           :: admm_env
       TYPE(cp_fm_struct_type), POINTER                   :: matrix_struct
       TYPE(dbcsr_p_type), DIMENSION(:), POINTER          :: matrix_pe_asymm, matrix_pe_symm, &
@@ -172,8 +185,26 @@ CONTAINS
       CALL timeset(routineN, handle)
 
       CALL get_qs_env(qs_env, dft_control=dft_control)
+
+      CALL cite_reference(Hehn2022)
+      CALL cite_reference(Hehn2024)
+      IF (dft_control%qs_control%gapw .OR. dft_control%qs_control%gapw_xc) CALL cite_reference(Sertcan2024)
+
       nspins = dft_control%nspins
       tddfpt_control => dft_control%tddfpt2_control
+      IF (tddfpt_control%spinflip == no_sf_tddfpt) THEN
+         do_sf = .FALSE.
+      ELSE
+         do_sf = .TRUE.
+      END IF
+
+      ! disable RES-TDDFPT for now
+      DO ispin = 1, nspins
+         IF (gs_mos(ispin)%nmo_occ /= gs_mos(ispin)%nmo_active) THEN
+            CALL cp_abort(__LOCATION__, "RES-TDDFPT Forces NYA")
+         END IF
+      END DO
+
       ! rhs of linres equation
       IF (ASSOCIATED(ex_env%cpmos)) THEN
          DO ispin = 1, SIZE(ex_env%cpmos)
@@ -182,17 +213,24 @@ CONTAINS
          DEALLOCATE (ex_env%cpmos)
       END IF
       ALLOCATE (ex_env%cpmos(nspins))
+      ! Create and initialize rectangular matrices of nao*occ dimension for alpha and beta R vectors
+      ! for the Z-vector equation system: AZ=-R
       DO ispin = 1, nspins
-         CALL cp_fm_get_info(matrix=ex_env%evect(ispin), matrix_struct=matrix_struct)
+         CALL cp_fm_get_info(gs_mos(ispin)%mos_occ, matrix_struct=matrix_struct)
          CALL cp_fm_create(ex_env%cpmos(ispin), matrix_struct)
          CALL cp_fm_set_all(ex_env%cpmos(ispin), 0.0_dp)
       END DO
       CALL get_qs_env(qs_env=qs_env, matrix_s=matrix_s)
       NULLIFY (matrix_pe_asymm, matrix_pe_symm)
+
+      ! Build difference density matrix_pe = X*X^T - (C*X^T*S*X*C^T + (C*X^T*S*X*C^T)^T)/2
+      !
       CALL dbcsr_allocate_matrix_set(ex_env%matrix_pe, nspins)
       CALL dbcsr_allocate_matrix_set(matrix_pe_symm, nspins)
       CALL dbcsr_allocate_matrix_set(matrix_pe_asymm, nspins)
       DO ispin = 1, nspins
+
+         ! Initialize matrix_pe as a sparse matrix with zeros
          ALLOCATE (ex_env%matrix_pe(ispin)%matrix)
          CALL dbcsr_create(ex_env%matrix_pe(ispin)%matrix, template=matrix_s(1)%matrix)
          CALL dbcsr_copy(ex_env%matrix_pe(ispin)%matrix, matrix_s(1)%matrix)
@@ -207,11 +245,17 @@ CONTAINS
                            matrix_type=dbcsr_type_antisymmetric)
          CALL dbcsr_complete_redistribute(ex_env%matrix_pe(ispin)%matrix, matrix_pe_asymm(ispin)%matrix)
 
-         CALL tddfpt_resvec1(ex_env%evect(ispin), gs_mos(ispin)%mos_occ, &
-                             matrix_s(1)%matrix, ex_env%matrix_pe(ispin)%matrix)
+         IF (do_sf) THEN
+            spin = 1
+         ELSE
+            spin = ispin
+         END IF
+         ! Add difference density to matrix_pe
+         CALL tddfpt_resvec1(ex_env%evect(spin), gs_mos(spin)%mos_active, &
+                             matrix_s(1)%matrix, ex_env%matrix_pe(ispin)%matrix, ispin, do_sf)
       END DO
       !
-      ! ground state ADMM!
+      ! Project the difference density into auxiliary basis for ADMM
       IF (dft_control%do_admm) THEN
          CALL get_qs_env(qs_env, admm_env=admm_env)
          CALL get_admm_env(admm_env, matrix_s_aux_fit=matrix_s_aux_fit)
@@ -233,6 +277,7 @@ CONTAINS
          CALL dbcsr_copy(ex_env%matrix_hz(ispin)%matrix, matrix_s(1)%matrix)
          CALL dbcsr_set(ex_env%matrix_hz(ispin)%matrix, 0.0_dp)
       END DO
+      ! Calculate first term of R vector: H_{\mu i\sigma}[T]
       IF (dft_control%qs_control%xtb) THEN
          CALL tddfpt_resvec2_xtb(qs_env, ex_env%matrix_pe, gs_mos, ex_env%matrix_hz, ex_env%cpmos)
       ELSE
@@ -240,9 +285,9 @@ CONTAINS
                              gs_mos, ex_env%matrix_hz, ex_env%cpmos)
       END IF
       !
-      CALL dbcsr_allocate_matrix_set(ex_env%matrix_px1, nspins)
-      CALL dbcsr_allocate_matrix_set(ex_env%matrix_px1_asymm, nspins)
-      DO ispin = 1, nspins
+      CALL dbcsr_allocate_matrix_set(ex_env%matrix_px1, SIZE(ex_env%evect, 1))
+      CALL dbcsr_allocate_matrix_set(ex_env%matrix_px1_asymm, SIZE(ex_env%evect, 1))
+      DO ispin = 1, SIZE(ex_env%evect, 1)
          ALLOCATE (ex_env%matrix_px1(ispin)%matrix)
          CALL dbcsr_create(ex_env%matrix_px1(ispin)%matrix, template=matrix_s(1)%matrix)
          CALL dbcsr_copy(ex_env%matrix_px1(ispin)%matrix, matrix_s(1)%matrix)
@@ -257,9 +302,9 @@ CONTAINS
       IF (tddfpt_control%do_admm) THEN
          CALL get_qs_env(qs_env, admm_env=admm_env)
          CALL get_admm_env(admm_env, matrix_s_aux_fit=matrix_s_aux_fit)
-         CALL dbcsr_allocate_matrix_set(ex_env%matrix_px1_admm, nspins)
-         CALL dbcsr_allocate_matrix_set(ex_env%matrix_px1_admm_asymm, nspins)
-         DO ispin = 1, nspins
+         CALL dbcsr_allocate_matrix_set(ex_env%matrix_px1_admm, SIZE(ex_env%evect, 1))
+         CALL dbcsr_allocate_matrix_set(ex_env%matrix_px1_admm_asymm, SIZE(ex_env%evect, 1))
+         DO ispin = 1, SIZE(ex_env%evect, 1)
             ALLOCATE (ex_env%matrix_px1_admm(ispin)%matrix)
             CALL dbcsr_create(ex_env%matrix_px1_admm(ispin)%matrix, template=matrix_s_aux_fit(1)%matrix)
             CALL dbcsr_copy(ex_env%matrix_px1_admm(ispin)%matrix, matrix_s_aux_fit(1)%matrix)
@@ -272,9 +317,9 @@ CONTAINS
                                              ex_env%matrix_px1_admm_asymm(ispin)%matrix)
          END DO
       END IF
-      ! TDA forces
+      ! TDA forces. Calculates and adds all missing terms for the response vector, Eq. 49.
       CALL tddfpt_forces(qs_env, ex_env, gs_mos, kernel_env, sub_env, work_matrices)
-      ! Rotate res vector cpmos into original frame of occupied orbitals
+      ! Rotate res vector cpmos into original frame of occupied orbitals.
       CALL tddfpt_resvec3(qs_env, ex_env%cpmos, work_matrices)
 
       CALL dbcsr_deallocate_matrix_set(matrix_pe_symm)
@@ -335,8 +380,10 @@ CONTAINS
       ELSE
          !
          CALL exstate_potential_release(ex_env)
+         ! Build the values of hartree, fock and exchange-correlation potential on the grid
          CALL ks_ref_potential(qs_env, ex_env%vh_rspace, ex_env%vxc_rspace, &
-                               ex_env%vtau_rspace, ex_env%vadmm_rspace, ehartree, exc)
+                               ex_env%vtau_rspace, ex_env%vadmm_rspace, ehartree, exc, &
+                               vadmm_tau_rspace=ex_env%vadmm_tau_rspace)
          CALL ks_ref_potential_atom(qs_env, ex_env%local_rho_set, ex_env%local_rho_set_admm, &
                                     ex_env%vh_rspace)
          CALL tddfpt_force_direct(qs_env, ex_env, gs_mos, kernel_env, sub_env, &
@@ -354,9 +401,14 @@ CONTAINS
    END SUBROUTINE tddfpt_forces
 
 ! **************************************************************************************************
-!> \brief Calculate direct tddft forces
+!> \brief Calculate direct tddft forces.
+!>  J. Chem. Theory Comput. 2022, 18, 7, 4186–4202 (https://doi.org/10.1021/acs.jctc.2c00144)
 !> \param qs_env ...
-!> \param ex_env ...
+!> \param ex_env Holds on exit
+!>                 cpmos      = R,                     Response vector, Eq. 49.
+!>                 matrix_pe  = T,                     Difference density, Eq. 44.
+!>                 matrix_wx1 = CK[D^X]X^T,            Third term of Eq. 51.
+!>                 matrix_wz  = CX^T(\omegaS - K)XC^T, Last term of Eq. 51.
 !> \param gs_mos ...
 !> \param kernel_env ...
 !> \param sub_env ...
@@ -379,8 +431,9 @@ CONTAINS
 
       CHARACTER(LEN=*), PARAMETER :: routineN = 'tddfpt_force_direct'
 
-      INTEGER                                            :: handle, iounit, ispin, natom, norb, &
-                                                            nspins
+      INTEGER                                            :: handle, iounit, ispin, nact, natom, &
+                                                            nspins, spin
+      LOGICAL                                            :: do_sf
       REAL(KIND=dp)                                      :: evalue
       REAL(KIND=dp), ALLOCATABLE, DIMENSION(:, :)        :: ftot1, ftot2
       REAL(KIND=dp), DIMENSION(3)                        :: fodeb
@@ -412,6 +465,11 @@ CONTAINS
                       sab_orb=sab_orb, dft_control=dft_control, force=force)
       NULLIFY (tddfpt_control)
       tddfpt_control => dft_control%tddfpt2_control
+      IF (tddfpt_control%spinflip == no_sf_tddfpt) THEN
+         do_sf = .FALSE.
+      ELSE
+         do_sf = .TRUE.
+      END IF
       nspins = dft_control%nspins
 
       IF (debug_forces) THEN
@@ -420,27 +478,43 @@ CONTAINS
          CALL total_qs_force(ftot1, force, atomic_kind_set)
       END IF
 
+      ! Build last terms of the response vector, Eq. 49, and third term of Lambda_munu, Eq. 51.
+      ! the response vector is in ex_env%cpmos and Lambda is in ex_env%matrix_wx1
       CALL tddfpt_kernel_force(qs_env, ex_env, gs_mos, kernel_env, sub_env, work_matrices, debug_forces)
 
-      ! Overlap matrix
+      ! Overlap matrix, build the Lambda matrix, Eq. 51.
+      NULLIFY (matrix_wx1, matrix_wz)
+      CALL dbcsr_allocate_matrix_set(matrix_wz, nspins)
       matrix_wx1 => ex_env%matrix_wx1
       CALL get_qs_env(qs_env=qs_env, matrix_s=matrix_s, matrix_ks=matrix_ks)
-      NULLIFY (matrix_wz)
-      CALL dbcsr_allocate_matrix_set(matrix_wz, nspins)
       DO ispin = 1, nspins
+         IF (do_sf) THEN
+            spin = 1
+         ELSE
+            spin = ispin
+         END IF
+         ! Create and initialize the Lambda matrix as a sparse matrix
          ALLOCATE (matrix_wz(ispin)%matrix)
          CALL dbcsr_create(matrix=matrix_wz(ispin)%matrix, template=matrix_s(1)%matrix)
          CALL cp_dbcsr_alloc_block_from_nbl(matrix_wz(ispin)%matrix, sab_orb)
          CALL dbcsr_set(matrix_wz(ispin)%matrix, 0.0_dp)
-         CALL cp_fm_get_info(gs_mos(ispin)%mos_occ, ncol_global=norb)
-         CALL cp_dbcsr_plus_fm_fm_t(matrix_wz(ispin)%matrix, matrix_v=evect(ispin), ncol=norb)
-         evalue = ex_env%evalue
-         IF (tddfpt_control%oe_corr == oe_shift) THEN
-            evalue = ex_env%evalue - tddfpt_control%ev_shift
+         ! For spin-flip excitations only the beta component of the Lambda matrix
+         ! contains the excitation energy term
+         IF (.NOT. (do_sf .AND. (ispin == 1))) THEN
+            CALL cp_fm_get_info(evect(spin), ncol_global=nact)
+            CALL cp_dbcsr_plus_fm_fm_t(matrix_wz(ispin)%matrix, matrix_v=evect(spin), ncol=nact)
+            evalue = ex_env%evalue
+            IF (tddfpt_control%oe_corr == oe_shift) THEN
+               evalue = ex_env%evalue - tddfpt_control%ev_shift
+            END IF
+            CALL dbcsr_scale(matrix_wz(ispin)%matrix, evalue)
          END IF
-         CALL dbcsr_scale(matrix_wz(ispin)%matrix, evalue)
-         CALL calculate_wx_matrix(gs_mos(ispin)%mos_occ, evect(ispin), matrix_ks(ispin)%matrix, &
-                                  matrix_wz(ispin)%matrix)
+         ! For spin-flip excitations only the alpha component of the Lambda matrix
+         ! contains the occupied MO energy term
+         IF (.NOT. (do_sf .AND. (ispin == 2))) THEN
+            CALL calculate_wx_matrix(gs_mos(ispin)%mos_active, evect(spin), matrix_ks(ispin)%matrix, &
+                                     matrix_wz(ispin)%matrix)
+         END IF
       END DO
       IF (nspins == 2) THEN
          CALL dbcsr_add(matrix_wz(1)%matrix, matrix_wz(2)%matrix, &
@@ -448,6 +522,8 @@ CONTAINS
       END IF
       NULLIFY (scrm)
       IF (debug_forces) fodeb(1:3) = force(1)%overlap(1:3, 1)
+      ! Calculate the force contribution of matrix_xz into the force in ks_env.
+      !   force%overlap = Tr(dS*matrix_wz), last term of Eq. 51.
       CALL build_overlap_matrix(ks_env, matrix_s=scrm, &
                                 matrix_name="OVERLAP MATRIX", &
                                 basis_type_a="ORB", basis_type_b="ORB", &
@@ -461,7 +537,8 @@ CONTAINS
          IF (iounit > 0) WRITE (iounit, "(T3,A,T33,3F16.8)") "DEBUG:: Wx*dS ", fodeb
       END IF
 
-      ! Overlap matrix
+      ! Overlap matrix. Build a part of the first term of Lamda, Eq. 51, corresponding to
+      ! the second term of Eq. 41. matrix_wz = C*X^T*(omega*S - K)*X*C^T
       CALL get_qs_env(qs_env=qs_env, matrix_s=matrix_s, matrix_ks=matrix_ks)
       NULLIFY (matrix_wz)
       CALL dbcsr_allocate_matrix_set(matrix_wz, nspins)
@@ -470,13 +547,21 @@ CONTAINS
          CALL dbcsr_create(matrix=matrix_wz(ispin)%matrix, template=matrix_s(1)%matrix)
          CALL cp_dbcsr_alloc_block_from_nbl(matrix_wz(ispin)%matrix, sab_orb)
          CALL dbcsr_set(matrix_wz(ispin)%matrix, 0.0_dp)
-         CALL cp_fm_get_info(gs_mos(ispin)%mos_occ, ncol_global=norb)
-         evalue = ex_env%evalue
-         IF (tddfpt_control%oe_corr == oe_shift) THEN
-            evalue = ex_env%evalue - tddfpt_control%ev_shift
+         ! For spin-flip excitations only the alpha component of Lambda has contributions
+         ! of this term, so skip beta
+         IF (.NOT. (do_sf .AND. (ispin == 2))) THEN
+            evalue = ex_env%evalue
+            IF (tddfpt_control%oe_corr == oe_shift) THEN
+               evalue = ex_env%evalue - tddfpt_control%ev_shift
+            END IF
+            IF (do_sf) THEN
+               spin = 2
+            ELSE
+               spin = ispin
+            END IF
+            CALL calculate_xwx_matrix(gs_mos(ispin)%mos_active, evect(ispin), matrix_s(1)%matrix, &
+                                      matrix_ks(spin)%matrix, matrix_wz(ispin)%matrix, evalue)
          END IF
-         CALL calculate_xwx_matrix(gs_mos(ispin)%mos_occ, evect(ispin), matrix_s(1)%matrix, &
-                                   matrix_ks(ispin)%matrix, matrix_wz(ispin)%matrix, evalue)
       END DO
       IF (nspins == 2) THEN
          CALL dbcsr_add(matrix_wz(1)%matrix, matrix_wz(2)%matrix, &
@@ -497,11 +582,16 @@ CONTAINS
          IF (iounit > 0) WRITE (iounit, "(T3,A,T33,3F16.8)") "DEBUG:: xWx*dS ", fodeb
       END IF
 
-      ! Overlap matrix
+      ! Compute force contribution of the first term of Eq. 41 in the first term of Eq. 51
+      ! that was calculated in tddfpt_kernel_force,
+      !  force%overlap = 0.5C*H[T]*C^T
       IF (ASSOCIATED(matrix_wx1)) THEN
-         IF (nspins == 2) THEN
+         IF (nspins == 2 .AND. .NOT. do_sf) THEN
             CALL dbcsr_add(matrix_wx1(1)%matrix, matrix_wx1(2)%matrix, &
                            alpha_scalar=0.5_dp, beta_scalar=0.5_dp)
+         ELSE IF (nspins == 2 .AND. do_sf) THEN
+            CALL dbcsr_add(matrix_wx1(1)%matrix, matrix_wx1(2)%matrix, &
+                           alpha_scalar=1.0_dp, beta_scalar=1.0_dp)
          END IF
          NULLIFY (scrm)
          IF (debug_forces) fodeb(1:3) = force(1)%overlap(1:3, 1)
@@ -514,7 +604,7 @@ CONTAINS
          IF (debug_forces) THEN
             fodeb(1:3) = force(1)%overlap(1:3, 1) - fodeb(1:3)
             CALL para_env%sum(fodeb)
-            IF (iounit > 0) WRITE (iounit, "(T3,A,T33,3F16.8)") "DEBUG:: WK*dS ", fodeb
+            IF (iounit > 0) WRITE (iounit, "(T3,A,T33,3F16.8)") "DEBUG:: D^XKP*dS ", fodeb
          END IF
       END IF
 
@@ -532,59 +622,105 @@ CONTAINS
    END SUBROUTINE tddfpt_force_direct
 
 ! **************************************************************************************************
-!> \brief ...
+!> \brief Build the spin difference density,
+!>           matrix_pe = matrix_pe + X*X^T - (C*X^T*S*X*C^T + (C*X^T*S*X*C^T)^T)/2
 !> \param evect ...
-!> \param mos_occ ...
+!> \param mos_active ...
 !> \param matrix_s ...
 !> \param matrix_pe ...
+!> \param spin ...
+!> \param do_sf ...
 ! **************************************************************************************************
-   SUBROUTINE tddfpt_resvec1(evect, mos_occ, matrix_s, matrix_pe)
+   SUBROUTINE tddfpt_resvec1(evect, mos_active, matrix_s, matrix_pe, spin, do_sf)
 
-      TYPE(cp_fm_type), INTENT(IN)                       :: evect, mos_occ
+      TYPE(cp_fm_type), INTENT(IN)                       :: evect, mos_active
       TYPE(dbcsr_type), POINTER                          :: matrix_s, matrix_pe
+      INTEGER, INTENT(IN)                                :: spin
+      LOGICAL, INTENT(IN)                                :: do_sf
 
       CHARACTER(LEN=*), PARAMETER                        :: routineN = 'tddfpt_resvec1'
 
-      INTEGER                                            :: handle, iounit, nao, norb
+      INTEGER                                            :: handle, iounit, nact, nao, norb
       REAL(KIND=dp)                                      :: tmp
       TYPE(cp_fm_struct_type), POINTER                   :: fmstruct, fmstruct2
       TYPE(cp_fm_type)                                   :: cxmat, xxmat
       TYPE(cp_logger_type), POINTER                      :: logger
 
       CALL timeset(routineN, handle)
-      ! X*X^T
-      CALL cp_fm_get_info(mos_occ, nrow_global=nao, ncol_global=norb)
-      CALL cp_dbcsr_plus_fm_fm_t(matrix_pe, matrix_v=evect, ncol=norb)
-      ! X^T*S*X
-      CALL cp_fm_get_info(evect, matrix_struct=fmstruct)
-      NULLIFY (fmstruct2)
-      CALL cp_fm_struct_create(fmstruct=fmstruct2, template_fmstruct=fmstruct, &
-                               nrow_global=norb, ncol_global=norb)
-      CALL cp_fm_create(xxmat, matrix_struct=fmstruct2)
-      CALL cp_fm_struct_release(fmstruct2)
-      CALL cp_fm_create(cxmat, matrix_struct=fmstruct)
-      CALL cp_dbcsr_sm_fm_multiply(matrix_s, evect, cxmat, norb, alpha=1.0_dp, beta=0.0_dp)
-      CALL parallel_gemm('T', 'N', norb, norb, nao, 1.0_dp, cxmat, evect, 0.0_dp, xxmat)
-      CALL parallel_gemm('N', 'N', nao, norb, norb, 1.0_dp, mos_occ, xxmat, 0.0_dp, cxmat)
-      CALL cp_fm_release(xxmat)
-      ! C*C^T*XX
-      CALL cp_dbcsr_plus_fm_fm_t(matrix_pe, matrix_v=mos_occ, matrix_g=cxmat, &
-                                 ncol=norb, alpha=-1.0_dp, symmetry_mode=1)
-      CALL cp_fm_release(cxmat)
+      CALL cp_fm_get_info(mos_active, nrow_global=nao, ncol_global=norb)
+      CALL cp_fm_get_info(evect, nrow_global=nao, ncol_global=nact)
+      CPASSERT(norb == nact)
+
+      ! matrix_pe = X*X^T
+      IF (.NOT. do_sf .OR. (do_sf .AND. (spin == 2))) THEN
+         CALL cp_dbcsr_plus_fm_fm_t(matrix_pe, matrix_v=evect, ncol=norb)
+      END IF
+
+      ! matrix_pe = matrix_pe - (C*X^T*S*X*C^T + (C*X^T*S*X*C^T)^T)/2
+      IF (.NOT. do_sf .OR. (do_sf .AND. (spin == 1))) THEN
+         CALL cp_fm_get_info(evect, matrix_struct=fmstruct)
+         NULLIFY (fmstruct2)
+         CALL cp_fm_struct_create(fmstruct=fmstruct2, template_fmstruct=fmstruct, &
+                                  nrow_global=norb, ncol_global=norb)
+         CALL cp_fm_create(xxmat, matrix_struct=fmstruct2)
+         CALL cp_fm_struct_release(fmstruct2)
+         CALL cp_fm_create(cxmat, matrix_struct=fmstruct)
+         ! S*X
+         CALL cp_dbcsr_sm_fm_multiply(matrix_s, evect, cxmat, norb, alpha=1.0_dp, beta=0.0_dp)
+         ! (S*X)^T*X
+         CALL parallel_gemm('T', 'N', norb, norb, nao, 1.0_dp, cxmat, evect, 0.0_dp, xxmat)
+         ! C*X^T*S*X
+         CALL parallel_gemm('N', 'N', nao, norb, norb, 1.0_dp, mos_active, xxmat, 0.0_dp, cxmat)
+         CALL cp_fm_release(xxmat)
+         ! matrix_pe = matrix_pe - (C*(C^T*X^T*S*X)^T + C^T*(C^T*X^T*S*X))/2
+         CALL cp_dbcsr_plus_fm_fm_t(matrix_pe, matrix_v=mos_active, matrix_g=cxmat, &
+                                    ncol=norb, alpha=-1.0_dp, symmetry_mode=1)
+         CALL cp_fm_release(cxmat)
+      END IF
       !
       ! Test for Tr(Pe*S)=0
       CALL dbcsr_dot(matrix_pe, matrix_s, tmp)
-      IF (ABS(tmp) > 1.e-08_dp) THEN
-         logger => cp_get_default_logger()
-         IF (logger%para_env%is_source()) THEN
-            iounit = cp_logger_get_default_unit_nr(logger, local=.TRUE.)
-         ELSE
-            iounit = -1
+      IF (.NOT. do_sf) THEN
+         IF (ABS(tmp) > 1.e-08_dp) THEN
+            logger => cp_get_default_logger()
+            IF (logger%para_env%is_source()) THEN
+               iounit = cp_logger_get_default_unit_nr(logger, local=.TRUE.)
+            ELSE
+               iounit = -1
+            END IF
+            CPWARN("Electron count of excitation density matrix is non-zero.")
+            IF (iounit > 0) THEN
+               WRITE (iounit, "(T2,A,T61,G20.10)") "Measured electron count is ", tmp
+               WRITE (iounit, "(T2,A,/)") REPEAT("*", 79)
+            END IF
          END IF
-         CPWARN("Electron count of excitation density matrix is non-zero.")
-         IF (iounit > 0) THEN
-            WRITE (iounit, "(T2,A,T61,G20.10)") "Measured electron count is ", tmp
-            WRITE (iounit, "(T2,A,/)") REPEAT("*", 79)
+      ELSE IF (spin == 1) THEN
+         IF (ABS(tmp + 1) > 1.e-08_dp) THEN
+            logger => cp_get_default_logger()
+            IF (logger%para_env%is_source()) THEN
+               iounit = cp_logger_get_default_unit_nr(logger, local=.TRUE.)
+            ELSE
+               iounit = -1
+            END IF
+            CPWARN("Count of occupied occupation number change is not -1.")
+            IF (iounit > 0) THEN
+               WRITE (iounit, "(T2,A,T61,G20.10)") "Measured electron count is ", tmp
+               WRITE (iounit, "(T2,A,/)") REPEAT("*", 79)
+            END IF
+         END IF
+      ELSE IF (spin == 2) THEN
+         IF (ABS(tmp - 1) > 1.e-08_dp) THEN
+            logger => cp_get_default_logger()
+            IF (logger%para_env%is_source()) THEN
+               iounit = cp_logger_get_default_unit_nr(logger, local=.TRUE.)
+            ELSE
+               iounit = -1
+            END IF
+            CPWARN("Count of unoccupied occupation number change is not 1.")
+            IF (iounit > 0) THEN
+               WRITE (iounit, "(T2,A,T61,G20.10)") "Measured electron count is ", tmp
+               WRITE (iounit, "(T2,A,/)") REPEAT("*", 79)
+            END IF
          END IF
       END IF
       !
@@ -628,12 +764,14 @@ CONTAINS
    END SUBROUTINE tddfpt_resvec1_admm
 
 ! **************************************************************************************************
-!> \brief ...
+!> \brief Calculates the action of the H operator as in the first term of equation 49 in
+!>        https://doi.org/10.1021/acs.jctc.2c00144 (J. Chem. Theory Comput. 2022, 18, 4186−4202)
+!>          cpmos = H_{\mu i\sigma}[matrix_pe]
 !> \param qs_env ...
-!> \param matrix_pe ...
+!> \param matrix_pe Input square matrix with the size of the number of atomic orbitals squared nao^2
 !> \param matrix_pe_admm ...
 !> \param gs_mos ...
-!> \param matrix_hz ...
+!> \param matrix_hz Holds H_{\mu\nu\sigma}[matrix_pe] on exit
 !> \param cpmos ...
 ! **************************************************************************************************
    SUBROUTINE tddfpt_resvec2(qs_env, matrix_pe, matrix_pe_admm, gs_mos, matrix_hz, cpmos)
@@ -643,17 +781,15 @@ CONTAINS
       TYPE(tddfpt_ground_state_mos), DIMENSION(:), &
          POINTER                                         :: gs_mos
       TYPE(dbcsr_p_type), DIMENSION(:), POINTER          :: matrix_hz
-      TYPE(cp_fm_type), DIMENSION(:), INTENT(IN)         :: cpmos
+      TYPE(cp_fm_type), DIMENSION(:), INTENT(INOUT)      :: cpmos
 
       CHARACTER(LEN=*), PARAMETER                        :: routineN = 'tddfpt_resvec2'
 
       CHARACTER(LEN=default_string_length)               :: basis_type
       INTEGER                                            :: handle, iounit, ispin, mspin, n_rep_hf, &
                                                             nao, nao_aux, natom, norb, nspins
-      LOGICAL                                            :: deriv2_analytic, distribute_fock_matrix, &
-                                                            do_hfx, gapw, gapw_xc, &
-                                                            hfx_treat_lsd_in_core, &
-                                                            s_mstruct_changed
+      LOGICAL :: deriv2_analytic, distribute_fock_matrix, do_hfx, gapw, gapw_xc, &
+         hfx_treat_lsd_in_core, needs_tau_response, s_mstruct_changed
       REAL(KIND=dp)                                      :: eh1, focc, rhotot, thartree
       REAL(KIND=dp), DIMENSION(2)                        :: total_rho
       REAL(KIND=dp), DIMENSION(:), POINTER               :: Qlm_tot
@@ -673,20 +809,26 @@ CONTAINS
          POINTER                                         :: sab, sab_aux_fit
       TYPE(oce_matrix_type), POINTER                     :: oce
       TYPE(pw_c1d_gs_type)                               :: rho_tot_gspace, v_hartree_gspace
-      TYPE(pw_c1d_gs_type), DIMENSION(:), POINTER        :: rho_g, rho_g_aux, rhoz_g_aux, trho_g, &
-                                                            trho_xc_g
+      TYPE(pw_c1d_gs_type), DIMENSION(:), POINTER        :: rho_g, rho_g_aux, rhoz_g_aux, &
+                                                            rhoz_tau_g_aux, trho_g, trho_tau_g, &
+                                                            trho_xc_g, trho_xc_tau_g
       TYPE(pw_env_type), POINTER                         :: pw_env
       TYPE(pw_poisson_type), POINTER                     :: poisson_env
       TYPE(pw_pool_type), POINTER                        :: auxbas_pw_pool
       TYPE(pw_r3d_rs_type)                               :: v_hartree_rspace
-      TYPE(pw_r3d_rs_type), DIMENSION(:), POINTER        :: rho_r, rho_r_aux, rhoz_r_aux, tau_r, &
-                                                            trho_r, trho_xc_r, v_xc, v_xc_tau
+      TYPE(pw_r3d_rs_type), DIMENSION(:), POINTER        :: rho_r, rho_r_aux, rhoz_r_aux, &
+                                                            rhoz_tau_r_aux, trho_r, trho_tau_r, &
+                                                            trho_xc_r, trho_xc_tau_r, v_xc, &
+                                                            v_xc_tau
+      TYPE(pw_r3d_rs_type), POINTER                      :: weights
       TYPE(qs_kind_type), DIMENSION(:), POINTER          :: qs_kind_set
       TYPE(qs_ks_env_type), POINTER                      :: ks_env
       TYPE(qs_rho_type), POINTER                         :: rho, rho_aux_fit, rho_xc, rhoz_aux, trho
       TYPE(rho_atom_type), DIMENSION(:), POINTER         :: rho1_atom_set, rho_atom_set
-      TYPE(section_vals_type), POINTER                   :: hfx_section, input, xc_section
+      TYPE(section_vals_type), POINTER                   :: hfx_section, input, xc_fun_section, &
+                                                            xc_section
       TYPE(task_list_type), POINTER                      :: task_list
+      TYPE(xc_rho_cflags_type)                           :: needs
 
       CALL timeset(routineN, handle)
 
@@ -711,17 +853,43 @@ CONTAINS
       CALL auxbas_pw_pool%create_pw(rho_tot_gspace)
       CALL auxbas_pw_pool%create_pw(v_hartree_rspace)
 
+      CALL get_qs_env(qs_env, input=input)
+      IF (dft_control%do_admm) THEN
+         CALL get_qs_env(qs_env, admm_env=admm_env)
+         xc_section => admm_env%xc_section_primary
+      ELSE
+         xc_section => section_vals_get_subs_vals(input, "DFT%XC")
+      END IF
+      xc_fun_section => section_vals_get_subs_vals(xc_section, "XC_FUNCTIONAL")
+      needs = xc_functionals_get_needs(xc_fun_section, (nspins == 2), .TRUE.)
+      needs_tau_response = needs%tau .OR. needs%tau_spin
+
+      NULLIFY (trho_tau_r, trho_tau_g, trho_xc_tau_r, trho_xc_tau_g)
       ALLOCATE (trho_r(nspins), trho_g(nspins))
       DO ispin = 1, nspins
          CALL auxbas_pw_pool%create_pw(trho_r(ispin))
          CALL auxbas_pw_pool%create_pw(trho_g(ispin))
       END DO
+      IF (needs_tau_response) THEN
+         ALLOCATE (trho_tau_r(nspins), trho_tau_g(nspins))
+         DO ispin = 1, nspins
+            CALL auxbas_pw_pool%create_pw(trho_tau_r(ispin))
+            CALL auxbas_pw_pool%create_pw(trho_tau_g(ispin))
+         END DO
+      END IF
       IF (gapw_xc) THEN
          ALLOCATE (trho_xc_r(nspins), trho_xc_g(nspins))
          DO ispin = 1, nspins
             CALL auxbas_pw_pool%create_pw(trho_xc_r(ispin))
             CALL auxbas_pw_pool%create_pw(trho_xc_g(ispin))
          END DO
+         IF (needs_tau_response) THEN
+            ALLOCATE (trho_xc_tau_r(nspins), trho_xc_tau_g(nspins))
+            DO ispin = 1, nspins
+               CALL auxbas_pw_pool%create_pw(trho_xc_tau_r(ispin))
+               CALL auxbas_pw_pool%create_pw(trho_xc_tau_g(ispin))
+            END DO
+         END IF
       END IF
 
       ! GAPW/GAPW_XC initializations
@@ -756,6 +924,13 @@ CONTAINS
                                  rho_gspace=trho_g(ispin), &
                                  soft_valid=gapw, &
                                  total_rho=total_rho(ispin))
+         IF (needs_tau_response) THEN
+            CALL calculate_rho_elec(ks_env=ks_env, matrix_p=matrix_pe(ispin)%matrix, &
+                                    rho=trho_tau_r(ispin), &
+                                    rho_gspace=trho_tau_g(ispin), &
+                                    soft_valid=gapw, &
+                                    compute_tau=.TRUE.)
+         END IF
          CALL pw_axpy(trho_g(ispin), rho_tot_gspace)
          IF (gapw_xc) THEN
             CALL calculate_rho_elec(ks_env=ks_env, matrix_p=matrix_pe(ispin)%matrix, &
@@ -763,6 +938,13 @@ CONTAINS
                                     rho_gspace=trho_xc_g(ispin), &
                                     soft_valid=gapw_xc, &
                                     total_rho=rhotot)
+            IF (needs_tau_response) THEN
+               CALL calculate_rho_elec(ks_env=ks_env, matrix_p=matrix_pe(ispin)%matrix, &
+                                       rho=trho_xc_tau_r(ispin), &
+                                       rho_gspace=trho_xc_tau_g(ispin), &
+                                       soft_valid=gapw_xc, &
+                                       compute_tau=.TRUE.)
+            END IF
          END IF
       END DO
 
@@ -778,6 +960,9 @@ CONTAINS
          CALL get_rho0_mpole(local_rho_set%rho0_mpole, Qlm_tot=Qlm_tot)
          rhotot = rhotot + local_rho_set%rho0_mpole%total_rho0_h
          CALL pw_axpy(local_rho_set%rho0_mpole%rho0_s_gs, rho_tot_gspace)
+         IF (ASSOCIATED(local_rho_set%rho0_mpole%rhoz_cneo_s_gs)) THEN
+            CALL pw_axpy(local_rho_set%rho0_mpole%rhoz_cneo_s_gs, rho_tot_gspace)
+         END IF
       END IF
 
       IF (ABS(rhotot) > 1.e-05_dp) THEN
@@ -811,28 +996,23 @@ CONTAINS
       CALL get_qs_env(qs_env, rho=rho)
       CALL qs_rho_get(rho, rho_r=rho_r, rho_g=rho_g)
       !
-      CALL get_qs_env(qs_env, input=input)
-      IF (dft_control%do_admm) THEN
-         CALL get_qs_env(qs_env, admm_env=admm_env)
-         xc_section => admm_env%xc_section_primary
-      ELSE
-         xc_section => section_vals_get_subs_vals(input, "DFT%XC")
-      END IF
-      !
       deriv2_analytic = section_get_lval(xc_section, "2ND_DERIV_ANALYTICAL")
       IF (deriv2_analytic) THEN
-         NULLIFY (v_xc, v_xc_tau, tau_r)
+         NULLIFY (v_xc, v_xc_tau)
+         CALL get_qs_env(qs_env=qs_env, xcint_weights=weights)
          IF (gapw_xc) THEN
             CALL get_qs_env(qs_env=qs_env, rho_xc=rho_xc)
-            CALL qs_fxc_analytic(rho_xc, trho_xc_r, tau_r, xc_section, auxbas_pw_pool, .FALSE., v_xc, v_xc_tau)
+            CALL qs_fxc_analytic(rho_xc, trho_xc_r, trho_xc_tau_r, xc_section, weights, auxbas_pw_pool, &
+                                 .FALSE., v_xc, v_xc_tau)
          ELSE
-            CALL qs_fxc_analytic(rho, trho_r, tau_r, xc_section, auxbas_pw_pool, .FALSE., v_xc, v_xc_tau)
+            CALL qs_fxc_analytic(rho, trho_r, trho_tau_r, xc_section, weights, auxbas_pw_pool, &
+                                 .FALSE., v_xc, v_xc_tau)
          END IF
          IF (gapw .OR. gapw_xc) THEN
             CALL get_qs_env(qs_env, rho_atom_set=rho_atom_set)
             rho1_atom_set => local_rho_set%rho_atom_set
             CALL calculate_xc_2nd_deriv_atom(rho_atom_set, rho1_atom_set, qs_env, xc_section, para_env, &
-                                             do_tddft=.TRUE., do_triplet=.FALSE.)
+                                             do_triplet=.FALSE.)
          END IF
       ELSE
          CPABORT("NYA 00006")
@@ -884,12 +1064,26 @@ CONTAINS
          CALL auxbas_pw_pool%give_back_pw(v_xc(ispin))
       END DO
       DEALLOCATE (trho_r, trho_g, v_xc)
+      IF (ASSOCIATED(trho_tau_r)) THEN
+         DO ispin = 1, nspins
+            CALL auxbas_pw_pool%give_back_pw(trho_tau_r(ispin))
+            CALL auxbas_pw_pool%give_back_pw(trho_tau_g(ispin))
+         END DO
+         DEALLOCATE (trho_tau_r, trho_tau_g)
+      END IF
       IF (gapw_xc) THEN
          DO ispin = 1, nspins
             CALL auxbas_pw_pool%give_back_pw(trho_xc_r(ispin))
             CALL auxbas_pw_pool%give_back_pw(trho_xc_g(ispin))
          END DO
          DEALLOCATE (trho_xc_r, trho_xc_g)
+         IF (ASSOCIATED(trho_xc_tau_r)) THEN
+            DO ispin = 1, nspins
+               CALL auxbas_pw_pool%give_back_pw(trho_xc_tau_r(ispin))
+               CALL auxbas_pw_pool%give_back_pw(trho_xc_tau_g(ispin))
+            END DO
+            DEALLOCATE (trho_xc_tau_r, trho_xc_tau_g)
+         END IF
       END IF
       IF (ASSOCIATED(v_xc_tau)) THEN
          DO ispin = 1, nspins
@@ -898,9 +1092,7 @@ CONTAINS
          DEALLOCATE (v_xc_tau)
       END IF
       IF (dft_control%do_admm) THEN
-         IF (qs_env%admm_env%aux_exch_func == do_admm_aux_exch_func_none) THEN
-            ! nothing to do
-         ELSE
+         IF (qs_env%admm_env%aux_exch_func /= do_admm_aux_exch_func_none) THEN
             ! add ADMM xc_section_aux terms: f_x[rhoz_ADMM]
             CALL get_qs_env(qs_env, admm_env=admm_env)
             CALL get_admm_env(admm_env, rho_aux_fit=rho_aux_fit, matrix_s_aux_fit=msaux, &
@@ -937,8 +1129,11 @@ CONTAINS
             END IF
             !
             xc_section => admm_env%xc_section_aux
+            xc_fun_section => section_vals_get_subs_vals(xc_section, "XC_FUNCTIONAL")
+            needs = xc_functionals_get_needs(xc_fun_section, (nspins == 2), .TRUE.)
+            needs_tau_response = needs%tau .OR. needs%tau_spin
             !
-            NULLIFY (rho_g_aux, rho_r_aux, rhoz_g_aux, rhoz_r_aux)
+            NULLIFY (rho_g_aux, rho_r_aux, rhoz_g_aux, rhoz_r_aux, rhoz_tau_g_aux, rhoz_tau_r_aux)
             CALL qs_rho_get(rho_aux_fit, rho_r=rho_r_aux, rho_g=rho_g_aux)
             ! rhoz_aux
             ALLOCATE (rhoz_r_aux(nspins), rhoz_g_aux(nspins))
@@ -946,18 +1141,32 @@ CONTAINS
                CALL auxbas_pw_pool%create_pw(rhoz_r_aux(ispin))
                CALL auxbas_pw_pool%create_pw(rhoz_g_aux(ispin))
             END DO
+            IF (needs_tau_response) THEN
+               ALLOCATE (rhoz_tau_r_aux(nspins), rhoz_tau_g_aux(nspins))
+               DO ispin = 1, nspins
+                  CALL auxbas_pw_pool%create_pw(rhoz_tau_r_aux(ispin))
+                  CALL auxbas_pw_pool%create_pw(rhoz_tau_g_aux(ispin))
+               END DO
+            END IF
             DO ispin = 1, nspins
                CALL calculate_rho_elec(ks_env=ks_env, matrix_p=mpe(ispin, 1)%matrix, &
                                        rho=rhoz_r_aux(ispin), rho_gspace=rhoz_g_aux(ispin), &
                                        basis_type=basis_type, &
                                        task_list_external=task_list)
+               IF (needs_tau_response) THEN
+                  CALL calculate_rho_elec(ks_env=ks_env, matrix_p=mpe(ispin, 1)%matrix, &
+                                          rho=rhoz_tau_r_aux(ispin), rho_gspace=rhoz_tau_g_aux(ispin), &
+                                          basis_type=basis_type, task_list_external=task_list, &
+                                          compute_tau=.TRUE.)
+               END IF
             END DO
             !
-            NULLIFY (v_xc)
+            NULLIFY (v_xc, v_xc_tau)
             deriv2_analytic = section_get_lval(xc_section, "2ND_DERIV_ANALYTICAL")
             IF (deriv2_analytic) THEN
-               NULLIFY (tau_r)
-               CALL qs_fxc_analytic(rho_aux_fit, rhoz_r_aux, tau_r, xc_section, auxbas_pw_pool, .FALSE., v_xc, v_xc_tau)
+               CALL get_qs_env(qs_env=qs_env, xcint_weights=weights)
+               CALL qs_fxc_analytic(rho_aux_fit, rhoz_r_aux, rhoz_tau_r_aux, xc_section, weights, auxbas_pw_pool, &
+                                    .FALSE., v_xc, v_xc_tau)
             ELSE
                CPABORT("NYA 00007")
                NULLIFY (rhoz_aux)
@@ -981,6 +1190,19 @@ CONTAINS
                CALL auxbas_pw_pool%give_back_pw(rhoz_g_aux(ispin))
             END DO
             DEALLOCATE (v_xc, rhoz_r_aux, rhoz_g_aux)
+            IF (ASSOCIATED(v_xc_tau)) THEN
+               DO ispin = 1, nspins
+                  CALL auxbas_pw_pool%give_back_pw(v_xc_tau(ispin))
+               END DO
+               DEALLOCATE (v_xc_tau)
+            END IF
+            IF (ASSOCIATED(rhoz_tau_r_aux)) THEN
+               DO ispin = 1, nspins
+                  CALL auxbas_pw_pool%give_back_pw(rhoz_tau_r_aux(ispin))
+                  CALL auxbas_pw_pool%give_back_pw(rhoz_tau_g_aux(ispin))
+               END DO
+               DEALLOCATE (rhoz_tau_r_aux, rhoz_tau_g_aux)
+            END IF
             !
             IF (admm_env%do_gapw) THEN
                rho_atom_set => admm_env%admm_gapw_env%local_rho_set%rho_atom_set
@@ -1137,7 +1359,7 @@ CONTAINS
       TYPE(tddfpt_ground_state_mos), DIMENSION(:), &
          POINTER                                         :: gs_mos
       TYPE(dbcsr_p_type), DIMENSION(:), POINTER          :: matrix_hz
-      TYPE(cp_fm_type), DIMENSION(:), INTENT(IN)         :: cpmos
+      TYPE(cp_fm_type), DIMENSION(:), INTENT(INOUT)      :: cpmos
 
       CHARACTER(LEN=*), PARAMETER :: routineN = 'tddfpt_resvec2_xtb'
 
@@ -1307,8 +1529,6 @@ CONTAINS
       INTEGER                                            :: handle
       TYPE(dft_control_type), POINTER                    :: dft_control
       TYPE(tddfpt2_control_type), POINTER                :: tddfpt_control
-
-      MARK_USED(work_matrices)
 
       CALL timeset(routineN, handle)
 

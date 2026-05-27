@@ -16,9 +16,6 @@ source "${INSTALLDIR}"/toolchain.env
 
 [ -f "${BUILDDIR}/setup_libxsmm" ] && rm "${BUILDDIR}/setup_libxsmm"
 
-LIBXSMM_CFLAGS=''
-LIBXSMM_LDFLAGS=''
-LIBXSMM_LIBS=''
 ! [ -d "${BUILDDIR}" ] && mkdir -p "${BUILDDIR}"
 cd "${BUILDDIR}"
 
@@ -37,19 +34,10 @@ EOF
     if verify_checksums "${install_lock_file}"; then
       echo "libxsmm-${libxsmm_ver} is already installed, skipping it."
     else
-      if [ -f libxsmm-${libxsmm_ver}.tar.gz ]; then
-        echo "libxsmm-${libxsmm_ver}.tar.gz is found"
-      else
-        if ! download_pkg_from_cp2k_org "${libxsmm_sha256}" "libxsmm-${libxsmm_ver}.tar.gz"; then
-          download_pkg_from_urlpath "${libxsmm_sha256}" "${libxsmm_ver}.tar.gz" \
-            https://github.com/libxsmm/libxsmm/archive \
-            "libxsmm-${libxsmm_ver}.tar.gz"
-        fi
-      fi
+      retrieve_package "${libxsmm_sha256}" "libxsmm-${libxsmm_ver}.tar.gz"
+      echo "Installing from scratch into ${pkg_install_dir}"
       [ -d libxsmm-${libxsmm_ver} ] && rm -rf libxsmm-${libxsmm_ver}
       tar -xzf libxsmm-${libxsmm_ver}.tar.gz
-
-      echo "Installing from scratch into ${pkg_install_dir}"
       # note that we do not have to set -L flags to ld for the
       # linked math libraries for the libxsmm build, as for a
       # library this is not required, you just have to provide
@@ -65,18 +53,25 @@ EOF
         FC=$FC \
         WRAP=0 \
         PREFIX=${pkg_install_dir} \
-        > make.log 2>&1 || tail -n ${LOG_LINES} make.log
+        > make.log 2>&1 || tail_excerpt make.log
       make -j $(get_nprocs) \
         CXX=$CXX \
         CC=$CC \
         FC=$FC \
         WRAP=0 \
         PREFIX=${pkg_install_dir} \
-        install > install.log 2>&1 || tail -n ${LOG_LINES} install.log
+        install > install.log 2>&1 || tail_excerpt install.log
       cd ..
       write_checksums "${install_lock_file}" "${SCRIPT_DIR}/stage4/$(basename ${SCRIPT_NAME})"
       mkdir ${pkg_install_dir}/lib/pkgconfig
       cp ${pkg_install_dir}/lib/*.pc ${pkg_install_dir}/lib/pkgconfig
+
+      # ---- macOS: pkg-config files must not use GNU ld's "-l:libfoo.a" syntax ----
+      if [[ "$(uname -s)" == "Darwin" ]]; then
+        perl -pi.bak -e 's/-l:lib([A-Za-z0-9_]+)\.a\b/-l$1/g' \
+          $(find "${pkg_install_dir}/lib" -name '*.pc' -type f)
+      fi
+
     fi
     LIBXSMM_CFLAGS="-I'${pkg_install_dir}/include'"
     LIBXSMM_LDFLAGS="-L'${pkg_install_dir}/lib' -Wl,-rpath,'${pkg_install_dir}/lib'"
@@ -114,7 +109,6 @@ prepend_path LD_RUN_PATH "${pkg_install_dir}/lib"
 prepend_path LIBRARY_PATH "${pkg_install_dir}/lib"
 prepend_path PKG_CONFIG_PATH "$pkg_install_dir/lib/pkgconfig"
 EOF
-    cat "${BUILDDIR}/setup_libxsmm" >> $SETUPFILE
   fi
   cat << EOF >> "${BUILDDIR}/setup_libxsmm"
 export LIBXSMM_CFLAGS="${LIBXSMM_CFLAGS}"
@@ -125,6 +119,7 @@ export CP_CFLAGS="\${CP_CFLAGS} ${LIBXSMM_CFLAGS}"
 export CP_LDFLAGS="\${CP_LDFLAGS} ${LIBXSMM_LDFLAGS}"
 export CP_LIBS="\${LIBXSMM_LIBS} \${CP_LIBS}"
 EOF
+  filter_setup "${BUILDDIR}/setup_libxsmm" "${SETUPFILE}"
 fi
 cd "${ROOTDIR}"
 

@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2025 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2026 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -65,10 +65,10 @@ MODULE qs_kinetic
 
    PUBLIC :: build_kinetic_matrix
 
-   INTEGER, DIMENSION(1:56), SAVE :: ndod = (/0, 1, 1, 1, 0, 0, 0, 0, 0, 0, 1, 1, 1, &
-                                              1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, &
-                                              0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, &
-                                              1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1/)
+   INTEGER, DIMENSION(1:56), SAVE :: ndod = [0, 1, 1, 1, 0, 0, 0, 0, 0, 0, 1, 1, 1, &
+                                             1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, &
+                                             0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, &
+                                             1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
 
 CONTAINS
 
@@ -83,6 +83,7 @@ CONTAINS
 !> \param   calculate_forces (optional) ...
 !> \param   matrix_p density matrix for force calculation (optional)
 !> \param   matrixkp_p density matrix for force calculation with kpoints (optional)
+!> \param ext_kpoints ...
 !> \param   eps_filter Filter final matrix (optional)
 !> \param   nderivative The number of calculated derivatives
 !> \date    11.10.2010
@@ -97,7 +98,7 @@ CONTAINS
 ! **************************************************************************************************
    SUBROUTINE build_kinetic_matrix(ks_env, matrix_t, matrixkp_t, matrix_name, &
                                    basis_type, sab_nl, calculate_forces, matrix_p, matrixkp_p, &
-                                   eps_filter, nderivative)
+                                   ext_kpoints, eps_filter, nderivative)
 
       TYPE(qs_ks_env_type), POINTER                      :: ks_env
       TYPE(dbcsr_p_type), DIMENSION(:), OPTIONAL, &
@@ -112,6 +113,7 @@ CONTAINS
       TYPE(dbcsr_type), OPTIONAL, POINTER                :: matrix_p
       TYPE(dbcsr_p_type), DIMENSION(:, :), OPTIONAL, &
          POINTER                                         :: matrixkp_p
+      TYPE(kpoint_type), OPTIONAL, POINTER               :: ext_kpoints
       REAL(KIND=dp), INTENT(IN), OPTIONAL                :: eps_filter
       INTEGER, INTENT(IN), OPTIONAL                      :: nderivative
 
@@ -120,8 +122,8 @@ CONTAINS
       CALL get_ks_env(ks_env, natom=natom)
 
       CALL build_kinetic_matrix_low(ks_env, matrix_t, matrixkp_t, matrix_name, basis_type, &
-                                    sab_nl, calculate_forces, matrix_p, matrixkp_p, eps_filter, natom, &
-                                    nderivative)
+                                    sab_nl, calculate_forces, matrix_p, matrixkp_p, &
+                                    ext_kpoints, eps_filter, natom, nderivative)
 
    END SUBROUTINE build_kinetic_matrix
 
@@ -137,13 +139,14 @@ CONTAINS
 !> \param calculate_forces ...
 !> \param matrix_p ...
 !> \param matrixkp_p ...
+!> \param ext_kpoints ...
 !> \param eps_filter ...
 !> \param natom ...
 !> \param nderivative ...
 ! **************************************************************************************************
    SUBROUTINE build_kinetic_matrix_low(ks_env, matrix_t, matrixkp_t, matrix_name, basis_type, &
-                                       sab_nl, calculate_forces, matrix_p, matrixkp_p, eps_filter, natom, &
-                                       nderivative)
+                                       sab_nl, calculate_forces, matrix_p, matrixkp_p, &
+                                       ext_kpoints, eps_filter, natom, nderivative)
 
       TYPE(qs_ks_env_type), POINTER                      :: ks_env
       TYPE(dbcsr_p_type), DIMENSION(:), OPTIONAL, &
@@ -158,6 +161,7 @@ CONTAINS
       TYPE(dbcsr_type), OPTIONAL, POINTER                :: matrix_p
       TYPE(dbcsr_p_type), DIMENSION(:, :), OPTIONAL, &
          POINTER                                         :: matrixkp_p
+      TYPE(kpoint_type), OPTIONAL, POINTER               :: ext_kpoints
       REAL(KIND=dp), INTENT(IN), OPTIONAL                :: eps_filter
       INTEGER, INTENT(IN)                                :: natom
       INTEGER, INTENT(IN), OPTIONAL                      :: nderivative
@@ -186,6 +190,7 @@ CONTAINS
       REAL(KIND=dp), DIMENSION(:, :, :), POINTER         :: dab
       TYPE(atomic_kind_type), DIMENSION(:), POINTER      :: atomic_kind_set
       TYPE(block_p_type), ALLOCATABLE, DIMENSION(:)      :: k_block
+      TYPE(dbcsr_type), POINTER                          :: matp
       TYPE(dft_control_type), POINTER                    :: dft_control
       TYPE(gto_basis_set_p_type), DIMENSION(:), POINTER  :: basis_set_list
       TYPE(gto_basis_set_type), POINTER                  :: basis_set_a, basis_set_b
@@ -204,26 +209,38 @@ CONTAINS
 
       CALL timeset(routineN, handle)
 
-      ! test for matrices (kpoints or standard gamma point)
-      IF (PRESENT(matrix_t)) THEN
-         dokp = .FALSE.
-         use_cell_mapping = .FALSE.
-      ELSEIF (PRESENT(matrixkp_t)) THEN
-         dokp = .TRUE.
-         CALL get_ks_env(ks_env=ks_env, kpoints=kpoints)
-         CALL get_kpoint_info(kpoint=kpoints, cell_to_index=cell_to_index)
-         use_cell_mapping = (SIZE(cell_to_index) > 1)
-      ELSE
-         CPABORT("")
-      END IF
-
       NULLIFY (atomic_kind_set, qs_kind_set, p_block, dft_control)
       CALL get_ks_env(ks_env, &
                       dft_control=dft_control, &
                       atomic_kind_set=atomic_kind_set, &
                       qs_kind_set=qs_kind_set)
 
-      nimg = dft_control%nimages
+      ! test for matrices (kpoints or standard gamma point)
+      IF (PRESENT(matrix_t)) THEN
+         dokp = .FALSE.
+         use_cell_mapping = .FALSE.
+         nimg = dft_control%nimages
+      ELSEIF (PRESENT(matrixkp_t)) THEN
+         dokp = .TRUE.
+         IF (PRESENT(ext_kpoints)) THEN
+            IF (ASSOCIATED(ext_kpoints)) THEN
+               CALL get_kpoint_info(kpoint=ext_kpoints, cell_to_index=cell_to_index)
+               use_cell_mapping = (SIZE(cell_to_index) > 1)
+               nimg = SIZE(ext_kpoints%index_to_cell, 2)
+            ELSE
+               use_cell_mapping = .FALSE.
+               nimg = 1
+            END IF
+         ELSE
+            CALL get_ks_env(ks_env=ks_env, kpoints=kpoints)
+            CALL get_kpoint_info(kpoint=kpoints, cell_to_index=cell_to_index)
+            use_cell_mapping = (SIZE(cell_to_index) > 1)
+            nimg = dft_control%nimages
+         END IF
+      ELSE
+         CPABORT("")
+      END IF
+
       nkind = SIZE(atomic_kind_set)
 
       do_forces = .FALSE.
@@ -260,7 +277,13 @@ CONTAINS
          IF (dokp) THEN
             CPASSERT(PRESENT(matrixkp_p))
          ELSE
-            CPASSERT(PRESENT(matrix_p))
+            IF (PRESENT(matrix_p)) THEN
+               matp => matrix_p
+            ELSEIF (PRESENT(matrixkp_p)) THEN
+               matp => matrixkp_p(1, 1)%matrix
+            ELSE
+               CPABORT("Missing density matrix")
+            END IF
          END IF
       END IF
 
@@ -273,12 +296,12 @@ CONTAINS
 !$OMP PARALLEL DEFAULT(NONE) &
 !$OMP SHARED (do_forces, ldsab, use_cell_mapping, do_symmetric, dokp,&
 !$OMP         sab_nl, ncoset, maxder, nder, ndod, use_virial, matrix_t, matrixkp_t,&
-!$OMP         matrix_p, basis_set_list, atom_of_kind, cell_to_index, matrixkp_p, locks, natom)  &
+!$OMP         matp, matrix_p, basis_set_list, atom_of_kind, cell_to_index, matrixkp_p, locks, natom)  &
 !$OMP PRIVATE (k_block, kab, qab, pab, ikind, jkind, iatom, jatom, rab, cell, basis_set_a, basis_set_b, f, &
 !$OMP          first_sgfa, la_max, la_min, npgfa, nsgfa, nseta, rpgfa, set_radius_a, ncoa, ncob, force_a, &
 !$OMP          zeta, first_sgfb, lb_max, lb_min, npgfb, nsetb, rpgfb, set_radius_b, nsgfb, p_block, dab, tab, &
 !$OMP          slot, zetb, scon_a, scon_b, i, ic, irow, icol, f0, ff, found, trans, rab2, sgfa, sgfb, iset, jset, &
-!$OMP          hash, hash1, hash2, iatom8) &
+!$OMP          hash, hash1, hash2, iatom8, lock_num) &
 !$OMP REDUCTION (+ : pv_thread, force_thread )
 
 !$OMP SINGLE
@@ -386,7 +409,9 @@ CONTAINS
                                       row=irow, col=icol, block=p_block, found=found)
                CPASSERT(found)
             ELSE
-               CALL dbcsr_get_block_p(matrix=matrix_p, row=irow, col=icol, &
+!deb           CALL dbcsr_get_block_p(matrix=matrix_p, row=irow, col=icol, &
+!deb                                  block=p_block, found=found)
+               CALL dbcsr_get_block_p(matrix=matp, row=irow, col=icol, &
                                       block=p_block, found=found)
                CPASSERT(found)
             END IF

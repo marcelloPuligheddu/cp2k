@@ -20,8 +20,8 @@ cd "${BUILDDIR}"
 case "${with_ninja}" in
   __INSTALL__)
     echo "==================== Installing Ninja  ===================="
-    ninja_ver="1.12.1"
-    ninja_sha256="821bdff48a3f683bc4bb3b6f0b5fe7b2d647cf65d52aeb63328c91a6c6df285a"
+    ninja_ver="1.13.1"
+    ninja_sha256="f0055ad0369bf2e372955ba55128d000cfcc21777057806015b45e4accbebf23"
 
     pkg_install_dir="${INSTALLDIR}/ninja-v${ninja_ver}"
     install_lock_file="$pkg_install_dir/install_successful"
@@ -29,20 +29,18 @@ case "${with_ninja}" in
     if verify_checksums "${install_lock_file}"; then
       echo "ninja-v${ninja_ver} is already installed, skipping it."
     else
-      if [ -f ninja-v${ninja_ver}.tar.gz ]; then
-        echo "ninja-v${ninja_ver}.tar.gz is found"
-      else
-        download_pkg_from_cp2k_org "${ninja_sha256}" "ninja-v${ninja_ver}.tar.gz"
-      fi
+      retrieve_package "${ninja_sha256}" "ninja-v${ninja_ver}.tar.gz"
       echo "Installing from scratch into ${pkg_install_dir}"
       mkdir -p ${pkg_install_dir}
       tar -xzf ninja-v${ninja_ver}.tar.gz
       cd ninja-${ninja_ver}
-      cmake -DCMAKE_INSTALL_PREFIX=${pkg_install_dir} \
+      cmake \
         -Bbuild-ninja \
-        > configure.log 2>&1 || tail -n ${LOG_LINES} configure.log
-      cmake --build build-ninja -j $(get_nprocs) > cmake.log 2>&1 || tail -n ${LOG_LINES} cmake.log
-      cmake --install build-ninja > install.log 2>&1 || tail -n ${LOG_LINES} install.log
+        -DBUILD_TESTING=OFF \
+        -DCMAKE_INSTALL_PREFIX=${pkg_install_dir} \
+        > configure.log 2>&1 || tail_excerpt configure.log
+      cmake --build build-ninja -j $(get_nprocs) > cmake.log 2>&1 || tail_excerpt cmake.log
+      cmake --install build-ninja > install.log 2>&1 || tail_excerpt install.log
       write_checksums "${install_lock_file}" "${SCRIPT_DIR}/stage0/$(basename ${SCRIPT_NAME})"
     fi
     ;;
@@ -52,7 +50,6 @@ case "${with_ninja}" in
     ;;
   __DONTUSE__)
     # Nothing to do
-    echo "Ninja required for DFTD4"
     ;;
   *)
     echo "==================== Linking Ninja to user paths ===================="
@@ -65,7 +62,7 @@ if [ "${with_ninja}" != "__DONTUSE__" ]; then
     cat << EOF > "${BUILDDIR}/setup_ninja"
 prepend_path PATH "${pkg_install_dir}/bin"
 EOF
-    cat "${BUILDDIR}/setup_ninja" >> $SETUPFILE
+    filter_setup "${BUILDDIR}/setup_ninja" "${SETUPFILE}"
   fi
 fi
 

@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2025 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2026 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -15,7 +15,8 @@ MODULE pao_param_equi
         dbcsr_complete_redistribute, dbcsr_create, dbcsr_distribution_type, dbcsr_get_block_p, &
         dbcsr_get_info, dbcsr_iterator_blocks_left, dbcsr_iterator_next_block, &
         dbcsr_iterator_start, dbcsr_iterator_stop, dbcsr_iterator_type, dbcsr_p_type, &
-        dbcsr_release, dbcsr_reserve_diag_blocks, dbcsr_type
+        dbcsr_release, dbcsr_type
+   USE cp_dbcsr_contrib,                ONLY: dbcsr_reserve_diag_blocks
    USE dm_ls_scf_types,                 ONLY: ls_mstruct_type,&
                                               ls_scf_env_type
    USE kinds,                           ONLY: dp
@@ -147,7 +148,7 @@ CONTAINS
             A(:, i) = A(:, i)/NORM2(A(:, i))
          END DO
 
-         block_X = RESHAPE(A, (/n*m, 1/))
+         block_X = RESHAPE(A, [n*m, 1])
          DEALLOCATE (H, V0, A, H_evecs, H_evals)
 
       END DO
@@ -175,10 +176,9 @@ CONTAINS
 
       CHARACTER(len=*), PARAMETER                        :: routineN = 'pao_calc_AB_equi'
 
-      INTEGER                                            :: acol, arow, group_handle, handle, i, &
-                                                            iatom, j, k, m, n
+      INTEGER                                            :: acol, arow, handle, i, iatom, j, k, m, n
       LOGICAL                                            :: found
-      REAL(dp)                                           :: denom, w
+      REAL(dp)                                           :: denom, penalty_sum, w
       REAL(dp), DIMENSION(:), POINTER                    :: ANNA_evals
       REAL(dp), DIMENSION(:, :), POINTER                 :: ANNA, ANNA_evecs, ANNA_inv, block_A, &
                                                             block_B, block_G, block_Ma, block_Mb, &
@@ -218,11 +218,14 @@ CONTAINS
          CALL dbcsr_reserve_diag_blocks(matrix_G_nondiag)
       END IF
 
+      penalty_sum = 0.0_dp
+
 !$OMP PARALLEL DEFAULT(NONE) &
 !$OMP SHARED(pao,ls_mstruct,matrix_X_nondiag,matrix_G_nondiag,matrix_Ma,matrix_Mb,gradient,penalty) &
 !$OMP PRIVATE(iter,arow,acol,iatom,found,n,m,w,i,j,k,denom) &
 !$OMP PRIVATE(NN,ANNA,ANNA_evals,ANNA_evecs,ANNA_inv,D,G,M1,M2,M3,M4,M5) &
-!$OMP PRIVATE(block_X,block_A,block_B,block_N,block_Ma, block_Mb, block_G)
+!$OMP PRIVATE(block_X,block_A,block_B,block_N,block_Ma, block_Mb, block_G) &
+!$OMP REDUCTION(+:penalty_sum)
       CALL dbcsr_iterator_start(iter, matrix_X_nondiag)
       DO WHILE (dbcsr_iterator_blocks_left(iter))
          CALL dbcsr_iterator_next_block(iter, arow, acol, block_X)
@@ -236,13 +239,13 @@ CONTAINS
 
          n = SIZE(block_A, 1) ! size of primary basis
          m = SIZE(block_A, 2) ! size of pao basis
-         block_A = RESHAPE(block_X, (/n, m/))
+         block_A = RESHAPE(block_X, [n, m])
 
          ! restrain pao basis vectors to unit norm
          IF (PRESENT(penalty)) THEN
             DO i = 1, m
                w = 1.0_dp - SUM(block_A(:, i)**2)
-               penalty = penalty + pao%penalty_strength*w**2
+               penalty_sum = penalty_sum + pao%penalty_strength*w**2
             END DO
          END IF
 
@@ -322,7 +325,7 @@ CONTAINS
                DEALLOCATE (D, M1, M2, M3, M4, M5)
             END IF
 
-            block_G = RESHAPE(G, (/n*m, 1/))
+            block_G = RESHAPE(G, [n*m, 1])
             DEALLOCATE (G)
          END IF
 
@@ -333,9 +336,9 @@ CONTAINS
 
       ! sum penalty energies across ranks
       IF (PRESENT(penalty)) THEN
-         CALL dbcsr_get_info(pao%matrix_X, group=group_handle)
-         CALL group%set_handle(group_handle)
-         CALL group%sum(penalty)
+         CALL dbcsr_get_info(pao%matrix_X, group=group)
+         CALL group%sum(penalty_sum)
+         penalty = penalty_sum
       END IF
 
       CALL dbcsr_release(matrix_X_nondiag)

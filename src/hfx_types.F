@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2025 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2026 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -60,7 +60,8 @@ MODULE hfx_types
                                               default_string_length,&
                                               dp,&
                                               int_8
-   USE libint_2c_3c,                    ONLY: libint_potential_type
+   USE libint_2c_3c,                    ONLY: compare_potential_types,&
+                                              libint_potential_type
    USE libint_wrapper,                  ONLY: &
         cp_libint_cleanup_eri, cp_libint_cleanup_eri1, cp_libint_init_eri, cp_libint_init_eri1, &
         cp_libint_set_contrdepth, cp_libint_static_cleanup, cp_libint_static_init, cp_libint_t, &
@@ -75,6 +76,7 @@ MODULE hfx_types
                                               nso
    USE particle_methods,                ONLY: get_particle_set
    USE particle_types,                  ONLY: particle_type
+   USE physcon,                         ONLY: a_bohr
    USE qs_integral_utils,               ONLY: basis_set_list_setup
    USE qs_kind_types,                   ONLY: get_qs_kind,&
                                               get_qs_kind_set,&
@@ -119,17 +121,17 @@ MODULE hfx_types
    REAL(dp), PARAMETER, PUBLIC                :: log_zero = -1000.0_dp
    REAL(dp), PARAMETER, PUBLIC                :: powell_min_log = -20.0_dp
    REAL(KIND=dp), DIMENSION(0:10), &
-      PARAMETER, PUBLIC                       :: mul_fact = (/1.0_dp, &
-                                                              1.1781_dp, &
-                                                              1.3333_dp, &
-                                                              1.4726_dp, &
-                                                              1.6000_dp, &
-                                                              1.7181_dp, &
-                                                              1.8286_dp, &
-                                                              1.9328_dp, &
-                                                              2.0317_dp, &
-                                                              2.1261_dp, &
-                                                              2.2165_dp/)
+      PARAMETER, PUBLIC                       :: mul_fact = [1.0_dp, &
+                                                             1.1781_dp, &
+                                                             1.3333_dp, &
+                                                             1.4726_dp, &
+                                                             1.6000_dp, &
+                                                             1.7181_dp, &
+                                                             1.8286_dp, &
+                                                             1.9328_dp, &
+                                                             2.0317_dp, &
+                                                             2.1261_dp, &
+                                                             2.2165_dp]
 
    INTEGER, SAVE                                         :: init_t_c_g0_lmax = -1
 
@@ -144,7 +146,7 @@ MODULE hfx_types
       REAL(dp)                                 :: scale_gaussian = 0.0_dp!! scaling factor for mixed potential
       REAL(dp)                                 :: cutoff_radius = 0.0_dp!! cutoff radius if cutoff potential in use
       CHARACTER(default_path_length)           :: filename = ""
-   END TYPE
+   END TYPE hfx_potential_type
 
 ! **************************************************************************************************
    TYPE hfx_screening_type
@@ -152,7 +154,7 @@ MODULE hfx_types
       REAL(dp)                                 :: eps_schwarz_forces = 0.0_dp !! threshold
       LOGICAL                                  :: do_p_screening_forces = .FALSE. !! screen on P^2 ?
       LOGICAL                                  :: do_initial_p_screening = .FALSE. !! screen on initial guess?
-   END TYPE
+   END TYPE hfx_screening_type
 
 ! **************************************************************************************************
    TYPE hfx_memory_type
@@ -173,7 +175,7 @@ MODULE hfx_types
       INTEGER(int_8)                           :: size_p_screen = 0_int_8
       LOGICAL                                  :: treat_forces_in_core = .FALSE.
       LOGICAL                                  :: recalc_forces = .FALSE.
-   END TYPE
+   END TYPE hfx_memory_type
 
 ! **************************************************************************************************
    TYPE hfx_periodic_type
@@ -183,7 +185,7 @@ MODULE hfx_types
       INTEGER                                  :: mode = -1
       REAL(dp)                                 :: R_max_stress = 0.0_dp
       INTEGER                                  :: number_of_shells_from_input = 0
-   END TYPE
+   END TYPE hfx_periodic_type
 
 ! **************************************************************************************************
    TYPE hfx_load_balance_type
@@ -193,20 +195,20 @@ MODULE hfx_types
       LOGICAL                                  :: rtp_redistribute = .FALSE.
       LOGICAL                                  :: blocks_initialized = .FALSE.
       LOGICAL                                  :: do_randomize = .FALSE.
-   END TYPE
+   END TYPE hfx_load_balance_type
 
 ! **************************************************************************************************
    TYPE hfx_general_type
       REAL(dp)                                 :: fraction = 0.0_dp !! for hybrids
       INTEGER                                  :: hfx_library = 0
       LOGICAL                                  :: treat_lsd_in_core = .FALSE.
-   END TYPE
+   END TYPE hfx_general_type
 
 ! **************************************************************************************************
    TYPE hfx_cell_type
       REAL(dp)                                 :: cell(3) = 0.0_dp
       REAL(dp)                                 :: cell_r(3) = 0.0_dp
-   END TYPE
+   END TYPE hfx_cell_type
 
 ! **************************************************************************************************
    TYPE hfx_distribution
@@ -217,7 +219,7 @@ MODULE hfx_types
       REAL(KIND=dp)                            :: time_other_scf = 0.0_dp
       REAL(KIND=dp)                            :: time_forces = 0.0_dp
       INTEGER(int_8)                           :: ram_counter = 0_int_8
-   END TYPE
+   END TYPE hfx_distribution
 
 ! **************************************************************************************************
    TYPE pair_list_element_type
@@ -226,12 +228,12 @@ MODULE hfx_types
       INTEGER, DIMENSION(2) :: kind_pair = 0
       REAL(KIND=dp)         :: r1(3) = 0.0_dp, r2(3) = 0.0_dp
       REAL(KIND=dp)         :: dist2 = 0.0_dp
-   END TYPE
+   END TYPE pair_list_element_type
 
    ! **************************************************************************************************
    TYPE pair_set_list_type
       INTEGER, DIMENSION(2) :: pair = 0
-   END TYPE
+   END TYPE pair_set_list_type
 
 ! **************************************************************************************************
    TYPE pair_list_type
@@ -243,13 +245,13 @@ MODULE hfx_types
    TYPE hfx_cache_type
       INTEGER(int_8), DIMENSION(CACHE_SIZE)    :: DATA = 0_int_8
       INTEGER                                  :: element_counter = 0
-   END TYPE
+   END TYPE hfx_cache_type
 
 ! **************************************************************************************************
    TYPE hfx_container_node
       TYPE(hfx_container_node), POINTER        :: next => NULL(), prev => NULL()
       INTEGER(int_8), DIMENSION(CACHE_SIZE)    :: DATA = 0_int_8
-   END TYPE
+   END TYPE hfx_container_node
 
 ! **************************************************************************************************
    TYPE hfx_container_type
@@ -259,7 +261,7 @@ MODULE hfx_types
       CHARACTER(LEN=5)                         :: desc = ""
       INTEGER                                  :: unit = -1
       CHARACTER(default_path_length)           :: filename = ""
-   END TYPE
+   END TYPE hfx_container_type
 
 ! **************************************************************************************************
    TYPE hfx_basis_type
@@ -281,30 +283,30 @@ MODULE hfx_types
       REAL(dp), DIMENSION(:), POINTER          :: set_radius => NULL()
       REAL(dp), DIMENSION(:, :), POINTER        :: pgf_radius => NULL()
       REAL(dp)                                 :: kind_radius = 0.0_dp
-   END TYPE
+   END TYPE hfx_basis_type
 
 ! **************************************************************************************************
    TYPE hfx_basis_info_type
       INTEGER                                  :: max_set = 0
       INTEGER                                  :: max_sgf = 0
       INTEGER                                  :: max_am = 0
-   END TYPE
+   END TYPE hfx_basis_info_type
 
 ! **************************************************************************************************
    TYPE hfx_screen_coeff_type
       REAL(dp)                                 :: x(2) = 0.0_dp
-   END TYPE
+   END TYPE hfx_screen_coeff_type
 
 ! **************************************************************************************************
    TYPE hfx_p_kind
       REAL(dp), DIMENSION(:, :, :, :), POINTER    :: p_kind => NULL()
-   END TYPE
+   END TYPE hfx_p_kind
 
 ! **************************************************************************************************
    TYPE hfx_2D_map
       INTEGER, DIMENSION(:), POINTER           :: iatom_list => NULL()
       INTEGER, DIMENSION(:), POINTER           :: jatom_list => NULL()
-   END TYPE
+   END TYPE hfx_2D_map
 
 ! **************************************************************************************************
    TYPE hfx_pgf_image
@@ -315,7 +317,7 @@ MODULE hfx_types
       REAL(dp)                                 :: R = 0.0_dp
       REAL(dp)                                 :: pgf_max = 0.0_dp
       REAL(dp), DIMENSION(3)                   :: bcell = 0.0_dp
-   END TYPE
+   END TYPE hfx_pgf_image
 
 ! **************************************************************************************************
    TYPE hfx_pgf_list
@@ -326,7 +328,7 @@ MODULE hfx_types
       REAL(dp)                                 :: ZetaInv = 0.0_dp
       REAL(dp)                                 :: zeta = 0.0_dp, zetb = 0.0_dp
       INTEGER                                  :: ipgf = 0, jpgf = 0
-   END TYPE
+   END TYPE hfx_pgf_list
 
 ! **************************************************************************************************
    TYPE hfx_pgf_product_list
@@ -336,20 +338,20 @@ MODULE hfx_types
       REAL(dp)                                 :: P(3) = 0.0_dp, Q(3) = 0.0_dp, W(3) = 0.0_dp
       REAL(dp)                                 :: AB(3) = 0.0_dp, CD(3) = 0.0_dp
       REAL(dp)                                 :: Fm(prim_data_f_size) = 0.0_dp
-   END TYPE
+   END TYPE hfx_pgf_product_list
 
 ! **************************************************************************************************
    TYPE hfx_block_range_type
       INTEGER        :: istart = 0, iend = 0
       INTEGER(int_8) :: cost = 0_int_8
-   END TYPE
+   END TYPE hfx_block_range_type
 
 ! **************************************************************************************************
    TYPE hfx_task_list_type
       INTEGER                                  :: thread_id = 0
       INTEGER                                  :: bin_id = 0
       INTEGER(int_8)                           :: cost = 0_int_8
-   END TYPE
+   END TYPE hfx_task_list_type
 
    TYPE :: hfx_compression_type
       TYPE(hfx_container_type), DIMENSION(:), &
@@ -365,11 +367,11 @@ MODULE hfx_types
       TYPE(hfx_cache_type)      :: integral_caches_disk(64) = hfx_cache_type()
       TYPE(hfx_container_type), POINTER, &
          DIMENSION(:)  :: integral_containers_disk => NULL()
-   END TYPE
+   END TYPE hfx_compression_type
 
    TYPE :: block_ind_type
       INTEGER, DIMENSION(:, :), ALLOCATABLE :: ind
-   END TYPE
+   END TYPE block_ind_type
 
    TYPE hfx_ri_type
       ! input parameters (see input_cp2k_hfx)
@@ -378,7 +380,7 @@ MODULE hfx_types
                        kp_image_range = 0.0_dp, kp_bump_rad = 0.0_dp
       INTEGER :: t2c_sqrt_order = 0, max_iter_lanczos = 0, flavor = 0, unit_nr_dbcsr = -1, unit_nr = -1, &
                  min_bsize = 0, max_bsize_MO = 0, t2c_method = 0, nelectron_total = 0, input_flavor = 0, &
-                 ncell_RI = 0, nimg = 0, kp_stack_size = 0, nimg_nze = 0
+                 ncell_RI = 0, nimg = 0, kp_stack_size = 0, nimg_nze = 0, kp_ngroups = 1
       LOGICAL :: check_2c_inv = .FALSE., calc_condnum = .FALSE.
 
       TYPE(libint_potential_type) :: ri_metric = libint_potential_type()
@@ -472,7 +474,7 @@ MODULE hfx_types
       INTEGER        :: num_pe = 0
       TYPE(hfx_compression_type), DIMENSION(:, :), ALLOCATABLE :: store_3c
 
-   END TYPE
+   END TYPE hfx_ri_type
 
 ! **************************************************************************************************
 !> \brief stores some data used in construction of Kohn-Sham matrix
@@ -563,6 +565,14 @@ MODULE hfx_types
       LOGICAL, DIMENSION(:, :), POINTER         :: atomic_pair_list_forces => NULL()
       LOGICAL                                   :: do_hfx_ri = .FALSE.
       TYPE(hfx_ri_type), POINTER                :: ri_data => NULL()
+
+      ! ACE fields
+      LOGICAL  :: use_ace = .FALSE.
+      INTEGER  :: ace_rebuild_freq = 20
+
+      ! ACE pprojectors will be declared in hfx_admm_utils.F
+      LOGICAL  :: ace_is_built = .FALSE.
+      INTEGER  :: ace_build_counter = 0
    END TYPE hfx_type
 
 CONTAINS
@@ -734,6 +744,25 @@ CONTAINS
                CALL erfc_cutoff(actual_x_data%screening_parameter%eps_schwarz, &
                                 actual_x_data%potential_parameter%omega, &
                                 actual_x_data%potential_parameter%cutoff_radius)
+               CALL section_vals_val_get(hf_sub_section, "CUTOFF_RADIUS", explicit=explicit)
+               IF (explicit) THEN
+                  CALL section_vals_val_get(hf_sub_section, "CUTOFF_RADIUS", r_val=real_val)
+                  IF (real_val < actual_x_data%potential_parameter%cutoff_radius .AND. &
+                      i_thread == 1 .AND. irep == 1) THEN
+                     WRITE (error_msg, '(A,F6.3,A,ES8.1,A,F6.3,A,F6.3,A)') &
+                        "Periodic Hartree Fock calculation requested with the use "// &
+                        "of a shortrange potential erfc(omega*r)/r. Given omega = ", &
+                        actual_x_data%potential_parameter%omega, " and EPS_SCHWARZ = ", &
+                        actual_x_data%screening_parameter%eps_schwarz, ", the requested "// &
+                        "cutoff radius ", real_val*a_bohr*1e+10_dp, " A is smaller than "// &
+                        "what is necessary to satisfy erfc(omega*r)/r = EPS_SCHWARZ at r = ", &
+                        actual_x_data%potential_parameter%cutoff_radius*a_bohr*1e+10_dp, &
+                        " A. Increase input value (or omit keyword to use program default) "// &
+                        "to ensure accuracy."
+                     CPWARN(error_msg)
+                  END IF
+                  actual_x_data%potential_parameter%cutoff_radius = real_val
+               END IF
             END IF
             IF (actual_x_data%potential_parameter%potential_type == do_potential_id) THEN
                actual_x_data%potential_parameter%cutoff_radius = 0.0_dp
@@ -1000,6 +1029,28 @@ CONTAINS
                                                     particle_set, atomic_kind_set, dft_control, para_env, irep, &
                                                     nelectron_total, orb_basis_type, ri_basis_type)
             END IF
+
+            ! ACE section — read only on thread 1 to avoid redundant work
+            IF (i_thread == 1) THEN
+               hf_sub_section => section_vals_get_subs_vals(hfx_section, "ACE", &
+                                                            i_rep_section=irep)
+               CALL section_vals_get(hf_sub_section, explicit=logic_val)
+               IF (logic_val) THEN
+                  CALL section_vals_val_get(hf_sub_section, "ACTIVE", &
+                                            l_val=actual_x_data%use_ace)
+                  CALL section_vals_val_get(hf_sub_section, "REBUILD_FREQUENCY", &
+                                            i_val=actual_x_data%ace_rebuild_freq)
+               END IF
+               ! Sanity checks
+               IF (actual_x_data%use_ace) THEN
+                  ! ACE requires HFX to be meaningful
+                  IF (actual_x_data%general_parameter%fraction <= 0.0_dp) &
+                     CPABORT("ACE requires FRACTION > 0.")
+                  ! If frequency is 1, it is full HFX
+                  IF (actual_x_data%ace_rebuild_freq < 1) &
+                     CPABORT("ACE: REBUILD_FREQUENCY must be >= 1")
+               END IF
+            END IF
          END DO
       END DO
 
@@ -1058,6 +1109,8 @@ CONTAINS
          hfx_pot%potential_type = x_data%potential_parameter%potential_type
          hfx_pot%omega = x_data%potential_parameter%omega
          hfx_pot%cutoff_radius = x_data%potential_parameter%cutoff_radius
+         hfx_pot%scale_coulomb = x_data%potential_parameter%scale_coulomb
+         hfx_pot%scale_longrange = x_data%potential_parameter%scale_longrange
       END ASSOCIATE
       ri_data%ri_section => ri_section
       ri_data%hfx_section => hfx_section
@@ -1153,6 +1206,16 @@ CONTAINS
             ri_metric%cutoff_radius = hfx_pot%cutoff_radius
          END IF
 
+         CALL section_vals_val_get(ri_section, "SCALE_COULOMB", r_val=ri_metric%scale_coulomb, explicit=explicit)
+         IF (.NOT. explicit) THEN
+            ri_metric%scale_coulomb = hfx_pot%scale_coulomb
+         END IF
+
+         CALL section_vals_val_get(ri_section, "SCALE_LONGRANGE", r_val=ri_metric%scale_longrange, explicit=explicit)
+         IF (.NOT. explicit) THEN
+            ri_metric%scale_longrange = hfx_pot%scale_longrange
+         END IF
+
          IF (ri_metric%potential_type == do_potential_short) &
             CALL erfc_cutoff(ri_data%eps_schwarz, ri_metric%omega, ri_metric%cutoff_radius)
          IF (ri_metric%potential_type == do_potential_id) ri_metric%cutoff_radius = 0.0_dp
@@ -1191,7 +1254,7 @@ CONTAINS
 
       CALL timestop(handle)
 
-   END SUBROUTINE
+   END SUBROUTINE hfx_ri_init_read_input
 
 ! **************************************************************************************************
 !> \brief ...
@@ -1245,15 +1308,7 @@ CONTAINS
             CALL erfc_cutoff(ri_data%filter_eps_2c, hfx_pot%omega, hfx_pot%cutoff_radius)
          END IF
          ! determine whether RI metric is same operator as used in HFX
-         same_op = ri_metric%potential_type == hfx_pot%potential_type
-
-         IF (same_op .AND. hfx_pot%potential_type == do_potential_truncated) THEN
-            same_op = ABS(ri_metric%cutoff_radius - hfx_pot%cutoff_radius) < 1.0E-16_dp
-         END IF
-
-         IF (same_op .AND. hfx_pot%potential_type == do_potential_short) THEN
-            same_op = ABS(ri_metric%omega - hfx_pot%omega) < 1.0E-16_dp
-         END IF
+         same_op = compare_potential_types(ri_metric, hfx_pot)
       END ASSOCIATE
 
       ri_data%same_op = same_op
@@ -1438,7 +1493,7 @@ CONTAINS
 
       CALL timestop(handle)
 
-   END SUBROUTINE
+   END SUBROUTINE hfx_ri_init
 
 ! **************************************************************************************************
 !> \brief ...
@@ -1459,7 +1514,7 @@ CONTAINS
          IF (unit_nr > 0) WRITE (UNIT=unit_nr, FMT="(T2,A,T66,F15.2)") &
             "RI-HFX PERFORMANCE| DBT flop rate (Gflops / MPI rank):", my_flop_rate
       END ASSOCIATE
-   END SUBROUTINE
+   END SUBROUTINE hfx_ri_write_stats
 
 ! **************************************************************************************************
 !> \brief ...
@@ -1645,7 +1700,7 @@ CONTAINS
       END IF
 
       CALL timestop(handle)
-   END SUBROUTINE
+   END SUBROUTINE hfx_ri_release
 
 ! **************************************************************************************************
 !> \brief - This routine allocates and initializes the basis_info and basis_parameter types
@@ -2033,6 +2088,11 @@ CONTAINS
                END IF
                DEALLOCATE (actual_x_data%ri_data)
             END IF
+
+            ! ACE cleanup — just reset scalars, ace_W is managed elsewhere
+            actual_x_data%use_ace = .FALSE.
+            actual_x_data%ace_is_built = .FALSE.
+            actual_x_data%ace_build_counter = 0
          END DO
 
       END DO
@@ -2095,20 +2155,25 @@ CONTAINS
             l_min = 0.5_dp*l_min
             IF (x_data%potential_parameter%cutoff_radius >= l_min) THEN
                IF (.NOT. do_kpoints) THEN
-                  CALL cp_warn(__LOCATION__, &
-                               "Periodic Hartree Fock calculation requested with the use "// &
-                               "of a truncated or shortrange potential. The cutoff radius is larger than half "// &
-                               "the minimal cell dimension. This may lead to unphysical "// &
-                               "total energies. Reduce the cutoff radius in order to avoid "// &
-                               "possible problems.")
+                  WRITE (error_msg, "(A,F6.3,A,F6.3,A)") &
+                     "Periodic Hartree Fock calculation requested with the use "// &
+                     "of a truncated or shortrange potential. "// &
+                     "The cutoff radius (", x_data%potential_parameter%cutoff_radius*a_bohr*1e+10_dp, &
+                     " A) is larger than half the minimal cell dimension (", &
+                     l_min*a_bohr*1e+10_dp, " A). This may lead to unphysical "// &
+                     "total energies. Reduce the cutoff radius in order to avoid "// &
+                     "possible problems."
                ELSE
-                  CALL cp_warn(__LOCATION__, &
-                               "K-point Hartree-Fock calculation requested with the use of a "// &
-                               "truncated or shortrange potential. The cutoff radius is larger than "// &
-                               "half the minimal Born-von Karman supercell dimension. This may lead "// &
-                               "to unphysical total energies. Reduce the cutoff radius or increase "// &
-                               "the number of K-points in order to avoid possible problems.")
+                  WRITE (error_msg, "(A,F6.3,A,F6.3,A)") &
+                     "K-point Hartree-Fock calculation requested with the use of a "// &
+                     "truncated or shortrange potential. The cutoff radius (", &
+                     x_data%potential_parameter%cutoff_radius*a_bohr*1e+10_dp, &
+                     " A) is larger than half the minimal Born-von Karman supercell dimension (", &
+                     l_min*a_bohr*1e+10_dp, " A). This may lead "// &
+                     "to unphysical total energies. Reduce the cutoff radius or increase "// &
+                     "the number of K-points in order to avoid possible problems."
                END IF
+               CALL cp_warn(__LOCATION__, error_msg)
             END IF
          END IF
       END IF
@@ -2333,7 +2398,7 @@ CONTAINS
                END IF
                IF (dist_min < R_max) THEN
                   total_number_of_cells = total_number_of_cells + 1
-                  x_data%neighbor_cells(ub)%cell = REAL((/ishell, jshell, kshell/), dp)
+                  x_data%neighbor_cells(ub)%cell = REAL([ishell, jshell, kshell], dp)
                   ub = ub + 1
                   image_cell_found = .TRUE.
                END IF
@@ -2725,10 +2790,10 @@ CONTAINS
                WRITE (iw, '(T3,A,T61,F20.10)') &
                   "HFX_RI_INFO| Omega:     ", ri_metric%omega
             CASE (do_potential_id)
-               WRITE (UNIT=iw, FMT="(T3,A,T73,A)") &
+               WRITE (UNIT=iw, FMT="(T3,A,T74,A)") &
                   "HFX_RI_INFO| RI metric: ", "OVERLAP"
             CASE (do_potential_truncated)
-               WRITE (UNIT=iw, FMT="(T3,A,T72,A)") &
+               WRITE (UNIT=iw, FMT="(T3,A,T64,A)") &
                   "HFX_RI_INFO| RI metric: ", "TRUNCATED COULOMB"
                rc_ang = cp_unit_from_cp2k(ri_metric%cutoff_radius, "angstrom")
                WRITE (iw, '(T3,A,T61,F20.10)') &
@@ -2774,7 +2839,7 @@ CONTAINS
             "HFX_RI_INFO| Memory reduction factor", ri_data%n_mem_input
       END IF
 
-   END SUBROUTINE
+   END SUBROUTINE hfx_print_ri_info
 
 ! **************************************************************************************************
 !> \brief ...
@@ -2867,9 +2932,17 @@ CONTAINS
          CALL hfx_print_std_info(x_data, hfx_section)
       END IF
 
+      ! ACE section
+      IF (x_data%use_ace .AND. iw > 0) THEN
+         WRITE (UNIT=iw, FMT="(/,T3,A)") &
+            "HFX_INFO| ACE (Adaptively Compressed Exchange): ACTIVE"
+         WRITE (UNIT=iw, FMT="(T3,A,T61,I20)") &
+            "HFX_INFO| ACE rebuild frequency:     ", x_data%ace_rebuild_freq
+      END IF
+
       CALL cp_print_key_finished_output(iw, logger, hfx_section, &
                                         "HF_INFO")
-   END SUBROUTINE
+   END SUBROUTINE hfx_print_info
 
 ! **************************************************************************************************
 !> \brief ...
@@ -2982,7 +3055,7 @@ CONTAINS
 
          CALL section_vals_val_get(hfx_section1, "PW_HFX_BLOCKSIZE", i_val=ival1, i_rep_section=irep)
          CALL section_vals_val_get(hfx_section2, "PW_HFX_BLOCKSIZE", i_val=ival2, i_rep_section=irep)
-         IF (ival1 .NE. ival2) is_identical = .FALSE.
+         IF (ival1 /= ival2) is_identical = .FALSE.
 
          CALL section_vals_val_get(hfx_section1, "TREAT_LSD_IN_CORE", l_val=lval1, i_rep_section=irep)
          CALL section_vals_val_get(hfx_section2, "TREAT_LSD_IN_CORE", l_val=lval2, i_rep_section=irep)
@@ -2997,7 +3070,7 @@ CONTAINS
 
          CALL section_vals_val_get(hfx_sub_section1, "POTENTIAL_TYPE", i_val=ival1, i_rep_section=irep)
          CALL section_vals_val_get(hfx_sub_section2, "POTENTIAL_TYPE", i_val=ival2, i_rep_section=irep)
-         IF (ival1 .NE. ival2) is_identical = .FALSE.
+         IF (ival1 /= ival2) is_identical = .FALSE.
          IF (.NOT. is_identical) RETURN
 
          IF (ival1 == do_potential_truncated .OR. ival1 == do_potential_mix_cl_trunc) THEN
@@ -3007,7 +3080,7 @@ CONTAINS
 
             CALL section_vals_val_get(hfx_sub_section1, "T_C_G_DATA", c_val=cval1, i_rep_section=irep)
             CALL section_vals_val_get(hfx_sub_section2, "T_C_G_DATA", c_val=cval2, i_rep_section=irep)
-            IF (cval1 .NE. cval2) is_identical = .FALSE.
+            IF (cval1 /= cval2) is_identical = .FALSE.
          END IF
 
          CALL section_vals_val_get(hfx_sub_section1, "SCALE_COULOMB", r_val=rval1, i_rep_section=irep)
@@ -3027,7 +3100,7 @@ CONTAINS
 
          CALL section_vals_val_get(hfx_sub_section1, "NUMBER_OF_SHELLS", i_val=ival1, i_rep_section=irep)
          CALL section_vals_val_get(hfx_sub_section2, "NUMBER_OF_SHELLS", i_val=ival2, i_rep_section=irep)
-         IF (ival1 .NE. ival2) is_identical = .FALSE.
+         IF (ival1 /= ival2) is_identical = .FALSE.
 
          hfx_sub_section1 => section_vals_get_subs_vals(hfx_section1, "RI", i_rep_section=irep)
          hfx_sub_section2 => section_vals_get_subs_vals(hfx_section2, "RI", i_rep_section=irep)
@@ -3062,11 +3135,11 @@ CONTAINS
 
          CALL section_vals_val_get(hfx_sub_section1, "MAX_BLOCK_SIZE_MO", i_val=ival1, i_rep_section=irep)
          CALL section_vals_val_get(hfx_sub_section2, "MAX_BLOCK_SIZE_MO", i_val=ival2, i_rep_section=irep)
-         IF (ival1 .NE. ival2) is_identical = .FALSE.
+         IF (ival1 /= ival2) is_identical = .FALSE.
 
          CALL section_vals_val_get(hfx_sub_section1, "MIN_BLOCK_SIZE", i_val=ival1, i_rep_section=irep)
          CALL section_vals_val_get(hfx_sub_section2, "MIN_BLOCK_SIZE", i_val=ival2, i_rep_section=irep)
-         IF (ival1 .NE. ival2) is_identical = .FALSE.
+         IF (ival1 /= ival2) is_identical = .FALSE.
 
          CALL section_vals_val_get(hfx_sub_section1, "OMEGA", r_val=rval1, i_rep_section=irep)
          CALL section_vals_val_get(hfx_sub_section2, "OMEGA", r_val=rval2, i_rep_section=irep)
@@ -3074,11 +3147,11 @@ CONTAINS
 
          CALL section_vals_val_get(hfx_sub_section1, "RI_FLAVOR", i_val=ival1, i_rep_section=irep)
          CALL section_vals_val_get(hfx_sub_section2, "RI_FLAVOR", i_val=ival2, i_rep_section=irep)
-         IF (ival1 .NE. ival2) is_identical = .FALSE.
+         IF (ival1 /= ival2) is_identical = .FALSE.
 
          CALL section_vals_val_get(hfx_sub_section1, "RI_METRIC", i_val=ival1, i_rep_section=irep)
          CALL section_vals_val_get(hfx_sub_section2, "RI_METRIC", i_val=ival2, i_rep_section=irep)
-         IF (ival1 .NE. ival2) is_identical = .FALSE.
+         IF (ival1 /= ival2) is_identical = .FALSE.
 
          hfx_sub_section1 => section_vals_get_subs_vals(hfx_section1, "SCREENING", i_rep_section=irep)
          hfx_sub_section2 => section_vals_get_subs_vals(hfx_section2, "SCREENING", i_rep_section=irep)

@@ -1,6 +1,6 @@
 /*----------------------------------------------------------------------------*/
 /*  CP2K: A general program to perform molecular dynamics simulations         */
-/*  Copyright 2000-2025 CP2K developers group <https://cp2k.org>              */
+/*  Copyright 2000-2026 CP2K developers group <https://cp2k.org>              */
 /*                                                                            */
 /*  SPDX-License-Identifier: BSD-3-Clause                                     */
 /*----------------------------------------------------------------------------*/
@@ -16,7 +16,6 @@
 #include "cpu/grid_cpu_task_list.h"
 #include "dgemm/grid_dgemm_task_list.h"
 #include "gpu/grid_gpu_task_list.h"
-#include "hip/grid_hip_task_list.h"
 #include "ref/grid_ref_task_list.h"
 
 /*******************************************************************************
@@ -32,9 +31,6 @@ typedef struct {
   grid_dgemm_task_list *dgemm;
 #if defined(__OFFLOAD) && !defined(__NO_OFFLOAD_GRID)
   grid_gpu_task_list *gpu;
-#endif
-#if defined(__OFFLOAD_HIP) && !defined(__NO_OFFLOAD_GRID)
-  grid_hip_task_list *hip;
 #endif
   // more backends to be added here
 } grid_task_list;

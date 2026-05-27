@@ -1,6 +1,6 @@
 #!-------------------------------------------------------------------------------------------------!
 #!   CP2K: A general program to perform molecular dynamics simulations                             !
-#!   Copyright 2000-2025 CP2K developers group <https://cp2k.org>                                  !
+#!   Copyright 2000-2026 CP2K developers group <https://cp2k.org>                                  !
 #!                                                                                                 !
 #!   SPDX-License-Identifier: GPL-2.0-or-later                                                     !
 #!-------------------------------------------------------------------------------------------------!
@@ -1115,7 +1115,7 @@
 
 #if defined(__parallel)
 #if !defined(__GNUC__) || __GNUC__ >= 9
-      CPASSERT(IS_CONTIGUOUS(msg))
+      CPASSERT(IS_CONTIGUOUS(msg) .OR. SIZE(msg) == 0)
 #endif
       msglen = SIZE(msg)
       CALL mpi_ibcast(msg, msglen, ${mpi_type1}$, source, comm%handle, request%handle, ierr)
@@ -1278,14 +1278,18 @@
       INTEGER                                  :: handle
 #if defined(__parallel)
       INTEGER :: ierr, msglen
+      ${type1}$ :: res
 #endif
 
       CALL mp_timeset(routineN, handle)
 
 #if defined(__parallel)
       msglen = 1
-      CALL mpi_allreduce(MPI_IN_PLACE, msg, msglen, ${mpi_type1}$, MPI_SUM, comm%handle, ierr)
-      IF (ierr /= 0) CALL mp_stop(ierr, "mpi_allreduce @ "//routineN)
+      IF (comm%num_pe > 1) THEN
+         CALL mpi_allreduce(msg, res, msglen, ${mpi_type1}$, MPI_SUM, comm%handle, ierr)
+         IF (ierr /= 0) CALL mp_stop(ierr, "mpi_allreduce @ "//routineN)
+         msg = res
+      END IF
       CALL add_perf(perf_id=3, count=1, msg_size=msglen*${bytes1}$)
 #else
       MARK_USED(msg)
@@ -1309,15 +1313,18 @@
       INTEGER                                  :: handle
 #if defined(__parallel)
       INTEGER                                  :: ierr, msglen
+      ${type1}$, ALLOCATABLE                   :: msgbuf(:)
 #endif
 
       CALL mp_timeset(routineN, handle)
 
 #if defined(__parallel)
       msglen = SIZE(msg)
-      IF (msglen > 0) THEN
-         CALL mpi_allreduce(MPI_IN_PLACE, msg, msglen, ${mpi_type1}$, MPI_SUM, comm%handle, ierr)
+      IF (msglen > 0 .AND. comm%num_pe > 1) THEN
+         ALLOCATE (msgbuf(msglen))
+         CALL mpi_allreduce(msg, msgbuf, msglen, ${mpi_type1}$, MPI_SUM, comm%handle, ierr)
          IF (ierr /= 0) CALL mp_stop(ierr, "mpi_allreduce @ "//routineN)
+         msg = msgbuf
       END IF
       CALL add_perf(perf_id=3, count=1, msg_size=msglen*${bytes1}$)
 #else
@@ -1349,10 +1356,10 @@
 
 #if defined(__parallel)
 #if !defined(__GNUC__) || __GNUC__ >= 9
-      CPASSERT(IS_CONTIGUOUS(msg))
+      CPASSERT(IS_CONTIGUOUS(msg) .OR. SIZE(msg) == 0)
 #endif
       msglen = SIZE(msg)
-      IF (msglen > 0) THEN
+      IF (msglen > 0 .AND. comm%num_pe > 1) THEN
          CALL mpi_iallreduce(MPI_IN_PLACE, msg, msglen, ${mpi_type1}$, MPI_SUM, comm%handle, request%handle, ierr)
          IF (ierr /= 0) CALL mp_stop(ierr, "mpi_iallreduce @ "//routineN)
       ELSE
@@ -1382,7 +1389,8 @@
       INTEGER                                  :: handle
 #if defined(__parallel)
       INTEGER, PARAMETER :: max_msg = 2**25
-      INTEGER                                  :: ierr, m1, msglen, step, msglensum
+      INTEGER                                  :: ierr, m1, msglen, ncols, step, msglensum
+      ${type1}$, ALLOCATABLE                   :: msgbuf(:)
 #endif
 
       CALL mp_timeset(routineN, handle)
@@ -1394,9 +1402,13 @@
       DO m1 = LBOUND(msg, 2), UBOUND(msg, 2), step
          msglen = SIZE(msg, 1)*(MIN(UBOUND(msg, 2), m1 + step - 1) - m1 + 1)
          msglensum = msglensum + msglen
-         IF (msglen > 0) THEN
-            CALL mpi_allreduce(MPI_IN_PLACE, msg(LBOUND(msg, 1), m1), msglen, ${mpi_type1}$, MPI_SUM, comm%handle, ierr)
+         IF (msglen > 0 .AND. comm%num_pe > 1) THEN
+            ncols = MIN(UBOUND(msg, 2), m1 + step - 1) - m1 + 1
+            ALLOCATE (msgbuf(msglen))
+            CALL mpi_allreduce(msg(LBOUND(msg, 1), m1), msgbuf, msglen, ${mpi_type1}$, MPI_SUM, comm%handle, ierr)
             IF (ierr /= 0) CALL mp_stop(ierr, "mpi_allreduce @ "//routineN)
+            msg(:, m1:m1 + ncols - 1) = RESHAPE(msgbuf, [SIZE(msg, 1), ncols])
+            DEALLOCATE (msgbuf)
          END IF
       END DO
       CALL add_perf(perf_id=3, count=1, msg_size=msglensum*${bytes1}$)
@@ -1422,15 +1434,18 @@
       INTEGER                                  :: handle
 #if defined(__parallel)
       INTEGER :: ierr, msglen
+      ${type1}$, ALLOCATABLE :: msgbuf(:)
 #endif
 
       CALL mp_timeset(routineN, handle)
 
 #if defined(__parallel)
       msglen = SIZE(msg)
-      IF (msglen > 0) THEN
-         CALL mpi_allreduce(MPI_IN_PLACE, msg, msglen, ${mpi_type1}$, MPI_SUM, comm%handle, ierr)
+      IF (msglen > 0 .AND. comm%num_pe > 1) THEN
+         ALLOCATE (msgbuf(msglen))
+         CALL mpi_allreduce(msg, msgbuf, msglen, ${mpi_type1}$, MPI_SUM, comm%handle, ierr)
          IF (ierr /= 0) CALL mp_stop(ierr, "mpi_allreduce @ "//routineN)
+         msg = RESHAPE(msgbuf, SHAPE(msg))
       END IF
       CALL add_perf(perf_id=3, count=1, msg_size=msglen*${bytes1}$)
 #else
@@ -1455,15 +1470,18 @@
       INTEGER                                  :: handle
 #if defined(__parallel)
       INTEGER :: ierr, msglen
+      ${type1}$, ALLOCATABLE :: msgbuf(:)
 #endif
 
       CALL mp_timeset(routineN, handle)
 
 #if defined(__parallel)
       msglen = SIZE(msg)
-      IF (msglen > 0) THEN
-         CALL mpi_allreduce(MPI_IN_PLACE, msg, msglen, ${mpi_type1}$, MPI_SUM, comm%handle, ierr)
+      IF (msglen > 0 .AND. comm%num_pe > 1) THEN
+         ALLOCATE (msgbuf(msglen))
+         CALL mpi_allreduce(msg, msgbuf, msglen, ${mpi_type1}$, MPI_SUM, comm%handle, ierr)
          IF (ierr /= 0) CALL mp_stop(ierr, "mpi_allreduce @ "//routineN)
+         msg = RESHAPE(msgbuf, SHAPE(msg))
       END IF
       CALL add_perf(perf_id=3, count=1, msg_size=msglen*${bytes1}$)
 #else
@@ -1624,14 +1642,18 @@
       INTEGER                                  :: handle
 #if defined(__parallel)
       INTEGER :: ierr, msglen
+      ${type1}$ :: res
 #endif
 
       CALL mp_timeset(routineN, handle)
 
 #if defined(__parallel)
       msglen = 1
-      CALL mpi_allreduce(MPI_IN_PLACE, msg, msglen, ${mpi_type1}$, MPI_MAX, comm%handle, ierr)
-      IF (ierr /= 0) CALL mp_stop(ierr, "mpi_allreduce @ "//routineN)
+      IF (comm%num_pe > 1) THEN
+         CALL mpi_allreduce(msg, res, msglen, ${mpi_type1}$, MPI_MAX, comm%handle, ierr)
+         IF (ierr /= 0) CALL mp_stop(ierr, "mpi_allreduce @ "//routineN)
+         msg = res
+      END IF
       CALL add_perf(perf_id=3, count=1, msg_size=msglen*${bytes1}$)
 #else
       MARK_USED(msg)
@@ -1694,14 +1716,19 @@
       INTEGER                                  :: handle
 #if defined(__parallel)
       INTEGER :: ierr, msglen
+      ${type1}$, ALLOCATABLE :: msgbuf(:)
 #endif
 
       CALL mp_timeset(routineN, handle)
 
 #if defined(__parallel)
       msglen = SIZE(msg)
-      CALL mpi_allreduce(MPI_IN_PLACE, msg, msglen, ${mpi_type1}$, MPI_MAX, comm%handle, ierr)
-      IF (ierr /= 0) CALL mp_stop(ierr, "mpi_allreduce @ "//routineN)
+      IF (msglen > 0 .AND. comm%num_pe > 1) THEN
+         ALLOCATE (msgbuf(msglen))
+         CALL mpi_allreduce(msg, msgbuf, msglen, ${mpi_type1}$, MPI_MAX, comm%handle, ierr)
+         IF (ierr /= 0) CALL mp_stop(ierr, "mpi_allreduce @ "//routineN)
+         msg = msgbuf
+      END IF
       CALL add_perf(perf_id=3, count=1, msg_size=msglen*${bytes1}$)
 #else
       MARK_USED(msg)
@@ -1709,6 +1736,53 @@
 #endif
       CALL mp_timestop(handle)
    END SUBROUTINE mp_max_${nametype1}$v
+
+! **************************************************************************************************
+!> \brief Finds the element-wise maximum of a rank2-array with the result left on
+!>        all processes.
+!> \param[in] msg             Matrix - Find maximum among these data (input) and
+!>                            maximum (output)
+!> \param comm ...
+!> \note see mp_max_${nametype1}$
+! **************************************************************************************************
+   SUBROUTINE mp_max_${nametype1}$m(msg, comm)
+      ${type1}$, CONTIGUOUS, INTENT(INOUT)                   :: msg(:, :)
+      CLASS(mp_comm_type), INTENT(IN) :: comm
+
+      CHARACTER(len=*), PARAMETER :: routineN = 'mp_max_${nametype1}$m'
+
+      INTEGER                                  :: handle
+#if defined(__parallel)
+      INTEGER, PARAMETER :: max_msg = 2**25
+      INTEGER                                  :: ierr, m1, msglen, ncols, step, msglensum
+      ${type1}$, ALLOCATABLE                   :: msgbuf(:)
+#endif
+
+      CALL mp_timeset(routineN, handle)
+
+#if defined(__parallel)
+      ! chunk up the call so that message sizes are limited, to avoid overflows in mpich triggered in large rpa calcs
+      step = MAX(1, SIZE(msg, 2)/MAX(1, SIZE(msg)/max_msg))
+      msglensum = 0
+      DO m1 = LBOUND(msg, 2), UBOUND(msg, 2), step
+         msglen = SIZE(msg, 1)*(MIN(UBOUND(msg, 2), m1 + step - 1) - m1 + 1)
+         msglensum = msglensum + msglen
+         IF (msglen > 0 .AND. comm%num_pe > 1) THEN
+            ncols = MIN(UBOUND(msg, 2), m1 + step - 1) - m1 + 1
+            ALLOCATE (msgbuf(msglen))
+            CALL mpi_allreduce(msg(LBOUND(msg, 1), m1), msgbuf, msglen, ${mpi_type1}$, MPI_MAX, comm%handle, ierr)
+            IF (ierr /= 0) CALL mp_stop(ierr, "mpi_allreduce @ "//routineN)
+            msg(:, m1:m1 + ncols - 1) = RESHAPE(msgbuf, [SIZE(msg, 1), ncols])
+            DEALLOCATE (msgbuf)
+         END IF
+      END DO
+      CALL add_perf(perf_id=3, count=1, msg_size=msglensum*${bytes1}$)
+#else
+      MARK_USED(msg)
+      MARK_USED(comm)
+#endif
+      CALL mp_timestop(handle)
+   END SUBROUTINE mp_max_${nametype1}$m
 
 ! **************************************************************************************************
 !> \brief Finds the element-wise maximum of a vector with the result left on
@@ -1764,14 +1838,18 @@
       INTEGER                                  :: handle
 #if defined(__parallel)
       INTEGER :: ierr, msglen
+      ${type1}$ :: res
 #endif
 
       CALL mp_timeset(routineN, handle)
 
 #if defined(__parallel)
       msglen = 1
-      CALL mpi_allreduce(MPI_IN_PLACE, msg, msglen, ${mpi_type1}$, MPI_MIN, comm%handle, ierr)
-      IF (ierr /= 0) CALL mp_stop(ierr, "mpi_allreduce @ "//routineN)
+      IF (comm%num_pe > 1) THEN
+         CALL mpi_allreduce(msg, res, msglen, ${mpi_type1}$, MPI_MIN, comm%handle, ierr)
+         IF (ierr /= 0) CALL mp_stop(ierr, "mpi_allreduce @ "//routineN)
+         msg = res
+      END IF
       CALL add_perf(perf_id=3, count=1, msg_size=msglen*${bytes1}$)
 #else
       MARK_USED(msg)
@@ -1799,14 +1877,19 @@
       INTEGER                                  :: handle
 #if defined(__parallel)
       INTEGER :: ierr, msglen
+      ${type1}$, ALLOCATABLE :: msgbuf(:)
 #endif
 
       CALL mp_timeset(routineN, handle)
 
 #if defined(__parallel)
       msglen = SIZE(msg)
-      CALL mpi_allreduce(MPI_IN_PLACE, msg, msglen, ${mpi_type1}$, MPI_MIN, comm%handle, ierr)
-      IF (ierr /= 0) CALL mp_stop(ierr, "mpi_allreduce @ "//routineN)
+      IF (msglen > 0 .AND. comm%num_pe > 1) THEN
+         ALLOCATE (msgbuf(msglen))
+         CALL mpi_allreduce(msg, msgbuf, msglen, ${mpi_type1}$, MPI_MIN, comm%handle, ierr)
+         IF (ierr /= 0) CALL mp_stop(ierr, "mpi_allreduce @ "//routineN)
+         msg = msgbuf
+      END IF
       CALL add_perf(perf_id=3, count=1, msg_size=msglen*${bytes1}$)
 #else
       MARK_USED(msg)
@@ -1814,6 +1897,53 @@
 #endif
       CALL mp_timestop(handle)
    END SUBROUTINE mp_min_${nametype1}$v
+
+! **************************************************************************************************
+!> \brief Finds the element-wise minimum of a rank2-array with the result left on
+!>        all processes.
+!> \param[in] msg             Matrix - Find maximum among these data (input) and
+!>                            minimum (output)
+!> \param comm ...
+!> \note see mp_min_${nametype1}$
+! **************************************************************************************************
+   SUBROUTINE mp_min_${nametype1}$m(msg, comm)
+      ${type1}$, CONTIGUOUS, INTENT(INOUT)                   :: msg(:, :)
+      CLASS(mp_comm_type), INTENT(IN) :: comm
+
+      CHARACTER(len=*), PARAMETER :: routineN = 'mp_min_${nametype1}$m'
+
+      INTEGER                                  :: handle
+#if defined(__parallel)
+      INTEGER, PARAMETER :: max_msg = 2**25
+      INTEGER                                  :: ierr, m1, msglen, ncols, step, msglensum
+      ${type1}$, ALLOCATABLE                   :: msgbuf(:)
+#endif
+
+      CALL mp_timeset(routineN, handle)
+
+#if defined(__parallel)
+      ! chunk up the call so that message sizes are limited, to avoid overflows in mpich triggered in large rpa calcs
+      step = MAX(1, SIZE(msg, 2)/MAX(1, SIZE(msg)/max_msg))
+      msglensum = 0
+      DO m1 = LBOUND(msg, 2), UBOUND(msg, 2), step
+         msglen = SIZE(msg, 1)*(MIN(UBOUND(msg, 2), m1 + step - 1) - m1 + 1)
+         msglensum = msglensum + msglen
+         IF (msglen > 0 .AND. comm%num_pe > 1) THEN
+            ncols = MIN(UBOUND(msg, 2), m1 + step - 1) - m1 + 1
+            ALLOCATE (msgbuf(msglen))
+            CALL mpi_allreduce(msg(LBOUND(msg, 1), m1), msgbuf, msglen, ${mpi_type1}$, MPI_MIN, comm%handle, ierr)
+            IF (ierr /= 0) CALL mp_stop(ierr, "mpi_allreduce @ "//routineN)
+            msg(:, m1:m1 + ncols - 1) = RESHAPE(msgbuf, [SIZE(msg, 1), ncols])
+            DEALLOCATE (msgbuf)
+         END IF
+      END DO
+      CALL add_perf(perf_id=3, count=1, msg_size=msglensum*${bytes1}$)
+#else
+      MARK_USED(msg)
+      MARK_USED(comm)
+#endif
+      CALL mp_timestop(handle)
+   END SUBROUTINE mp_min_${nametype1}$m
 
 ! **************************************************************************************************
 !> \brief Multiplies a set of numbers scattered across a number of processes,
@@ -1832,14 +1962,18 @@
       INTEGER                                  :: handle
 #if defined(__parallel)
       INTEGER :: ierr, msglen
+      ${type1}$ :: res
 #endif
 
       CALL mp_timeset(routineN, handle)
 
 #if defined(__parallel)
       msglen = 1
-      CALL mpi_allreduce(MPI_IN_PLACE, msg, msglen, ${mpi_type1}$, MPI_PROD, comm%handle, ierr)
-      IF (ierr /= 0) CALL mp_stop(ierr, "mpi_allreduce @ "//routineN)
+      IF (comm%num_pe > 1) THEN
+         CALL mpi_allreduce(msg, res, msglen, ${mpi_type1}$, MPI_PROD, comm%handle, ierr)
+         IF (ierr /= 0) CALL mp_stop(ierr, "mpi_allreduce @ "//routineN)
+         msg = res
+      END IF
       CALL add_perf(perf_id=3, count=1, msg_size=msglen*${bytes1}$)
 #else
       MARK_USED(msg)
@@ -1912,7 +2046,7 @@
 
 #if defined(__parallel)
 #if !defined(__GNUC__) || __GNUC__ >= 9
-      CPASSERT(IS_CONTIGUOUS(msg_scatter))
+      CPASSERT(IS_CONTIGUOUS(msg_scatter) .OR. SIZE(msg_scatter) == 0)
 #endif
       msglen = 1
       CALL mpi_iscatter(msg_scatter, msglen, ${mpi_type1}$, msg, &
@@ -1954,7 +2088,7 @@
 
 #if defined(__parallel)
 #if !defined(__GNUC__) || __GNUC__ >= 9
-      CPASSERT(IS_CONTIGUOUS(msg_scatter))
+      CPASSERT(IS_CONTIGUOUS(msg_scatter) .OR. SIZE(msg_scatter) == 0)
 #endif
       msglen = SIZE(msg)
       CALL mpi_iscatter(msg_scatter, msglen, ${mpi_type1}$, msg, &
@@ -1997,10 +2131,10 @@
 
 #if defined(__parallel)
 #if !defined(__GNUC__) || __GNUC__ >= 9
-      CPASSERT(IS_CONTIGUOUS(msg_scatter))
-      CPASSERT(IS_CONTIGUOUS(msg))
-      CPASSERT(IS_CONTIGUOUS(sendcounts))
-      CPASSERT(IS_CONTIGUOUS(displs))
+      CPASSERT(IS_CONTIGUOUS(msg_scatter) .OR. SIZE(msg_scatter) == 0)
+      CPASSERT(IS_CONTIGUOUS(msg) .OR. SIZE(msg) == 0)
+      CPASSERT(IS_CONTIGUOUS(sendcounts) .OR. SIZE(sendcounts) == 0)
+      CPASSERT(IS_CONTIGUOUS(displs) .OR. SIZE(displs) == 0)
 #endif
       CALL mpi_iscatterv(msg_scatter, sendcounts, displs, ${mpi_type1}$, msg, &
                          recvcount, ${mpi_type1}$, root, comm%handle, request%handle, ierr)
@@ -2477,10 +2611,10 @@
 
 #if defined(__parallel)
 #if !defined(__GNUC__) || __GNUC__ >= 9
-      CPASSERT(IS_CONTIGUOUS(sendbuf))
-      CPASSERT(IS_CONTIGUOUS(recvbuf))
-      CPASSERT(IS_CONTIGUOUS(recvcounts))
-      CPASSERT(IS_CONTIGUOUS(displs))
+      CPASSERT(IS_CONTIGUOUS(sendbuf) .OR. SIZE(sendbuf) == 0)
+      CPASSERT(IS_CONTIGUOUS(recvbuf) .OR. SIZE(recvbuf) == 0)
+      CPASSERT(IS_CONTIGUOUS(recvcounts) .OR. SIZE(recvcounts) == 0)
+      CPASSERT(IS_CONTIGUOUS(displs) .OR. SIZE(displs) == 0)
 #endif
       CALL mpi_igatherv(sendbuf, sendcount, ${mpi_type1}$, &
                         recvbuf, recvcounts, displs, ${mpi_type1}$, &
@@ -2606,7 +2740,7 @@
 
 #if defined(__parallel)
 #if !defined(__GNUC__) || __GNUC__ >= 9
-      CPASSERT(IS_CONTIGUOUS(msgin))
+      CPASSERT(IS_CONTIGUOUS(msgin) .OR. SIZE(msgin) == 0)
 #endif
       scount = 1
       rcount = 1
@@ -2797,8 +2931,8 @@
 
 #if defined(__parallel)
 #if !defined(__GNUC__) || __GNUC__ >= 9
-      CPASSERT(IS_CONTIGUOUS(msgout))
-      CPASSERT(IS_CONTIGUOUS(msgin))
+      CPASSERT(IS_CONTIGUOUS(msgout) .OR. SIZE(msgout) == 0)
+      CPASSERT(IS_CONTIGUOUS(msgin) .OR. SIZE(msgin) == 0)
 #endif
       scount = SIZE(msgout(:))
       rcount = scount
@@ -2840,8 +2974,8 @@
 
 #if defined(__parallel)
 #if !defined(__GNUC__) || __GNUC__ >= 9
-      CPASSERT(IS_CONTIGUOUS(msgout))
-      CPASSERT(IS_CONTIGUOUS(msgin))
+      CPASSERT(IS_CONTIGUOUS(msgout) .OR. SIZE(msgout) == 0)
+      CPASSERT(IS_CONTIGUOUS(msgin) .OR. SIZE(msgin) == 0)
 #endif
 
       scount = SIZE(msgout(:))
@@ -2884,8 +3018,8 @@
 
 #if defined(__parallel)
 #if !defined(__GNUC__) || __GNUC__ >= 9
-      CPASSERT(IS_CONTIGUOUS(msgout))
-      CPASSERT(IS_CONTIGUOUS(msgin))
+      CPASSERT(IS_CONTIGUOUS(msgout) .OR. SIZE(msgout) == 0)
+      CPASSERT(IS_CONTIGUOUS(msgin) .OR. SIZE(msgin) == 0)
 #endif
 
       scount = SIZE(msgout(:, :))
@@ -2928,8 +3062,8 @@
 
 #if defined(__parallel)
 #if !defined(__GNUC__) || __GNUC__ >= 9
-      CPASSERT(IS_CONTIGUOUS(msgout))
-      CPASSERT(IS_CONTIGUOUS(msgin))
+      CPASSERT(IS_CONTIGUOUS(msgout) .OR. SIZE(msgout) == 0)
+      CPASSERT(IS_CONTIGUOUS(msgin) .OR. SIZE(msgin) == 0)
 #endif
 
       scount = SIZE(msgout(:, :))
@@ -2972,8 +3106,8 @@
 
 #if defined(__parallel)
 #if !defined(__GNUC__) || __GNUC__ >= 9
-      CPASSERT(IS_CONTIGUOUS(msgout))
-      CPASSERT(IS_CONTIGUOUS(msgin))
+      CPASSERT(IS_CONTIGUOUS(msgout) .OR. SIZE(msgout) == 0)
+      CPASSERT(IS_CONTIGUOUS(msgin) .OR. SIZE(msgin) == 0)
 #endif
 
       scount = SIZE(msgout(:, :, :))
@@ -3117,10 +3251,10 @@
 
 #if defined(__parallel)
 #if !defined(__GNUC__) || __GNUC__ >= 9
-      CPASSERT(IS_CONTIGUOUS(msgout))
-      CPASSERT(IS_CONTIGUOUS(msgin))
-      CPASSERT(IS_CONTIGUOUS(rcount))
-      CPASSERT(IS_CONTIGUOUS(rdispl))
+      CPASSERT(IS_CONTIGUOUS(msgout) .OR. SIZE(msgout) == 0)
+      CPASSERT(IS_CONTIGUOUS(msgin) .OR. SIZE(msgin) == 0)
+      CPASSERT(IS_CONTIGUOUS(rcount) .OR. SIZE(rcount) == 0)
+      CPASSERT(IS_CONTIGUOUS(rdispl) .OR. SIZE(rdispl) == 0)
 #endif
 
       scount = SIZE(msgout)
@@ -3173,10 +3307,10 @@
 
 #if defined(__parallel)
 #if !defined(__GNUC__) || __GNUC__ >= 9
-      CPASSERT(IS_CONTIGUOUS(msgout))
-      CPASSERT(IS_CONTIGUOUS(msgin))
-      CPASSERT(IS_CONTIGUOUS(rcount))
-      CPASSERT(IS_CONTIGUOUS(rdispl))
+      CPASSERT(IS_CONTIGUOUS(msgout) .OR. SIZE(msgout) == 0)
+      CPASSERT(IS_CONTIGUOUS(msgin) .OR. SIZE(msgin) == 0)
+      CPASSERT(IS_CONTIGUOUS(rcount) .OR. SIZE(rcount) == 0)
+      CPASSERT(IS_CONTIGUOUS(rdispl) .OR. SIZE(rdispl) == 0)
 #endif
 
       scount = SIZE(msgout)
@@ -3611,8 +3745,8 @@
 
 #if defined(__parallel)
 #if !defined(__GNUC__) || __GNUC__ >= 9
-      CPASSERT(IS_CONTIGUOUS(msgout))
-      CPASSERT(IS_CONTIGUOUS(msgin))
+      CPASSERT(IS_CONTIGUOUS(msgout) .OR. SIZE(msgout) == 0)
+      CPASSERT(IS_CONTIGUOUS(msgin) .OR. SIZE(msgin) == 0)
 #endif
 
       my_tag = 0
@@ -3684,7 +3818,7 @@
 
 #if defined(__parallel)
 #if !defined(__GNUC__) || __GNUC__ >= 9
-      CPASSERT(IS_CONTIGUOUS(msgin))
+      CPASSERT(IS_CONTIGUOUS(msgin) .OR. SIZE(msgin) == 0)
 #endif
       my_tag = 0
       IF (PRESENT(tag)) my_tag = tag
@@ -3747,7 +3881,7 @@
 
 #if defined(__parallel)
 #if !defined(__GNUC__) || __GNUC__ >= 9
-      CPASSERT(IS_CONTIGUOUS(msgin))
+      CPASSERT(IS_CONTIGUOUS(msgin) .OR. SIZE(msgin) == 0)
 #endif
 
       my_tag = 0
@@ -3813,7 +3947,7 @@
 
 #if defined(__parallel)
 #if !defined(__GNUC__) || __GNUC__ >= 9
-      CPASSERT(IS_CONTIGUOUS(msgin))
+      CPASSERT(IS_CONTIGUOUS(msgin) .OR. SIZE(msgin) == 0)
 #endif
 
       my_tag = 0
@@ -3876,7 +4010,7 @@
 
 #if defined(__parallel)
 #if !defined(__GNUC__) || __GNUC__ >= 9
-      CPASSERT(IS_CONTIGUOUS(msgin))
+      CPASSERT(IS_CONTIGUOUS(msgin) .OR. SIZE(msgin) == 0)
 #endif
 
       my_tag = 0
@@ -3939,7 +4073,7 @@
 
 #if defined(__parallel)
 #if !defined(__GNUC__) || __GNUC__ >= 9
-      CPASSERT(IS_CONTIGUOUS(msgout))
+      CPASSERT(IS_CONTIGUOUS(msgout) .OR. SIZE(msgout) == 0)
 #endif
 
       my_tag = 0
@@ -4001,7 +4135,7 @@
 
 #if defined(__parallel)
 #if !defined(__GNUC__) || __GNUC__ >= 9
-      CPASSERT(IS_CONTIGUOUS(msgout))
+      CPASSERT(IS_CONTIGUOUS(msgout) .OR. SIZE(msgout) == 0)
 #endif
 
       my_tag = 0
@@ -4064,7 +4198,7 @@
 
 #if defined(__parallel)
 #if !defined(__GNUC__) || __GNUC__ >= 9
-      CPASSERT(IS_CONTIGUOUS(msgout))
+      CPASSERT(IS_CONTIGUOUS(msgout) .OR. SIZE(msgout) == 0)
 #endif
 
       my_tag = 0
@@ -4125,7 +4259,7 @@
 
 #if defined(__parallel)
 #if !defined(__GNUC__) || __GNUC__ >= 9
-      CPASSERT(IS_CONTIGUOUS(msgout))
+      CPASSERT(IS_CONTIGUOUS(msgout) .OR. SIZE(msgout) == 0)
 #endif
 
       my_tag = 0
@@ -4643,6 +4777,10 @@
 
 #if defined(__parallel)
       INTEGER :: ierr
+#if defined(__MPI_F08)
+      ! Even OpenMPI 5.x misses mpi_get_address in the F08 interface
+      EXTERNAL                                          :: mpi_get_address
+#endif
 #endif
 
       NULLIFY (type_descriptor%subtype)

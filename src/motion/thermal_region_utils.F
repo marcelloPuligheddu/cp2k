@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2025 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2026 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -20,6 +20,7 @@ MODULE thermal_region_utils
                                               Kantorovich2008a,&
                                               cite_reference
    USE cp_log_handling,                 ONLY: cp_get_default_logger,&
+                                              cp_logger_get_default_io_unit,&
                                               cp_logger_type,&
                                               cp_to_string
    USE cp_output_handling,              ONLY: cp_p_file,&
@@ -28,9 +29,18 @@ MODULE thermal_region_utils
                                               cp_print_key_unit_nr
    USE cp_subsys_types,                 ONLY: cp_subsys_get,&
                                               cp_subsys_type
+   USE cp_units,                        ONLY: cp_unit_from_cp2k,&
+                                              cp_unit_to_cp2k
    USE force_env_types,                 ONLY: force_env_get,&
                                               force_env_type
-   USE input_constants,                 ONLY: langevin_ensemble,&
+   USE force_fields_util,               ONLY: get_generic_info
+   USE fparser,                         ONLY: EvalErrType,&
+                                              evalf,&
+                                              finalizef,&
+                                              initf,&
+                                              parsef
+   USE input_constants,                 ONLY: do_region_thermal,&
+                                              langevin_ensemble,&
                                               npt_f_ensemble,&
                                               npt_i_ensemble,&
                                               npt_ia_ensemble,&
@@ -41,7 +51,11 @@ MODULE thermal_region_utils
                                               section_vals_val_get
    USE kinds,                           ONLY: default_string_length,&
                                               dp
-   USE memory_utilities,                ONLY: reallocate
+   USE molecule_kind_list_types,        ONLY: molecule_kind_list_type
+   USE molecule_kind_types,             ONLY: molecule_kind_type
+   USE molecule_list_types,             ONLY: molecule_list_type
+   USE molecule_types,                  ONLY: get_molecule,&
+                                              molecule_type
    USE particle_list_types,             ONLY: particle_list_type
    USE physcon,                         ONLY: femtoseconds,&
                                               kelvin
@@ -58,7 +72,8 @@ MODULE thermal_region_utils
    PRIVATE
    PUBLIC :: create_thermal_regions, &
              print_thermal_regions_temperature, &
-             print_thermal_regions_langevin
+             print_thermal_regions_langevin, &
+             set_t_region_index
 
    CHARACTER(len=*), PARAMETER, PRIVATE :: moduleN = 'thermal_region_utils'
 
@@ -81,18 +96,34 @@ CONTAINS
       TYPE(force_env_type), POINTER                      :: force_env
 
       CHARACTER(LEN=default_string_length)               :: my_region
-      INTEGER                                            :: i, il, ipart, ireg, nlist, nregions
+      CHARACTER(LEN=default_string_length), &
+         DIMENSION(:), POINTER                           :: tmpstringlist
+      INTEGER                                            :: first_atom, flen, i, ikind, il, imol, &
+                                                            ipart, ireg, itimes, last_atom, nlist, &
+                                                            nnpart, nregions, output_unit, region
       INTEGER, DIMENSION(:), POINTER                     :: tmplist
       LOGICAL                                            :: apply_thermostat, do_langevin, &
                                                             do_langevin_default, do_read_ngr, &
-                                                            explicit
+                                                            explicit, use_t, use_temp_tol, &
+                                                            use_tfunc
       REAL(KIND=dp)                                      :: temp, temp_tol
+      TYPE(cp_logger_type), POINTER                      :: logger
       TYPE(cp_subsys_type), POINTER                      :: subsys
+      TYPE(molecule_kind_list_type), POINTER             :: molecule_kinds
+      TYPE(molecule_kind_type), POINTER                  :: molecule_kind, molecule_kind_set(:)
+      TYPE(molecule_list_type), POINTER                  :: molecules
+      TYPE(molecule_type), DIMENSION(:), POINTER         :: molecule_set
+      TYPE(molecule_type), POINTER                       :: molecule
       TYPE(particle_list_type), POINTER                  :: particles
-      TYPE(section_vals_type), POINTER                   :: region_sections, thermal_region_section
+      TYPE(section_vals_type), POINTER                   :: region_sections, tfunc_section, &
+                                                            thermal_region_section
       TYPE(thermal_region_type), POINTER                 :: t_region
 
-      NULLIFY (region_sections, t_region, thermal_region_section, particles, subsys, tmplist)
+      NULLIFY (logger, molecule, molecule_kind, molecule_kind_set, molecule_kinds, &
+               region_sections, t_region, tfunc_section, &
+               thermal_region_section, particles, subsys, tmplist)
+      logger => cp_get_default_logger()
+      output_unit = cp_logger_get_default_io_unit(logger)
       ALLOCATE (thermal_regions)
       CALL allocate_thermal_regions(thermal_regions)
       thermal_region_section => section_vals_get_subs_vals(md_section, "THERMAL_REGION")
@@ -103,16 +134,14 @@ CONTAINS
                             (simpar%ensemble == npt_ia_ensemble) .OR. &
                             (simpar%ensemble == npt_i_ensemble)
          IF (apply_thermostat) THEN
-            CALL cp_warn(__LOCATION__, &
-                         "With the chosen ensemble the temperature is "// &
-                         "controlled by thermostats. The definition of different thermal "// &
-                         "regions might result inconsistent with the presence of thermostats.")
-         END IF
-         IF (simpar%temp_tol > 0.0_dp) THEN
-            CALL cp_warn(__LOCATION__, &
-                         "Control of the global temperature by rescaling of the velocity "// &
-                         "is not consistent with the presence of different thermal regions. "// &
-                         "The temperature of different regions is rescaled separatedly.")
+            CALL section_vals_val_get(md_section, "THERMOSTAT%REGION", i_val=region)
+            IF (region /= do_region_thermal) THEN
+               CALL cp_warn(__LOCATION__, &
+                            "An ensemble has been chosen where one or more thermostats are "// &
+                            "used to control temperature, and one or more thermal regions "// &
+                            "are also defined. To ensure consistency between thermostat "// &
+                            "regions and thermal regions, set THERMOSTAT/REGION to THERMAL.")
+            END IF
          END IF
          CALL section_vals_val_get(thermal_region_section, "FORCE_RESCALING", &
                                    l_val=thermal_regions%force_rescaling)
@@ -123,8 +152,167 @@ CONTAINS
             thermal_regions%nregions = nregions
             thermal_regions%section => thermal_region_section
             ALLOCATE (thermal_regions%thermal_region(nregions))
+            simpar%do_thermal_region = .TRUE.
             CALL force_env_get(force_env, subsys=subsys)
-            CALL cp_subsys_get(subsys, particles=particles)
+            CALL cp_subsys_get(subsys, molecules=molecules, &
+                               molecule_kinds=molecule_kinds, &
+                               particles=particles)
+            molecule_kind_set => molecule_kinds%els
+            molecule_set => molecules%els
+
+            DO ireg = 1, nregions
+               NULLIFY (t_region)
+               CALL integer_to_string(ireg, my_region)
+               t_region => thermal_regions%thermal_region(ireg)
+               t_region%region_index = ireg
+               NULLIFY (t_region%part_index)
+
+               ! Set up thermal region mapping to particles
+               CALL section_vals_val_get(region_sections, "LIST", &
+                                         i_rep_section=ireg, n_rep_val=nlist)
+               IF (nlist > 0) THEN
+                  DO il = 1, nlist
+                     CALL section_vals_val_get(region_sections, "LIST", i_rep_section=ireg, &
+                                               i_rep_val=il, i_vals=tmplist)
+                     DO i = 1, SIZE(tmplist)
+                        ipart = tmplist(i)
+                        CALL set_t_region_index(particles, ipart, ireg)
+                     END DO
+                  END DO
+               END IF
+               CALL section_vals_val_get(region_sections, "MOLNAME", &
+                                         i_rep_section=ireg, n_rep_val=nlist)
+               IF (nlist > 0) THEN
+                  DO il = 1, nlist
+                     CALL section_vals_val_get(region_sections, "MOLNAME", i_rep_section=ireg, &
+                                               i_rep_val=il, c_vals=tmpstringlist)
+                     DO i = 1, SIZE(tmpstringlist)
+                        DO ikind = 1, SIZE(molecule_kind_set)
+                           molecule_kind => molecule_kind_set(ikind)
+                           IF (molecule_kind%name == tmpstringlist(i)) THEN
+                              DO imol = 1, SIZE(molecule_kind%molecule_list)
+                                 molecule => molecule_set(molecule_kind%molecule_list(imol))
+                                 CALL get_molecule(molecule, first_atom=first_atom, last_atom=last_atom)
+                                 DO ipart = first_atom, last_atom
+                                    CALL set_t_region_index(particles, ipart, ireg)
+                                 END DO
+                              END DO
+                           END IF
+                        END DO
+                     END DO
+                  END DO
+               END IF
+               ! TODO: parsing logic of thermal region should be aligned
+               ! with thermostat region as in SUBROUTINE get_defined_region_info,
+               ! src/motion/thermostat/thermostat_utils.F, so that
+               ! MM_SUBSYS and QM_SUBSYS keywords work for thermal regions
+               CALL section_vals_val_get(region_sections, "QM_SUBSYS", &
+                                         i_rep_section=ireg, n_rep_val=nlist, explicit=explicit)
+               IF (explicit) THEN
+                  CPABORT("QM_SUBSYS not yet implemented for thermal regions")
+               END IF
+               CALL section_vals_val_get(region_sections, "MM_SUBSYS", &
+                                         i_rep_section=ireg, n_rep_val=nlist, explicit=explicit)
+               IF (explicit) THEN
+                  CPABORT("MM_SUBSYS not yet implemented for thermal regions")
+               END IF
+
+               ! Set up t_region%part_index after parsing input
+               nnpart = 0
+               t_region%npart = 0
+               DO ipart = 1, particles%n_els
+                  IF (particles%els(ipart)%t_region_index == ireg) nnpart = nnpart + 1
+               END DO
+               ALLOCATE (t_region%part_index(nnpart))
+               DO ipart = 1, particles%n_els
+                  IF (particles%els(ipart)%t_region_index == ireg) THEN
+                     t_region%npart = t_region%npart + 1
+                     t_region%part_index(t_region%npart) = ipart
+                  END IF
+               END DO
+
+               ! Set up temperature function, if any
+               tfunc_section => section_vals_get_subs_vals(region_sections, "TFUNC", i_rep_section=ireg)
+               CALL section_vals_get(tfunc_section, explicit=use_tfunc)
+               IF (use_tfunc) THEN
+                  CALL get_generic_info(tfunc_section, "FUNCTION", &
+                                        t_region%temperature_function, &
+                                        t_region%temperature_function_parameters, &
+                                        t_region%temperature_function_values, &
+                                        input_variables=["S", "T"], i_rep_sec=1)
+               END IF
+
+               ! Set up t_region%temp_expected
+               ! Precedence of temperature setting: the first positive value in
+               ! 1. MD/THERMAL_REGION/DEFINE_REGION/TEMPERATURE
+               ! 2. The temperature function evaluated at S = STEP_START_VAL and T = 0
+               ! 3. MD/TEMPERATURE
+               ! Otherwise it will be set to 0
+               temp = 0.0_dp
+               CALL section_vals_val_get(region_sections, "TEMPERATURE", &
+                                         i_rep_section=ireg, explicit=use_t)
+               IF (use_t) THEN
+                  CALL section_vals_val_get(region_sections, "TEMPERATURE", &
+                                            i_rep_section=ireg, r_val=temp)
+               END IF
+               IF (temp > 0.0_dp) THEN
+                  t_region%temp_expected = temp
+               ELSE
+                  IF (use_tfunc) THEN
+                     CALL initf(1)
+                     CALL parsef(1, TRIM(t_region%temperature_function), &
+                                 t_region%temperature_function_parameters)
+                     CALL section_vals_val_get(md_section, "STEP_START_VAL", i_val=itimes)
+                     t_region%temperature_function_values(1) = itimes*1.0_dp
+                     t_region%temperature_function_values(2) = 0.0_dp
+                     temp = cp_unit_to_cp2k(evalf(1, t_region%temperature_function_values), "K")
+                     CPASSERT(EvalErrType <= 0)
+                     CALL finalizef()
+                  END IF
+                  IF (temp > 0.0_dp) THEN
+                     t_region%temp_expected = temp
+                  ELSE
+                     temp = simpar%temp_ext
+                     IF (temp > 0.0_dp) THEN
+                        t_region%temp_expected = temp
+                     ELSE
+                        CALL cp_warn(__LOCATION__, &
+                                     "For thermal region "//TRIM(my_region)//" , none of the "// &
+                                     "input values for the initial temperature, nor the result "// &
+                                     "of evaluating temperature function at STEP_START_VAL, is "// &
+                                     "positive in Kelvin. A value of zero will be used instead.")
+                        t_region%temp_expected = 0.0_dp
+                     END IF
+                  END IF
+               END IF
+
+               ! Set up t_region%temp_tol
+               ! Precedence of tolerance setting: the first positive value in
+               ! 1. MD/THERMAL_REGION/DEFINE_REGION/TEMP_TOL
+               ! 2. MD/TEMP_TOL
+               ! Otherwise it will be set to 0 (i.e. not used)
+               temp_tol = 0.0_dp
+               CALL section_vals_val_get(region_sections, "TEMP_TOL", &
+                                         i_rep_section=ireg, explicit=use_temp_tol)
+               IF (use_temp_tol) THEN
+                  CALL section_vals_val_get(region_sections, "TEMP_TOL", &
+                                            i_rep_section=ireg, r_val=temp_tol)
+               END IF
+               IF (temp_tol > 0.0_dp) THEN
+                  t_region%temp_tol = temp_tol
+               ELSE
+                  temp_tol = simpar%temp_tol
+                  IF (temp_tol > 0.0_dp) THEN
+                     t_region%temp_tol = temp_tol
+                  ELSE
+                     t_region%temp_tol = 0.0_dp
+                  END IF
+               END IF
+               ! End of one thermal region in the loop
+            END DO
+
+            ! For Langevin ensemble, determine thermal_regions%do_langevin
+            ! and t_region%noisy_gamma_region
             IF (simpar%ensemble == langevin_ensemble) THEN
                CALL cite_reference(Kantorovich2008)
                CALL cite_reference(Kantorovich2008a)
@@ -132,62 +320,65 @@ CONTAINS
                                          l_val=do_langevin_default)
                ALLOCATE (thermal_regions%do_langevin(particles%n_els))
                thermal_regions%do_langevin = do_langevin_default
-            END IF
-            DO ireg = 1, nregions
-               NULLIFY (t_region)
-               t_region => thermal_regions%thermal_region(ireg)
-               t_region%region_index = ireg
-               CALL section_vals_val_get(region_sections, "LIST", &
-                                         i_rep_section=ireg, n_rep_val=nlist)
-               NULLIFY (t_region%part_index)
-               t_region%npart = 0
-               IF (simpar%ensemble == langevin_ensemble) THEN
+               DO ireg = 1, nregions
+                  NULLIFY (t_region)
+                  t_region => thermal_regions%thermal_region(ireg)
+                  CALL integer_to_string(ireg, my_region)
                   CALL section_vals_val_get(region_sections, "DO_LANGEVIN", &
                                             i_rep_section=ireg, l_val=do_langevin)
-               END IF
-               DO il = 1, nlist
-                  CALL section_vals_val_get(region_sections, "LIST", i_rep_section=ireg, &
-                                            i_rep_val=il, i_vals=tmplist)
-                  CALL reallocate(t_region%part_index, 1, t_region%npart + SIZE(tmplist))
-                  DO i = 1, SIZE(tmplist)
-                     ipart = tmplist(i)
-                     CPASSERT(((ipart > 0) .AND. (ipart <= particles%n_els)))
-                     t_region%npart = t_region%npart + 1
-                     t_region%part_index(t_region%npart) = ipart
-                     particles%els(ipart)%t_region_index = ireg
-                     IF (simpar%ensemble == langevin_ensemble) THEN
+                  DO ipart = 1, particles%n_els
+                     IF (particles%els(ipart)%t_region_index == ireg) THEN
                         thermal_regions%do_langevin(ipart) = do_langevin
                      END IF
                   END DO
-               END DO
-               CALL section_vals_val_get(region_sections, "TEMPERATURE", i_rep_section=ireg, &
-                                         r_val=temp)
-               t_region%temp_expected = temp
-               CALL section_vals_val_get(region_sections, "TEMP_TOL", i_rep_section=ireg, &
-                                         r_val=temp_tol)
-               t_region%temp_tol = temp_tol
-               CALL section_vals_val_get(region_sections, "NOISY_GAMMA_REGION", i_rep_section=ireg, explicit=do_read_ngr)
-               IF (do_read_ngr) THEN
-                  CALL section_vals_val_get(region_sections, "NOISY_GAMMA_REGION", i_rep_section=ireg, &
-                                            r_val=t_region%noisy_gamma_region)
-                  IF (simpar%ensemble == langevin_ensemble) THEN
+                  CALL section_vals_val_get(region_sections, "NOISY_GAMMA_REGION", i_rep_section=ireg, explicit=do_read_ngr)
+                  IF (do_read_ngr) THEN
+                     CALL section_vals_val_get(region_sections, "NOISY_GAMMA_REGION", i_rep_section=ireg, &
+                                               r_val=t_region%noisy_gamma_region)
                      IF (.NOT. do_langevin) THEN
-                        CALL integer_to_string(ireg, my_region)
                         CALL cp_warn(__LOCATION__, &
                                      "You provided NOISY_GAMMA_REGION but atoms in thermal region "//TRIM(my_region)// &
                                      " will not undergo Langevin MD. "// &
                                      "NOISY_GAMMA_REGION will be ignored and its value discarded!")
                      END IF
                   ELSE
-                     CALL cp_warn(__LOCATION__, &
-                                  "You provided NOISY_GAMMA_REGION but the Langevin Ensamble is not selected "// &
-                                  "NOISY_GAMMA_REGION will be ignored and its value discarded!")
+                     t_region%noisy_gamma_region = simpar%noisy_gamma
                   END IF
-               ELSE
-                  t_region%noisy_gamma_region = simpar%noisy_gamma
-               END IF
-            END DO
-            simpar%do_thermal_region = .TRUE.
+               END DO
+            END IF
+            ! End of Langevin treatment
+
+            ! Output thermal region temperature and mapping to particles
+            ! The region indices are assumed to be 0-999
+            IF (output_unit > 0) THEN
+               WRITE (output_unit, '(/,T2,A)') &
+                  "THERMAL_REGION| Temperature value and function for each region [K]"
+               DO ireg = 1, nregions
+                  NULLIFY (t_region)
+                  t_region => thermal_regions%thermal_region(ireg)
+                  WRITE (output_unit, '(T2,A,T25,I3,T29,A,T34,I6,T41,A,T66,F15.6)') &
+                     "THERMAL_REGION| Region", t_region%region_index, &
+                     "with", t_region%npart, &
+                     "particles initialized at", &
+                     cp_unit_from_cp2k(t_region%temp_expected, "K")
+                  flen = LEN(TRIM(t_region%temperature_function))
+                  IF (flen > 0) THEN
+                     DO i = 1, flen, 64
+                        WRITE (output_unit, '(T2,A,T17,A64)') &
+                           "THERMAL_REGION|", t_region%temperature_function(i:MIN(i + 64, flen))
+                     END DO
+                  ELSE
+                     WRITE (output_unit, '(T2,A,T66,F15.6)') &
+                        "THERMAL_REGION|", cp_unit_from_cp2k(t_region%temp_expected, "K")
+                  END IF
+               END DO
+               WRITE (output_unit, '(/,T2,A)') &
+                  "THERMAL_REGION| Mapping of thermal region indices to particles"
+               DO ipart = 1, particles%n_els, 16
+                  WRITE (output_unit, '(T2,A,T17,16(" ",I3))') &
+                     "THERMAL_REGION|", particles%els(ipart:MIN(ipart + 15, particles%n_els))%t_region_index
+               END DO
+            END IF
          ELSE
             CALL release_thermal_regions(thermal_regions)
             DEALLOCATE (thermal_regions)
@@ -200,6 +391,49 @@ CONTAINS
       END IF
 
    END SUBROUTINE create_thermal_regions
+
+! **************************************************************************************************
+!> \brief set particles%els(ipart)%t_region_index to ireg
+!> \param particles ...
+!> \param ipart ...
+!> \param ireg ...
+!> \par History
+!>   - Created (04/2026)
+!> \author
+! **************************************************************************************************
+   SUBROUTINE set_t_region_index(particles, ipart, ireg)
+      TYPE(particle_list_type), POINTER                  :: particles
+      INTEGER, INTENT(IN)                                :: ipart, ireg
+
+      CHARACTER(LEN=default_string_length)               :: my_part, my_reg, my_region
+      INTEGER                                            :: iregion
+
+      CALL integer_to_string(ipart, my_part)
+      IF ((ipart > 0) .AND. (ipart <= particles%n_els)) THEN
+         CALL integer_to_string(ireg, my_reg)
+         iregion = particles%els(ipart)%t_region_index
+         IF ((iregion == 0) .OR. (iregion == ireg)) THEN
+            ! No thermal region has been assigned, or
+            ! the same one has already been assigned
+            particles%els(ipart)%t_region_index = ireg
+         ELSE
+            CALL integer_to_string(iregion, my_region)
+            CALL cp_abort(__LOCATION__, &
+                          "Atom "//TRIM(my_part)//" has been "// &
+                          "assigned to two different thermal "// &
+                          "regions "//TRIM(my_region)//" and "// &
+                          TRIM(my_reg)//" which is not allowed!")
+         END IF
+      ELSE
+         IF (.NOT. ipart > 0) &
+            CALL cp_abort(__LOCATION__, &
+                          "Input atom index "//TRIM(my_part)//" is non-positive!")
+         IF (.NOT. ipart <= particles%n_els) &
+            CALL cp_abort(__LOCATION__, &
+                          "Input atom index "//TRIM(my_part)//" is out of bounds!")
+      END IF
+
+   END SUBROUTINE set_t_region_index
 
 ! **************************************************************************************************
 !> \brief print_thermal_regions_temperature
@@ -224,7 +458,7 @@ CONTAINS
       CHARACTER(LEN=default_string_length)               :: fmd
       INTEGER                                            :: ireg, nregions, unit
       LOGICAL                                            :: new_file
-      REAL(KIND=dp), ALLOCATABLE, DIMENSION(:)           :: temp
+      REAL(KIND=dp), ALLOCATABLE, DIMENSION(:)           :: temp, temp_tfunc
       TYPE(cp_logger_type), POINTER                      :: logger
       TYPE(section_vals_type), POINTER                   :: print_key
 
@@ -244,15 +478,19 @@ CONTAINS
                END IF
                nregions = thermal_regions%nregions
                ALLOCATE (temp(0:nregions))
+               ALLOCATE (temp_tfunc(1:nregions))
                temp = 0.0_dp
                temp(0) = thermal_regions%temp_reg0
                DO ireg = 1, nregions
+                  ! Note the unit conversion here
                   temp(ireg) = thermal_regions%thermal_region(ireg)%temperature
+                  temp_tfunc(ireg) = cp_unit_from_cp2k(thermal_regions%thermal_region(ireg)%temp_expected, "K")
                END DO
-               fmd = "(I10,F20.3,"//TRIM(ADJUSTL(cp_to_string(nregions + 1)))//"F20.6)"
+               fmd = "(I10,F20.3,"//TRIM(ADJUSTL(cp_to_string(2*nregions + 1)))//"F20.10)"
                fmd = TRIM(fmd)
-               WRITE (UNIT=unit, FMT=fmd) itimes, time, temp(0:nregions)
+               WRITE (UNIT=unit, FMT=fmd) itimes, time, temp(0), (temp_tfunc(ireg), temp(ireg), ireg=1, nregions)
                DEALLOCATE (temp)
+               DEALLOCATE (temp_tfunc)
             END IF
             CALL cp_print_key_finished_output(unit, logger, thermal_regions%section, "PRINT%TEMPERATURE")
          END IF

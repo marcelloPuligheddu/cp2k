@@ -6,8 +6,8 @@
 [ "${BASH_SOURCE[0]}" ] && SCRIPT_NAME="${BASH_SOURCE[0]}" || SCRIPT_NAME=$0
 SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_NAME")/.." && pwd -P)"
 
-trexio_ver="2.5.0"
-trexio_sha256="7bf7e0021467530b4946fb3f6ee39f393e2f4bd65a6f4debaec774120c29e4ee"
+trexio_ver="2.6.1"
+trexio_sha256="c3694ec1528632a386a2af89199c75d70ecd45bfcc2ca1d4ccccbfa1308ad5fa"
 
 source "${SCRIPT_DIR}"/common_vars.sh
 source "${SCRIPT_DIR}"/tool_kit.sh
@@ -34,22 +34,25 @@ case "$with_trexio" in
     if verify_checksums "${install_lock_file}"; then
       echo "trexio-${trexio_ver} is already installed, skipping it."
     else
+      retrieve_package "${trexio_sha256}" "trexio-${trexio_ver}.tar.gz"
       echo "Installing from scratch into ${pkg_install_dir}"
       [ -d trexio-${trexio_ver} ] && rm -rf trexio-${trexio_ver}
-
-      if [ -f trexio-${trexio_ver}.tar.gz ]; then
-        echo "trexio_${trexio_ver}.tar.gz is found"
-      else
-        download_pkg_from_cp2k_org "${trexio_sha256}" "trexio-${trexio_ver}.tar.gz"
-      fi
-
       tar -xzf trexio-${trexio_ver}.tar.gz
       cd trexio-${trexio_ver}
 
-      ./configure --prefix="${pkg_install_dir}" --libdir="${pkg_install_dir}/lib" > configure.log 2>&1 || tail -n ${LOG_LINES} configure.log
+      CMAKE_OPTIONS="-DCMAKE_VERBOSE_MAKEFILE=ON"
+      if [ "${MPI_MODE}" != "no" ]; then
+        CMAKE_OPTIONS="-DCMAKE_C_COMPILER=${MPICC}"
+      fi
 
-      make -j $(get_nprocs) >> make.log 2>&1 || tail -n ${LOG_LINES} make.log
-      make install > install.log 2>&1 || tail -n ${LOG_LINES} install.log
+      mkdir build && cd build
+      cmake \
+        -DCMAKE_INSTALL_PREFIX="${pkg_install_dir}" \
+        -DCMAKE_INSTALL_LIBDIR="lib" \
+        ${CMAKE_OPTIONS} \
+        .. > configure.log 2>&1 || tail_excerpt configure.log
+      make -j $(get_nprocs) >> make.log 2>&1 || tail_excerpt make.log
+      make install > install.log 2>&1 || tail_excerpt install.log
       cd ..
       write_checksums "${install_lock_file}" "${SCRIPT_DIR}/stage8/$(basename ${SCRIPT_NAME})"
     fi
@@ -98,7 +101,7 @@ export CP_CFLAGS="\${CP_CFLAGS} ${TREXIO_CFLAGS}"
 export CP_LDFLAGS="\${CP_LDFLAGS} ${TREXIO_LDFLAGS}"
 export CP_LIBS="${TREXIO_LIBS} \${CP_LIBS}"
 EOF
-  cat "${BUILDDIR}/setup_trexio" >> $SETUPFILE
+  filter_setup "${BUILDDIR}/setup_trexio" "${SETUPFILE}"
 fi
 
 load "${BUILDDIR}/setup_trexio"

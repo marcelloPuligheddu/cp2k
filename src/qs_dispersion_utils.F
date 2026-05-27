@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2025 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2026 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -92,7 +92,12 @@ CONTAINS
             CALL section_vals_val_get(pp_section, "SCALING", explicit=explicit)
             IF (.NOT. explicit) THEN
                CALL section_vals_val_get(pp_section, "REFERENCE_FUNCTIONAL", explicit=exfun)
-               CPASSERT(exfun)
+               IF (.NOT. exfun) THEN
+                  CALL cp_abort(__LOCATION__, "D2 vdW REFERENCE_FUNCTIONAL expected a second parameter "// &
+                                "(example REFERENCE_FUNCTIONAL PBE). "// &
+                                "Go to https://www.chemie.uni-bonn.de/grimme/de/software/dft-d3/ "// &
+                                "for a full list of supported functionals")
+               END IF
                CALL qs_scaling_dftd2(dispersion_env%scaling, vdw_section)
             ELSE
                CALL section_vals_val_get(pp_section, "SCALING", r_val=dispersion_env%scaling)
@@ -121,7 +126,16 @@ CONTAINS
             END IF
             IF (.NOT. explicit) THEN
                CALL section_vals_val_get(pp_section, "REFERENCE_FUNCTIONAL", explicit=exfun)
-               CPASSERT(exfun)
+               IF (.NOT. exfun) THEN
+                  CALL cp_abort(__LOCATION__, "D3 vdW REFERENCE_FUNCTIONAL expected a second parameter "// &
+                                "(example REFERENCE_FUNCTIONAL PBE). "// &
+                                "Go to https://www.chemie.uni-bonn.de/grimme/de/software/dft-d3/ for a full "// &
+                                "list of supported functionals")
+               ELSE
+                  CALL section_vals_val_get(vdw_section, &
+                                            "PAIR_POTENTIAL%REFERENCE_FUNCTIONAL", &
+                                            c_val=dispersion_env%ref_functional)
+               END IF
                IF (dispersion_env%pp_type == vdw_pairpot_dftd3) THEN
                   CALL qs_scaling_dftd3(dispersion_env%s6, dispersion_env%sr6, &
                                         dispersion_env%s8, vdw_section)
@@ -152,6 +166,7 @@ CONTAINS
             dispersion_env%s6 = 0._dp
             dispersion_env%sr6 = 0._dp
             dispersion_env%s8 = 0._dp
+            dispersion_env%s9 = 0._dp
             dispersion_env%a1 = 0._dp
             dispersion_env%a2 = 0._dp
             dispersion_env%eps_cn = 0._dp
@@ -161,7 +176,7 @@ CONTAINS
             IF (.NOT. explicit) THEN
                CALL section_vals_val_get(pp_section, "REFERENCE_FUNCTIONAL", explicit=exfun)
                IF (.NOT. exfun) THEN
-                  CPABORT("D4 vdW REFERENCE_FUNCTIONAL or D4_SCALING expected")
+                  CPABORT("Missing REFERENCE_FUNCTIONAL or D4_SCALING for D4")
                ELSE
                   CALL section_vals_val_get(vdw_section, &
                                             "PAIR_POTENTIAL%REFERENCE_FUNCTIONAL", &
@@ -175,6 +190,9 @@ CONTAINS
                dispersion_env%a2 = scal(4)
                dispersion_env%sr6 = 0.0_dp
                dispersion_env%ref_functional = "none"
+            END IF
+            IF (TRIM(ADJUSTL(dispersion_env%ref_functional)) == "none") THEN
+               CPABORT("Missing REFERENCE_FUNCTIONAL or D4_SCALING for D4")
             END IF
             CALL section_vals_val_get(pp_section, "EPS_CN", r_val=dispersion_env%eps_cn)
             CALL section_vals_val_get(pp_section, "D4_REFERENCE_CODE", &
@@ -297,7 +315,11 @@ CONTAINS
                   END DO
                END IF
             ELSE IF (dispersion_env%pp_type == vdw_pairpot_dftd4) THEN
-               WRITE (output_unit, fmt="(' vdW POTENTIAL| ',T26,'DFT-D4(Version 3.6.0)')")
+#if defined(__DFTD4_V3)
+               WRITE (output_unit, fmt="(' vdW POTENTIAL| ',T26,'DFT-D4(Version 3.7)')")
+#else
+               WRITE (output_unit, fmt="(' vdW POTENTIAL| ',T26,'DFT-D4(Version 4.0)')")
+#endif
                WRITE (output_unit, fmt="(' vdW POTENTIAL| ',T26,'see https://github.com/dftd4/dftd4')")
                WRITE (output_unit, fmt="(' vdW POTENTIAL| ',T26,'E. Caldeweyher et al, PCCP 22: 8499 (2020)')")
                WRITE (output_unit, fmt="(' vdW POTENTIAL| ',T26,'E. Caldeweyher et al, JCP 150: 154122 (2019)')")
@@ -940,7 +962,7 @@ CONTAINS
          a1 = 0.4724_dp
          s8 = 3.5681_dp
          a2 = 4.9858_dp
-      CASE ("B3LYP")
+      CASE ("B3LYP", "SKALA", "SKALA-1.1", "SKALA1.1")
          s6 = 1.0000_dp
          a1 = 0.3981_dp
          s8 = 1.9889_dp
@@ -1211,4 +1233,3 @@ CONTAINS
 ! **************************************************************************************************
 
 END MODULE qs_dispersion_utils
-

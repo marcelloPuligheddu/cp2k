@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2025 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2026 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -23,6 +23,7 @@ MODULE pint_methods
    USE bibliography,                    ONLY: Brieuc2016,&
                                               Ceriotti2010,&
                                               Ceriotti2012,&
+                                              Shiga2022,&
                                               cite_reference
    USE cell_types,                      ONLY: cell_type
    USE constraint,                      ONLY: rattle_control,&
@@ -67,15 +68,16 @@ MODULE pint_methods
    USE helium_types,                    ONLY: helium_solvent_p_type
    USE input_constants,                 ONLY: integrate_exact,&
                                               integrate_numeric,&
+                                              propagator_bcmd,&
                                               propagator_cmd,&
                                               propagator_rpmd,&
                                               transformation_normal,&
                                               transformation_stage
    USE input_cp2k_restarts,             ONLY: write_restart
    USE input_section_types,             ONLY: &
-        section_type, section_vals_get, section_vals_get_subs_vals, section_vals_release, &
-        section_vals_retain, section_vals_type, section_vals_val_get, section_vals_val_set, &
-        section_vals_val_unset
+        section_type, section_vals_add_values, section_vals_get, section_vals_get_subs_vals, &
+        section_vals_release, section_vals_retain, section_vals_type, section_vals_val_get, &
+        section_vals_val_set, section_vals_val_unset
    USE kinds,                           ONLY: default_path_length,&
                                               default_string_length,&
                                               dp
@@ -225,7 +227,7 @@ CONTAINS
       CALL rep_env_create(rep_env, para_env=para_env, input=input, &
                           input_declaration=input_declaration, nrep=nrep, prep=prep, row_force=.TRUE.)
       CALL section_vals_val_set(input, "GLOBAL%PROJECT_NAME", c_val=TRIM(project_name))
-      IF (LEN_TRIM(output_file_name) .GT. 0) THEN
+      IF (LEN_TRIM(output_file_name) > 0) THEN
          CALL section_vals_val_set(input, "GLOBAL%OUTPUT_FILE_NAME", c_val=TRIM(output_file_name))
       ELSE
          CALL section_vals_val_unset(input, "GLOBAL%OUTPUT_FILE_NAME")
@@ -294,7 +296,12 @@ CONTAINS
 
       IF ((pint_env%propagator%prop_kind == propagator_cmd) .AND. &
           (pint_env%transform /= transformation_normal)) THEN
-         CPABORT("CMD Propagator without normal modes not implemented!")
+         CPABORT("CMD propagator without normal modes not implemented!")
+      END IF
+
+      IF ((pint_env%propagator%prop_kind == propagator_bcmd) .AND. &
+          (pint_env%transform /= transformation_normal)) THEN
+         CPABORT("BCMD propagator without normal modes not implemented!")
       END IF
 
       NULLIFY (pint_env%tx, pint_env%tv, pint_env%tv_t, pint_env%tv_old, pint_env%tv_new, pint_env%tf)
@@ -305,7 +312,10 @@ CONTAINS
       CALL section_vals_get(nose_section, explicit=explicit)
       IF (explicit) THEN
          IF (pint_env%propagator%prop_kind == propagator_rpmd) THEN
-            CPABORT("RPMD Propagator with Nose-thermostat not implemented!")
+            CPABORT("RPMD propagator with Nose-thermostat not implemented!")
+         END IF
+         IF (pint_env%propagator%prop_kind == propagator_bcmd) THEN
+            CPABORT("BCMD propagator with Nose-thermostat not implemented!")
          END IF
          CALL section_vals_val_get(nose_section, "nnos", i_val=pint_env%nnos)
          IF (pint_env%nnos > 0) THEN
@@ -395,6 +405,16 @@ CONTAINS
       ELSE
          transform_section => section_vals_get_subs_vals(input, &
                                                          "MOTION%PINT%NORMALMODE")
+         IF (pint_env%propagator%prop_kind == propagator_bcmd) THEN
+            CALL section_vals_val_get(transform_section, "GAMMA", explicit=explicit)
+            IF (explicit) THEN
+               CALL section_vals_val_set(transform_section, "GAMMA", &
+                                         r_val=SQRT(2.0_dp/(pint_env%p*pint_env%dt*pint_env%kT)))
+            ELSE
+               CALL section_vals_val_set(transform_section, "MODEFACTOR", &
+                                         r_val=0.5_dp*pint_env%p*pint_env%dt*pint_env%kT)
+            END IF
+         END IF
          ALLOCATE (pint_env%normalmode_env)
          CALL normalmode_env_create(pint_env%normalmode_env, &
                                     transform_section, p=pint_env%p, kT=pint_env%kT, propagator=pint_env%propagator%prop_kind)
@@ -448,7 +468,7 @@ CONTAINS
          ALLOCATE (pint_env%gle)
          CALL gle_init(pint_env%gle, dt=pint_env%dt/pint_env%nrespa, temp=pint_env%kT, &
                        section=gle_section)
-         IF (pint_env%pimd_thermostat == thermostat_none .AND. pint_env%gle%ndim .GT. 0) THEN
+         IF (pint_env%pimd_thermostat == thermostat_none .AND. pint_env%gle%ndim > 0) THEN
             pint_env%pimd_thermostat = thermostat_gle
 
             ! initialize a GLE with ALL degrees of freedom on node 0,
@@ -517,7 +537,7 @@ CONTAINS
                                   piglet_section, &
                                   dt=pint_env%dt, para_env=para_env)
          ELSE
-            CPABORT("PILE thermostat can't be used with another thermostat.")
+            CPABORT("PIGLET thermostat can't be used with another thermostat.")
          END IF
       END IF
 
@@ -539,6 +559,31 @@ CONTAINS
          ELSE
             CPABORT("QTB thermostat can't be used with another thermostat.")
          END IF
+      END IF
+
+      ! force PILE for BCMD
+      IF (pint_env%propagator%prop_kind == propagator_bcmd) THEN
+         IF (pint_env%pimd_thermostat == thermostat_none) THEN
+            !crate section
+            pile_section => section_vals_get_subs_vals(input, "MOTION%PINT%PILE")
+            CALL section_vals_get(pile_section, explicit=explicit)
+            IF (.NOT. explicit) THEN
+               CALL section_vals_add_values(pile_section)
+            END IF
+            CALL section_vals_val_get(pint_env%input, &
+                                      "MOTION%PINT%INIT%THERMOSTAT_SEED", &
+                                      i_val=pint_env%thermostat_rng_seed)
+            pint_env%pimd_thermostat = thermostat_pile
+            ALLOCATE (pint_env%pile_therm)
+            CALL pint_pile_init(pile_therm=pint_env%pile_therm, &
+                                pint_env=pint_env, &
+                                normalmode_env=pint_env%normalmode_env, &
+                                section=pile_section)
+         END IF
+         IF (pint_env%pimd_thermostat /= thermostat_pile) THEN
+            CPABORT("PILE/no thermostat currently needed for BCMD")
+         END IF
+         CALL cite_reference(Shiga2022)
       END IF
 
       !Initialize integrator scheme
@@ -575,6 +620,12 @@ CONTAINS
             CPWARN(msg)
             pint_env%harm_integrator = integrate_exact
          END IF
+         IF (pint_env%propagator%prop_kind == propagator_bcmd) THEN
+            WRITE (UNIT=msg, FMT=*) "PINT WARNING| BCMD needs the exact harmonic "// &
+               "integrator. Switching to exact harmonic integrator."
+            CPWARN(msg)
+            pint_env%harm_integrator = integrate_exact
+         END IF
       END IF
 
       IF (pint_env%harm_integrator == integrate_exact) THEN
@@ -604,7 +655,7 @@ CONTAINS
 
       CALL section_vals_val_get(pint_section, "FIX_CENTROID_POS", &
                                 l_val=ltmp)
-      IF (ltmp .AND. (pint_env%transform .EQ. transformation_normal)) THEN
+      IF (ltmp .AND. (pint_env%transform == transformation_normal)) THEN
          pint_env%first_propagated_mode = 2
       ELSE
          pint_env%first_propagated_mode = 1
@@ -1068,7 +1119,7 @@ CONTAINS
          IF (levycorr) THEN
 
             ! correlated Levy walk - the same path for all atoms
-            x0 = (/0.0_dp, 0.0_dp, 0.0_dp/)
+            x0 = [0.0_dp, 0.0_dp, 0.0_dp]
             CALL pint_levy_walk(x0, pint_env%p, 1.0_dp, bx, rng_gaussian)
             idim = 0
             DO ia = 1, pint_env%ndim/3
@@ -1691,7 +1742,7 @@ CONTAINS
       CALL pint_f2uf(pint_env)
 
       ! set the centroid forces to 0 if FIX_CENTROID_POS
-      IF (pint_env%first_propagated_mode .EQ. 2) THEN
+      IF (pint_env%first_propagated_mode == 2) THEN
          pint_env%uf(1, :) = 0.0_dp
       END IF
 
@@ -2163,7 +2214,7 @@ CONTAINS
 
                CALL pint_f2uf(pint_env)
                ! set the centroid forces to 0 if FIX_CENTROID_POS
-               IF (pint_env%first_propagated_mode .EQ. 2) THEN
+               IF (pint_env%first_propagated_mode == 2) THEN
                   pint_env%uf(1, :) = 0.0_dp
                END IF
                !Scale physical forces and integrate velocities with physical
@@ -2488,7 +2539,7 @@ CONTAINS
          END IF
          CALL pint_f2uf(pint_env)
          ! set the centroid forces to 0 if FIX_CENTROID_POS
-         IF (pint_env%first_propagated_mode .EQ. 2) THEN
+         IF (pint_env%first_propagated_mode == 2) THEN
             pint_env%uf(1, :) = 0.0_dp
          END IF
          pint_env%uv_t = pint_env%uv_t + dti2*pint_env%uf

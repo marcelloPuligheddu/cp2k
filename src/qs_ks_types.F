@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2025 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2026 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -118,6 +118,7 @@ MODULE qs_ks_types
 !> \param sab_almo: neighbor lists to create ALMO delocalization template
 !> \param sab_kp: neighbor lists to create kp image cell lists
 !> \param sab_kp_nosym: neighbor lists to create kp image cell lists, non-symmetric
+!> \param sab_cneo: neighbor lists for the calculation of the quantum nuclear core Hamiltonian matrix
 !>
 !> \param kpoints information on the kpoints used
 !> \param subsys the particles, molecules,... of this environment
@@ -139,7 +140,8 @@ MODULE qs_ks_types
                                                                rho_changed = .TRUE., &
                                                                potential_changed = .TRUE., &
                                                                forces_up_to_date = .FALSE., &
-                                                               complex_ks = .FALSE.
+                                                               complex_ks = .FALSE., &
+                                                               exc_accint = .FALSE.
       INTEGER                                               :: n_evals = 0
 
       ! hartree is supposed to contain the hartree potential (for cube output)
@@ -166,6 +168,8 @@ MODULE qs_ks_types
                                                                rho_nlcc => Null()
       TYPE(pw_c1d_gs_type), POINTER                         :: rho_nlcc_g => Null()
 
+      TYPE(pw_r3d_rs_type), POINTER                         :: xcint_weights => Null()
+
       TYPE(pw_c1d_gs_type), POINTER                         :: rho_core => NULL()
       TYPE(pw_r3d_rs_type), POINTER                         :: vee => NULL()
 
@@ -189,7 +193,8 @@ MODULE qs_ks_types
                                                                sab_lrc => Null(), &
                                                                sab_almo => Null(), &
                                                                sab_kp => Null(), &
-                                                               sab_kp_nosym => Null()
+                                                               sab_kp_nosym => Null(), &
+                                                               sab_cneo => Null()
 
       TYPE(task_list_type), POINTER                         :: task_list => Null()
       TYPE(task_list_type), POINTER                         :: task_list_soft => Null()
@@ -226,6 +231,7 @@ CONTAINS
 !> \param v_hartree_rspace ...
 !> \param s_mstruct_changed ...
 !> \param rho_changed ...
+!> \param exc_accint ...
 !> \param potential_changed ...
 !> \param forces_up_to_date ...
 !> \param complex_ks ...
@@ -252,6 +258,7 @@ CONTAINS
 !> \param rho ...
 !> \param rho_xc ...
 !> \param vppl ...
+!> \param xcint_weights ...
 !> \param rho_core ...
 !> \param rho_nlcc ...
 !> \param rho_nlcc_g ...
@@ -277,6 +284,7 @@ CONTAINS
 !> \param sab_almo ...
 !> \param sab_kp ...
 !> \param sab_kp_nosym ...
+!> \param sab_cneo ...
 !> \param task_list ...
 !> \param task_list_soft ...
 !> \param kpoints ...
@@ -310,7 +318,7 @@ CONTAINS
 !> \param nelectron_spin ...
 ! **************************************************************************************************
    SUBROUTINE get_ks_env(ks_env, v_hartree_rspace, &
-                         s_mstruct_changed, rho_changed, &
+                         s_mstruct_changed, rho_changed, exc_accint, &
                          potential_changed, forces_up_to_date, complex_ks, &
                          matrix_h, matrix_h_im, matrix_ks, matrix_ks_im, matrix_vxc, &
                          kinetic, matrix_s, &
@@ -318,11 +326,11 @@ CONTAINS
                          matrix_h_kp, matrix_h_im_kp, matrix_ks_kp, matrix_vxc_kp, kinetic_kp, matrix_s_kp, matrix_w_kp, &
                          matrix_s_RI_aux_kp, matrix_ks_im_kp, &
                          rho, rho_xc, &
-                         vppl, rho_core, rho_nlcc, rho_nlcc_g, vee, &
+                         vppl, xcint_weights, rho_core, rho_nlcc, rho_nlcc_g, vee, &
                          neighbor_list_id, &
                          sab_orb, sab_all, sac_ae, sac_ppl, sac_lri, sap_ppnl, sap_oce, sab_lrc, &
                          sab_se, sab_xtbe, sab_tbe, sab_core, sab_xb, sab_xtb_pp, sab_xtb_nonbond, &
-                         sab_vdw, sab_scp, sab_almo, sab_kp, sab_kp_nosym, &
+                         sab_vdw, sab_scp, sab_almo, sab_kp, sab_kp_nosym, sab_cneo, &
                          task_list, task_list_soft, &
                          kpoints, do_kpoints, &
                          atomic_kind_set, qs_kind_set, cell, cell_ref, use_ref_cell, &
@@ -334,8 +342,8 @@ CONTAINS
       TYPE(qs_ks_env_type), INTENT(IN)                   :: ks_env
       TYPE(pw_r3d_rs_type), OPTIONAL, POINTER            :: v_hartree_rspace
       LOGICAL, OPTIONAL                                  :: s_mstruct_changed, rho_changed, &
-                                                            potential_changed, forces_up_to_date, &
-                                                            complex_ks
+                                                            exc_accint, potential_changed, &
+                                                            forces_up_to_date, complex_ks
       TYPE(dbcsr_p_type), DIMENSION(:), OPTIONAL, POINTER :: matrix_h, matrix_h_im, matrix_ks, &
          matrix_ks_im, matrix_vxc, kinetic, matrix_s, matrix_s_RI_aux, matrix_w, matrix_p_mp2, &
          matrix_p_mp2_admm
@@ -343,7 +351,7 @@ CONTAINS
          matrix_ks_kp, matrix_vxc_kp, kinetic_kp, matrix_s_kp, matrix_w_kp, matrix_s_RI_aux_kp, &
          matrix_ks_im_kp
       TYPE(qs_rho_type), OPTIONAL, POINTER               :: rho, rho_xc
-      TYPE(pw_r3d_rs_type), OPTIONAL, POINTER            :: vppl
+      TYPE(pw_r3d_rs_type), OPTIONAL, POINTER            :: vppl, xcint_weights
       TYPE(pw_c1d_gs_type), OPTIONAL, POINTER            :: rho_core
       TYPE(pw_r3d_rs_type), OPTIONAL, POINTER            :: rho_nlcc
       TYPE(pw_c1d_gs_type), OPTIONAL, POINTER            :: rho_nlcc_g
@@ -351,7 +359,8 @@ CONTAINS
       INTEGER, OPTIONAL                                  :: neighbor_list_id
       TYPE(neighbor_list_set_p_type), DIMENSION(:), OPTIONAL, POINTER :: sab_orb, sab_all, sac_ae, &
          sac_ppl, sac_lri, sap_ppnl, sap_oce, sab_lrc, sab_se, sab_xtbe, sab_tbe, sab_core, &
-         sab_xb, sab_xtb_pp, sab_xtb_nonbond, sab_vdw, sab_scp, sab_almo, sab_kp, sab_kp_nosym
+         sab_xb, sab_xtb_pp, sab_xtb_nonbond, sab_vdw, sab_scp, sab_almo, sab_kp, sab_kp_nosym, &
+         sab_cneo
       TYPE(task_list_type), OPTIONAL, POINTER            :: task_list, task_list_soft
       TYPE(kpoint_type), OPTIONAL, POINTER               :: kpoints
       LOGICAL, OPTIONAL                                  :: do_kpoints
@@ -393,6 +402,7 @@ CONTAINS
       IF (PRESENT(potential_changed)) potential_changed = ks_env%potential_changed
       IF (PRESENT(forces_up_to_date)) forces_up_to_date = ks_env%forces_up_to_date
       IF (PRESENT(complex_ks)) complex_ks = ks_env%complex_ks
+      IF (PRESENT(exc_accint)) exc_accint = ks_env%exc_accint
       IF (PRESENT(v_hartree_rspace)) v_hartree_rspace => ks_env%v_hartree_rspace
 
       IF (PRESENT(matrix_ks)) matrix_ks => get_1d_pointer(ks_env%matrix_ks)
@@ -419,6 +429,7 @@ CONTAINS
       IF (PRESENT(matrix_p_mp2_admm)) matrix_p_mp2_admm => ks_env%matrix_p_mp2_admm
       IF (PRESENT(rho)) rho => ks_env%rho
       IF (PRESENT(rho_xc)) rho_xc => ks_env%rho_xc
+      IF (PRESENT(xcint_weights)) xcint_weights => ks_env%xcint_weights
       IF (PRESENT(rho_core)) rho_core => ks_env%rho_core
       IF (PRESENT(rho_nlcc)) rho_nlcc => ks_env%rho_nlcc
       IF (PRESENT(rho_nlcc_g)) rho_nlcc_g => ks_env%rho_nlcc_g
@@ -446,6 +457,7 @@ CONTAINS
       IF (PRESENT(sab_almo)) sab_almo => ks_env%sab_almo
       IF (PRESENT(sab_kp)) sab_kp => ks_env%sab_kp
       IF (PRESENT(sab_kp_nosym)) sab_kp_nosym => ks_env%sab_kp_nosym
+      IF (PRESENT(sab_cneo)) sab_cneo => ks_env%sab_cneo
       IF (PRESENT(dft_control)) dft_control => ks_env%dft_control
       IF (PRESENT(dbcsr_dist)) dbcsr_dist => ks_env%dbcsr_dist
       IF (PRESENT(distribution_2d)) distribution_2d => ks_env%distribution_2d
@@ -492,6 +504,7 @@ CONTAINS
 !> \param v_hartree_rspace ...
 !> \param s_mstruct_changed ...
 !> \param rho_changed ...
+!> \param exc_accint ...
 !> \param potential_changed ...
 !> \param forces_up_to_date ...
 !> \param complex_ks ...
@@ -516,6 +529,7 @@ CONTAINS
 !> \param matrix_s_RI_aux_kp ...
 !> \param matrix_ks_im_kp ...
 !> \param vppl ...
+!> \param xcint_weights ...
 !> \param rho_core ...
 !> \param rho_nlcc ...
 !> \param rho_nlcc_g ...
@@ -542,6 +556,7 @@ CONTAINS
 !> \param sab_almo ...
 !> \param sab_kp ...
 !> \param sab_kp_nosym ...
+!> \param sab_cneo ...
 !> \param task_list ...
 !> \param task_list_soft ...
 !> \param subsys ...
@@ -553,19 +568,19 @@ CONTAINS
 !> \param blacs_env ...
 ! **************************************************************************************************
    SUBROUTINE set_ks_env(ks_env, v_hartree_rspace, &
-                         s_mstruct_changed, rho_changed, &
+                         s_mstruct_changed, rho_changed, exc_accint, &
                          potential_changed, forces_up_to_date, complex_ks, &
                          matrix_h, matrix_h_im, matrix_ks, matrix_ks_im, matrix_vxc, &
                          kinetic, matrix_s, &
                          matrix_s_RI_aux, matrix_w, matrix_p_mp2, matrix_p_mp2_admm, &
                          matrix_h_kp, matrix_h_im_kp, matrix_ks_kp, matrix_vxc_kp, kinetic_kp, matrix_s_kp, matrix_w_kp, &
                          matrix_s_RI_aux_kp, matrix_ks_im_kp, &
-                         vppl, rho_core, rho_nlcc, rho_nlcc_g, vee, &
+                         vppl, xcint_weights, rho_core, rho_nlcc, rho_nlcc_g, vee, &
                          neighbor_list_id, &
                          kpoints, &
                          sab_orb, sab_all, sac_ae, sac_ppl, sac_lri, sap_ppnl, sap_oce, sab_lrc, &
                          sab_se, sab_xtbe, sab_tbe, sab_core, sab_xb, sab_xtb_pp, sab_xtb_nonbond, &
-                         sab_vdw, sab_scp, sab_almo, sab_kp, sab_kp_nosym, &
+                         sab_vdw, sab_scp, sab_almo, sab_kp, sab_kp_nosym, sab_cneo, &
                          task_list, task_list_soft, &
                          subsys, dft_control, dbcsr_dist, distribution_2d, pw_env, &
                          para_env, blacs_env)
@@ -573,15 +588,15 @@ CONTAINS
       TYPE(qs_ks_env_type), INTENT(INOUT)                :: ks_env
       TYPE(pw_r3d_rs_type), OPTIONAL, POINTER            :: v_hartree_rspace
       LOGICAL, OPTIONAL                                  :: s_mstruct_changed, rho_changed, &
-                                                            potential_changed, forces_up_to_date, &
-                                                            complex_ks
+                                                            exc_accint, potential_changed, &
+                                                            forces_up_to_date, complex_ks
       TYPE(dbcsr_p_type), DIMENSION(:), OPTIONAL, POINTER :: matrix_h, matrix_h_im, matrix_ks, &
          matrix_ks_im, matrix_vxc, kinetic, matrix_s, matrix_s_RI_aux, matrix_w, matrix_p_mp2, &
          matrix_p_mp2_admm
       TYPE(dbcsr_p_type), DIMENSION(:, :), OPTIONAL, POINTER :: matrix_h_kp, matrix_h_im_kp, &
          matrix_ks_kp, matrix_vxc_kp, kinetic_kp, matrix_s_kp, matrix_w_kp, matrix_s_RI_aux_kp, &
          matrix_ks_im_kp
-      TYPE(pw_r3d_rs_type), OPTIONAL, POINTER            :: vppl
+      TYPE(pw_r3d_rs_type), OPTIONAL, POINTER            :: vppl, xcint_weights
       TYPE(pw_c1d_gs_type), OPTIONAL, POINTER            :: rho_core
       TYPE(pw_r3d_rs_type), OPTIONAL, POINTER            :: rho_nlcc
       TYPE(pw_c1d_gs_type), OPTIONAL, POINTER            :: rho_nlcc_g
@@ -590,7 +605,8 @@ CONTAINS
       TYPE(kpoint_type), OPTIONAL, POINTER               :: kpoints
       TYPE(neighbor_list_set_p_type), DIMENSION(:), OPTIONAL, POINTER :: sab_orb, sab_all, sac_ae, &
          sac_ppl, sac_lri, sap_ppnl, sap_oce, sab_lrc, sab_se, sab_xtbe, sab_tbe, sab_core, &
-         sab_xb, sab_xtb_pp, sab_xtb_nonbond, sab_vdw, sab_scp, sab_almo, sab_kp, sab_kp_nosym
+         sab_xb, sab_xtb_pp, sab_xtb_nonbond, sab_vdw, sab_scp, sab_almo, sab_kp, sab_kp_nosym, &
+         sab_cneo
       TYPE(task_list_type), OPTIONAL, POINTER            :: task_list, task_list_soft
       TYPE(qs_subsys_type), OPTIONAL, POINTER            :: subsys
       TYPE(dft_control_type), OPTIONAL, POINTER          :: dft_control
@@ -607,6 +623,7 @@ CONTAINS
       IF (PRESENT(complex_ks)) ks_env%complex_ks = complex_ks
       IF (ks_env%s_mstruct_changed .OR. ks_env%potential_changed .OR. ks_env%rho_changed) &
          ks_env%forces_up_to_date = .FALSE.
+      IF (PRESENT(exc_accint)) ks_env%exc_accint = exc_accint
       IF (PRESENT(v_hartree_rspace)) ks_env%v_hartree_rspace => v_hartree_rspace
 
       IF (PRESENT(matrix_h)) CALL set_1d_pointer(ks_env%matrix_h, matrix_h)
@@ -638,6 +655,7 @@ CONTAINS
 
       IF (PRESENT(matrix_p_mp2)) ks_env%matrix_p_mp2 => matrix_p_mp2
       IF (PRESENT(matrix_p_mp2_admm)) ks_env%matrix_p_mp2_admm => matrix_p_mp2_admm
+      IF (PRESENT(xcint_weights)) ks_env%xcint_weights => xcint_weights
       IF (PRESENT(rho_core)) ks_env%rho_core => rho_core
       IF (PRESENT(rho_nlcc)) ks_env%rho_nlcc => rho_nlcc
       IF (PRESENT(rho_nlcc_g)) ks_env%rho_nlcc_g => rho_nlcc_g
@@ -666,6 +684,7 @@ CONTAINS
       IF (PRESENT(sab_almo)) ks_env%sab_almo => sab_almo
       IF (PRESENT(sab_kp)) ks_env%sab_kp => sab_kp
       IF (PRESENT(sab_kp_nosym)) ks_env%sab_kp_nosym => sab_kp_nosym
+      IF (PRESENT(sab_cneo)) ks_env%sab_cneo => sab_cneo
 
       IF (PRESENT(task_list)) ks_env%task_list => task_list
       IF (PRESENT(task_list_soft)) ks_env%task_list_soft => task_list_soft
@@ -763,6 +782,10 @@ CONTAINS
       IF (ASSOCIATED(ks_env%task_list_soft)) &
          CALL deallocate_task_list(ks_env%task_list_soft)
 
+      IF (ASSOCIATED(ks_env%xcint_weights)) THEN
+         CALL ks_env%xcint_weights%release()
+         DEALLOCATE (ks_env%xcint_weights)
+      END IF
       IF (ASSOCIATED(ks_env%rho_nlcc_g)) THEN
          CALL ks_env%rho_nlcc_g%release()
          DEALLOCATE (ks_env%rho_nlcc_g)
@@ -808,6 +831,7 @@ CONTAINS
       CALL release_neighbor_list_sets(ks_env%sab_almo)
       CALL release_neighbor_list_sets(ks_env%sab_kp)
       CALL release_neighbor_list_sets(ks_env%sab_kp_nosym)
+      CALL release_neighbor_list_sets(ks_env%sab_cneo)
       IF (ASSOCIATED(ks_env%dft_control)) THEN
          CALL dft_control_release(ks_env%dft_control)
          DEALLOCATE (ks_env%dft_control)
@@ -862,6 +886,10 @@ CONTAINS
       IF (ASSOCIATED(ks_env%task_list_soft)) &
          CALL deallocate_task_list(ks_env%task_list_soft)
 
+      IF (ASSOCIATED(ks_env%xcint_weights)) THEN
+         CALL ks_env%xcint_weights%release()
+         DEALLOCATE (ks_env%xcint_weights)
+      END IF
       IF (ASSOCIATED(ks_env%rho_nlcc_g)) THEN
          CALL ks_env%rho_nlcc_g%release()
          DEALLOCATE (ks_env%rho_nlcc_g)
@@ -902,6 +930,7 @@ CONTAINS
       CALL release_neighbor_list_sets(ks_env%sab_almo)
       CALL release_neighbor_list_sets(ks_env%sab_kp)
       CALL release_neighbor_list_sets(ks_env%sab_kp_nosym)
+      CALL release_neighbor_list_sets(ks_env%sab_cneo)
       CALL kpoint_release(ks_env%kpoints)
       CALL pw_env_release(ks_env%pw_env, ks_env%para_env)
    END SUBROUTINE qs_ks_part_release

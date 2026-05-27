@@ -13,6 +13,9 @@ AM1
 AMBER
     Assisted Model Building and Energy Refinement
 
+APT
+    Atomic Polarization Tensor
+
 ASE
     Atomic Simulation Environment
 
@@ -20,7 +23,7 @@ ASPC
     Always Stable Predictor-Corrector [→ more](methods/sampling/molecular_dynamics)
 
 BFGS
-    Broyden–Fletcher–Goldfarb–Shanno algorithm [→ more](methods/optimization/geometry)
+    Broyden–Fletcher–Goldfarb–Shanno algorithm [→ more](methods/optimization/geometry_and_cell_opt)
 
 BOMD
     Born-Oppenheimer Molecular Dynamics [→ more](methods/sampling/molecular_dynamics)
@@ -38,7 +41,7 @@ CDFT-CI
     Constrained Density Functional Theory Configuration Interaction [→ more](methods/dft/constrained)
 
 CG
-    Conjugated Gradients algorithm [→ more](methods/optimization/geometry)
+    Conjugated Gradients algorithm [→ more](methods/optimization/geometry_and_cell_opt)
 
 CHARMM
     Chemistry at HARvard Molecular Mechanics
@@ -117,6 +120,12 @@ FPGA
 
 GAPW
     Gaussian Augmented-Plane Waves method [→ more](methods/dft/gapw)
+
+gCP
+    Geometrical CounterPoise [→ more](#Kruse2012)
+
+GCP
+    Google Cloud Platform [→ more](https://cloud.google.com)
 
 GEEP
     Gaussian Expansion of the Electrostatic Potential [→ more](methods/qm_mm/builtin)

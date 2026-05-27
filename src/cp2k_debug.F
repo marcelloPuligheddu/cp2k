@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2025 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2026 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -24,7 +24,8 @@
 !> \author Teodoro Laino
 ! **************************************************************************************************
 MODULE cp2k_debug
-   USE cell_types,                      ONLY: cell_type
+   USE cell_types,                      ONLY: cell_type,&
+                                              get_cell
    USE cp_control_types,                ONLY: dft_control_type
    USE cp_log_handling,                 ONLY: cp_get_default_logger,&
                                               cp_logger_type
@@ -81,17 +82,18 @@ CONTAINS
       CHARACTER(LEN=60)                                  :: line
       CHARACTER(LEN=80), DIMENSION(:), POINTER           :: cval2
       CHARACTER(LEN=default_string_length)               :: description
-      INTEGER                                            :: i, ip, irep, iw, j, k, np, nrep, &
-                                                            stress_tensor
+      INTEGER                                            :: i, ip, irep, iw, j, k, n_periodic, np, &
+                                                            nrep, stress_tensor
+      INTEGER, DIMENSION(3)                              :: periodic
       LOGICAL                                            :: check_failed, debug_dipole, &
                                                             debug_forces, debug_polar, &
                                                             debug_stress_tensor, skip, &
                                                             stop_on_mismatch
       LOGICAL, ALLOCATABLE, DIMENSION(:, :)              :: do_dof_atom_coor
       LOGICAL, DIMENSION(3)                              :: do_dof_dipole
-      REAL(KIND=dp)                                      :: amplitude, dd, de, derr, difference, dx, &
-                                                            eps_no_error_check, errmax, maxerr, &
-                                                            std_value, sum_of_differences
+      LOGICAL, DIMENSION(3, 3)                           :: check_stress_element
+      REAL(KIND=dp) :: amplitude, dd, de, derr, difference, dx, eps_no_error_check, errmax, &
+         maxerr, periodic_stress_sum, std_value, sum_of_differences
       REAL(KIND=dp), DIMENSION(2)                        :: numer_energy
       REAL(KIND=dp), DIMENSION(3)                        :: dipole_moment, dipole_numer, err, &
                                                             my_maxerr, poldir
@@ -170,6 +172,12 @@ CONTAINS
       iw = cp_print_key_unit_nr(logger, root_section, "DEBUG%PROGRAM_RUN_INFO", &
                                 extension=".log")
       IF (debug_stress_tensor) THEN
+         IF (SUM(cell%perd) == 0) THEN
+            CALL cp_warn(__LOCATION__, &
+                         "DEBUG_STRESS_TENSOR requested for PERIODIC NONE. "// &
+                         "The isolated-system virial is useful for finite-difference diagnostics, "// &
+                         "but it is not a physically meaningful bulk stress.")
+         END IF
          ! To debug stress tensor the stress tensor calculation must be
          ! first enabled..
          CALL section_vals_val_get(force_env%force_env_section, "STRESS_TENSOR", &
@@ -213,6 +221,30 @@ CONTAINS
                CALL cp_subsys_get(subsys, virial=virial)
                virial_numerical = virial
 
+               ! Numerical diagonal stress checks only perturb diagonal cell elements.
+               IF (virial_analytical%pv_diagonal .OR. virial_numerical%pv_diagonal) THEN
+                  DO i = 1, 3
+                     DO k = 1, 3
+                        IF (i /= k) THEN
+                           virial_analytical%pv_virial(i, k) = 0.0_dp
+                           virial_numerical%pv_virial(i, k) = 0.0_dp
+                        END IF
+                     END DO
+                  END DO
+               END IF
+
+               CALL get_cell(cell=cell, periodic=periodic)
+               n_periodic = COUNT(periodic /= 0)
+               check_stress_element = .TRUE.
+               IF (n_periodic > 0 .AND. n_periodic < 3) THEN
+                  check_stress_element = .FALSE.
+                  DO i = 1, 3
+                     DO k = 1, 3
+                        check_stress_element(i, k) = periodic(i) /= 0 .AND. periodic(k) /= 0
+                     END DO
+                  END DO
+               END IF
+
                ! Print results
                IF (iw > 0) THEN
                   WRITE (UNIT=iw, FMT="((T2,A))") &
@@ -230,6 +262,20 @@ CONTAINS
                   WRITE (UNIT=iw, FMT="(T2,A,T61,F20.12)") &
                      "DEBUG| Sum of differences", &
                      SUM(ABS(virial_numerical%pv_virial(:, :) - virial_analytical%pv_virial(:, :)))
+                  IF (n_periodic > 0 .AND. n_periodic < 3) THEN
+                     periodic_stress_sum = 0.0_dp
+                     DO i = 1, 3
+                        DO k = 1, 3
+                           IF (periodic(i) /= 0 .AND. periodic(k) /= 0) THEN
+                              periodic_stress_sum = periodic_stress_sum + &
+                                                    ABS(virial_numerical%pv_virial(i, k) - &
+                                                        virial_analytical%pv_virial(i, k))
+                           END IF
+                        END DO
+                     END DO
+                     WRITE (UNIT=iw, FMT="(T2,A,T61,F20.12)") &
+                        "DEBUG| Periodic-subspace sum of differences", periodic_stress_sum
+                  END IF
                END IF
 
                ! Check and abort on failure
@@ -243,7 +289,8 @@ CONTAINS
                DO i = 1, 3
                   err(:) = 0.0_dp
                   DO k = 1, 3
-                     IF (ABS(virial_analytical%pv_virial(i, k)) >= eps_no_error_check) THEN
+                     IF (check_stress_element(i, k) .AND. &
+                         ABS(virial_analytical%pv_virial(i, k)) >= eps_no_error_check) THEN
                         err(k) = 100.0_dp*(virial_numerical%pv_virial(i, k) - virial_analytical%pv_virial(i, k))/ &
                                  virial_analytical%pv_virial(i, k)
                         WRITE (UNIT=line(20*(k - 1) + 1:20*k), FMT="(1X,F17.2,A2)") err(k), " %"
@@ -417,7 +464,7 @@ CONTAINS
       IF (debug_dipole) THEN
          IF (force_env%in_use == use_qs_force) THEN
             CALL get_qs_env(force_env%qs_env, dft_control=dft_control)
-            poldir = (/0.0_dp, 0.0_dp, 1.0_dp/)
+            poldir = [0.0_dp, 0.0_dp, 1.0_dp]
             amplitude = 0.0_dp
             CALL set_efield(dft_control, amplitude, poldir)
             CALL force_env_calc_energy_force(force_env, calc_force=.TRUE.)
@@ -491,7 +538,7 @@ CONTAINS
       IF (debug_polar) THEN
          IF (force_env%in_use == use_qs_force) THEN
             CALL get_qs_env(force_env%qs_env, dft_control=dft_control)
-            poldir = (/0.0_dp, 0.0_dp, 1.0_dp/)
+            poldir = [0.0_dp, 0.0_dp, 1.0_dp]
             amplitude = 0.0_dp
             CALL set_efield(dft_control, amplitude, poldir)
             CALL force_env_calc_energy_force(force_env, calc_force=.FALSE.)
@@ -499,7 +546,7 @@ CONTAINS
             description = "[POLAR]"
             IF (test_for_result(results, description=description)) THEN
                CALL get_results(results, description=description, values=pvals)
-               polar_analytic(1:3, 1:3) = RESHAPE(pvals(1:9), (/3, 3/))
+               polar_analytic(1:3, 1:3) = RESHAPE(pvals(1:9), [3, 3])
             ELSE
                CALL cp_warn(__LOCATION__, "Debug of polarizabilities needs PROPERTIES/LINRES/POLAR section enabled")
                CPABORT("DEBUG")

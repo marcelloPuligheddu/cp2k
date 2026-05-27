@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2025 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2026 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -14,12 +14,15 @@
 
 MODULE qs_mo_occupation
 
+   USE cp_control_types,                ONLY: hairy_probes_type
    USE cp_log_handling,                 ONLY: cp_to_string
-   USE fermi_utils,                     ONLY: FermiFixed,&
-                                              FermiFixedDeriv
+   USE hairy_probes,                    ONLY: probe_occupancy
    USE input_constants,                 ONLY: smear_energy_window,&
                                               smear_fermi_dirac,&
-                                              smear_list
+                                              smear_gaussian,&
+                                              smear_list,&
+                                              smear_mp,&
+                                              smear_mv
    USE kahan_sum,                       ONLY: accurate_sum
    USE kinds,                           ONLY: dp
    USE qs_mo_types,                     ONLY: get_mo_set,&
@@ -27,6 +30,8 @@ MODULE qs_mo_occupation
                                               mo_set_type,&
                                               set_mo_set
    USE scf_control_types,               ONLY: smear_type
+   USE smearing_utils,                  ONLY: SmearFixed,&
+                                              SmearFixedDerivMV
    USE util,                            ONLY: sort
    USE xas_env_types,                   ONLY: get_xas_env,&
                                               xas_environment_type
@@ -59,7 +64,7 @@ CONTAINS
    SUBROUTINE set_mo_occupation_3(mo_array, smear)
 
       TYPE(mo_set_type), DIMENSION(2), INTENT(INOUT)     :: mo_array
-      TYPE(smear_type), POINTER                          :: smear
+      TYPE(smear_type)                                   :: smear
 
       CHARACTER(LEN=*), PARAMETER :: routineN = 'set_mo_occupation_3'
 
@@ -108,8 +113,8 @@ CONTAINS
          END IF
       END DO
 
-      CALL FermiFixed(all_occ, mu, kTS, all_eigval, all_nelec, &
-                      smear%electronic_temperature, 1._dp, xas_estate, occ_estate)
+      CALL SmearFixed(all_occ, mu, kTS, all_eigval, all_nelec, &
+                      smear%electronic_temperature, 1._dp, smear%method, xas_estate, occ_estate)
 
       is_large = ABS(MAXVAL(all_occ) - 1.0_dp) > smear%eps_fermi_dirac
       ! this is not a real problem, but the temperature might be a bit large
@@ -181,6 +186,7 @@ CONTAINS
 !> \param smear ...
 !> \param eval_deriv ...
 !> \param tot_zeff_corr ...
+!> \param probe ...
 !> \date    25.01.2010 (MK)
 !> \par   History
 !>        10.2019 Added functionality to adjust mo occupation if the core
@@ -191,12 +197,14 @@ CONTAINS
 !> \author  Matthias Krack (MK)
 !> \version 1.0
 ! **************************************************************************************************
-   SUBROUTINE set_mo_occupation_2(mo_array, smear, eval_deriv, tot_zeff_corr)
+   SUBROUTINE set_mo_occupation_2(mo_array, smear, eval_deriv, tot_zeff_corr, probe)
 
       TYPE(mo_set_type), DIMENSION(:), INTENT(INOUT)     :: mo_array
-      TYPE(smear_type), POINTER                          :: smear
+      TYPE(smear_type)                                   :: smear
       REAL(KIND=dp), DIMENSION(:), OPTIONAL, POINTER     :: eval_deriv
       REAL(KIND=dp), OPTIONAL                            :: tot_zeff_corr
+      TYPE(hairy_probes_type), DIMENSION(:), OPTIONAL, &
+         POINTER                                         :: probe
 
       CHARACTER(LEN=*), PARAMETER :: routineN = 'set_mo_occupation_2'
 
@@ -210,7 +218,9 @@ CONTAINS
 
       ! Fall back for the case that we have only one MO set
       IF (SIZE(mo_array) == 1) THEN
-         IF (PRESENT(eval_deriv)) THEN
+         IF (PRESENT(probe)) THEN
+            CALL set_mo_occupation_1(mo_array(1), smear=smear, probe=probe)
+         ELSE IF (PRESENT(eval_deriv)) THEN
 ! Change of MO occupancy to account for CORE_CORRECTION is not yet implemented
             CALL set_mo_occupation_1(mo_array(1), smear=smear, eval_deriv=eval_deriv)
          ELSE
@@ -222,6 +232,11 @@ CONTAINS
          END IF
          CALL timestop(handle)
          RETURN
+      END IF
+
+      IF (PRESENT(probe)) THEN
+         CALL set_mo_occupation_1(mo_array(1), smear=smear, probe=probe)
+         CALL set_mo_occupation_1(mo_array(2), smear=smear, probe=probe)
       END IF
 
       IF (smear%do_smear) THEN
@@ -259,7 +274,10 @@ CONTAINS
 
       IF (.NOT. ((mo_array(1)%flexible_electron_count > 0.0_dp) .AND. &
                  (mo_array(2)%flexible_electron_count > 0.0_dp))) THEN
-         IF (PRESENT(eval_deriv)) THEN
+         IF (PRESENT(probe)) THEN
+            CALL set_mo_occupation_1(mo_array(1), smear=smear, probe=probe)
+            CALL set_mo_occupation_1(mo_array(2), smear=smear, probe=probe)
+         ELSE IF (PRESENT(eval_deriv)) THEN
             CALL set_mo_occupation_1(mo_array(1), smear=smear, eval_deriv=eval_deriv)
             CALL set_mo_occupation_1(mo_array(2), smear=smear, eval_deriv=eval_deriv)
          ELSE
@@ -349,7 +367,10 @@ CONTAINS
                       TRIM(ADJUSTL(cp_to_string(multiplicity_old)))//" to "// &
                       TRIM(ADJUSTL(cp_to_string(multiplicity_new))))
 
-      IF (PRESENT(eval_deriv)) THEN
+      IF (PRESENT(probe)) THEN
+         CALL set_mo_occupation_1(mo_array(1), smear=smear, probe=probe)
+         CALL set_mo_occupation_1(mo_array(2), smear=smear, probe=probe)
+      ELSE IF (PRESENT(eval_deriv)) THEN
          CALL set_mo_occupation_1(mo_array(1), smear=smear, eval_deriv=eval_deriv)
          CALL set_mo_occupation_1(mo_array(2), smear=smear, eval_deriv=eval_deriv)
       ELSE
@@ -374,6 +395,7 @@ CONTAINS
 !>                     on exit  the derivative of the full free energy (i.e. KS and entropy) wrt to the eigenvalue
 !> \param xas_env ...
 !> \param tot_zeff_corr ...
+!> \param probe ...
 !> \date    17.04.2002 (v1.0), 26.08.2008 (v1.1)
 !> \par   History
 !>        10.2019 Added functionality to adjust mo occupation if the core
@@ -384,24 +406,26 @@ CONTAINS
 !> \author  Matthias Krack
 !> \version 1.1
 ! **************************************************************************************************
-   SUBROUTINE set_mo_occupation_1(mo_set, smear, eval_deriv, xas_env, tot_zeff_corr)
+   SUBROUTINE set_mo_occupation_1(mo_set, smear, eval_deriv, xas_env, tot_zeff_corr, probe)
 
       TYPE(mo_set_type), INTENT(INOUT)                   :: mo_set
-      TYPE(smear_type), OPTIONAL, POINTER                :: smear
+      TYPE(smear_type), OPTIONAL                         :: smear
       REAL(KIND=dp), DIMENSION(:), OPTIONAL, POINTER     :: eval_deriv
       TYPE(xas_environment_type), OPTIONAL, POINTER      :: xas_env
       REAL(KIND=dp), OPTIONAL                            :: tot_zeff_corr
+      TYPE(hairy_probes_type), DIMENSION(:), OPTIONAL, &
+         POINTER                                         :: probe
 
       CHARACTER(LEN=*), PARAMETER :: routineN = 'set_mo_occupation_1'
 
+      CHARACTER(LEN=20)                                  :: method_label
       INTEGER                                            :: handle, i_first, imo, ir, irmo, nmo, &
                                                             nomo, xas_estate
       LOGICAL                                            :: equal_size, is_large
       REAL(KIND=dp)                                      :: delectron, e1, e2, edelta, edist, &
-                                                            el_count, lengthscale, nelec, &
-                                                            occ_estate, total_zeff_corr, &
-                                                            xas_nelectron
-      REAL(KIND=dp), ALLOCATABLE, DIMENSION(:, :)        :: dfde
+                                                            el_count, nelec, occ_estate, &
+                                                            total_zeff_corr, xas_nelectron
+      REAL(KIND=dp), ALLOCATABLE, DIMENSION(:)           :: tmp_v
 
       CALL timeset(routineN, handle)
 
@@ -510,6 +534,54 @@ CONTAINS
          CPASSERT(equal_size)
       END IF
 
+!calling of HP module HERE, before smear
+      IF (PRESENT(probe)) THEN
+         i_first = 1
+         IF (smear%fixed_mag_mom == -1.0_dp) THEN
+            nelec = REAL(mo_set%nelectron, dp)
+         ELSE
+            nelec = mo_set%n_el_f
+         END IF
+
+         mo_set%occupation_numbers(:) = 0.0_dp
+
+         CALL probe_occupancy(mo_set%occupation_numbers, mo_set%mu, mo_set%kTS, &
+                              mo_set%eigenvalues, mo_set%mo_coeff, mo_set%maxocc, &
+                              probe, N=nelec)
+         !NB: mu and T are taken from the hairy_probe type (defined in cp_control_types.F); these values are set in the input
+
+         ! Find the lowest fractional occupied MO (LFOMO)
+         DO imo = i_first, nmo
+            IF (mo_set%occupation_numbers(imo) < mo_set%maxocc) THEN
+               mo_set%lfomo = imo
+               EXIT
+            END IF
+         END DO
+         is_large = ABS(MAXVAL(mo_set%occupation_numbers) - mo_set%maxocc) > probe(1)%eps_hp
+         ! this is not a real problem, but the temperature might be a bit large
+         IF (is_large) &
+            CPWARN("Hair-probes occupancy distribution includes the first MO")
+
+         ! Find the highest (fractional) occupied MO which will be now the HOMO
+         DO imo = nmo, mo_set%lfomo, -1
+            IF (mo_set%occupation_numbers(imo) > probe(1)%eps_hp) THEN
+               mo_set%homo = imo
+               EXIT
+            END IF
+         END DO
+         is_large = ABS(MINVAL(mo_set%occupation_numbers)) > probe(1)%eps_hp
+         IF (is_large) &
+            CALL cp_warn(__LOCATION__, &
+                         "Hair-probes occupancy distribution includes the last MO => "// &
+                         "Add more MOs for proper smearing.")
+
+         ! check that the total electron count is accurate
+         is_large = (ABS(nelec - accurate_sum(mo_set%occupation_numbers(:))) > probe(1)%eps_hp*nelec)
+         IF (is_large) &
+            CPWARN("Total number of electrons is not accurate")
+
+      END IF
+
       ! Quick return, if no smearing information is supplied (TO BE FIXED, smear should become non-optional...)
       IF (.NOT. PRESENT(smear)) THEN
          ! there is no dependence of the energy on the eigenvalues
@@ -546,24 +618,17 @@ CONTAINS
          SELECT CASE (smear%method)
          CASE (smear_fermi_dirac)
             IF (.NOT. PRESENT(eval_deriv)) THEN
-               CALL FermiFixed(mo_set%occupation_numbers, mo_set%mu, mo_set%kTS, mo_set%eigenvalues, Nelec, &
-                               smear%electronic_temperature, mo_set%maxocc, xas_estate, occ_estate)
+               CALL SmearFixed(mo_set%occupation_numbers(1:mo_set%nmo), mo_set%mu, mo_set%kTS, &
+                               mo_set%eigenvalues(1:mo_set%nmo), Nelec, &
+                               smear%electronic_temperature, mo_set%maxocc, smear_fermi_dirac, &
+                               xas_estate, occ_estate)
             ELSE
-               ! could be a relatively large matrix, but one could get rid of it by never storing it
-               ! we only need dE/df * df/de, one could equally parallelize over entries, this could become expensive
-               ALLOCATE (dfde(nmo, nmo))
-               ! lengthscale could become a parameter, but this is pretty good
-               lengthscale = 10*smear%electronic_temperature
-
-               CALL FermiFixedDeriv(dfde, mo_set%occupation_numbers, mo_set%mu, mo_set%kTS, mo_set%eigenvalues, Nelec, &
-                                    smear%electronic_temperature, mo_set%maxocc, lengthscale, xas_estate, occ_estate)
-
-               ! deriv of E_{KS}-kT*S wrt to f_i
-               eval_deriv = eval_deriv - mo_set%eigenvalues + mo_set%mu
-               ! correspondingly the deriv of  E_{KS}-kT*S wrt to e_i
-               eval_deriv = MATMUL(TRANSPOSE(dfde), eval_deriv)
-
-               DEALLOCATE (dfde)
+               IF (.NOT. ALLOCATED(tmp_v)) ALLOCATE (tmp_v(SIZE(eval_deriv)))
+               tmp_v(:) = eval_deriv - mo_set%eigenvalues + mo_set%mu
+               CALL SmearFixedDerivMV(eval_deriv, mo_set%occupation_numbers(1:mo_set%nmo), mo_set%mu, &
+                                      mo_set%kTS, mo_set%eigenvalues(1:mo_set%nmo), Nelec, &
+                                      smear%electronic_temperature, mo_set%maxocc, smear_fermi_dirac, &
+                                      tmp_v, xas_estate, occ_estate)
             END IF
 
             ! Find the lowest fractional occupied MO (LFOMO)
@@ -591,6 +656,58 @@ CONTAINS
                             "Add more MOs for proper smearing.")
 
             ! check that the total electron count is accurate
+            is_large = (ABS(nelec - accurate_sum(mo_set%occupation_numbers(:))) > smear%eps_fermi_dirac*nelec)
+            CPWARN_IF(is_large, "Total number of electrons is not accurate")
+
+         CASE (smear_gaussian, smear_mp, smear_mv)
+            IF (.NOT. PRESENT(eval_deriv)) THEN
+               CALL SmearFixed(mo_set%occupation_numbers(1:mo_set%nmo), mo_set%mu, mo_set%kTS, &
+                               mo_set%eigenvalues(1:mo_set%nmo), Nelec, &
+                               smear%smearing_width, mo_set%maxocc, smear%method, &
+                               xas_estate, occ_estate)
+            ELSE
+               IF (.NOT. ALLOCATED(tmp_v)) ALLOCATE (tmp_v(SIZE(eval_deriv)))
+               tmp_v(:) = eval_deriv - mo_set%eigenvalues + mo_set%mu
+               CALL SmearFixedDerivMV(eval_deriv, mo_set%occupation_numbers(1:mo_set%nmo), mo_set%mu, &
+                                      mo_set%kTS, mo_set%eigenvalues(1:mo_set%nmo), Nelec, &
+                                      smear%smearing_width, mo_set%maxocc, smear%method, &
+                                      tmp_v, xas_estate, occ_estate)
+            END IF
+
+            ! Method label for warnings
+            SELECT CASE (smear%method)
+            CASE (smear_gaussian)
+               method_label = "Gaussian"
+            CASE (smear_mp)
+               method_label = "Methfessel-Paxton"
+            CASE (smear_mv)
+               method_label = "Marzari-Vanderbilt"
+            END SELECT
+
+            ! Find the lowest fractional occupied MO (LFOMO)
+            DO imo = i_first, nmo
+               IF (ABS(mo_set%occupation_numbers(imo) - mo_set%maxocc) > smear%eps_fermi_dirac) THEN
+                  mo_set%lfomo = imo
+                  EXIT
+               END IF
+            END DO
+            is_large = ABS(mo_set%occupation_numbers(1) - mo_set%maxocc) > smear%eps_fermi_dirac
+            CPWARN_IF(is_large, TRIM(method_label)//" smearing includes the first MO")
+
+            ! Find the highest (fractional) occupied MO which will be now the HOMO
+            DO imo = nmo, mo_set%lfomo, -1
+               IF (ABS(mo_set%occupation_numbers(imo)) > smear%eps_fermi_dirac) THEN
+                  mo_set%homo = imo
+                  EXIT
+               END IF
+            END DO
+            is_large = ABS(mo_set%occupation_numbers(nmo)) > smear%eps_fermi_dirac
+            IF (is_large) &
+               CALL cp_warn(__LOCATION__, &
+                            TRIM(method_label)//" smearing includes the last MO => "// &
+                            "Add more MOs for proper smearing.")
+
+            ! Check that the total electron count is accurate
             is_large = (ABS(nelec - accurate_sum(mo_set%occupation_numbers(:))) > smear%eps_fermi_dirac*nelec)
             CPWARN_IF(is_large, "Total number of electrons is not accurate")
 
@@ -669,6 +786,7 @@ CONTAINS
       ! zeros don't count as uniform
       mo_set%uniform_occupation = has_uniform_occupation(mo_set=mo_set)
 
+      IF (ALLOCATED(tmp_v)) DEALLOCATE (tmp_v)
       CALL timestop(handle)
 
    END SUBROUTINE set_mo_occupation_1

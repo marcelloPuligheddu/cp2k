@@ -30,6 +30,13 @@ def black():
 
 
 # ======================================================================================
+@app.route("/spackformat", methods=["POST"])
+def spackformat():
+    # Run black like https://github.com/spack/spack/blob/develop/pyproject.toml
+    return run_tool(["black", "--line-length=99", "--skip-magic-trailing-comma"])
+
+
+# ======================================================================================
 @app.route("/shfmt", methods=["POST"])
 def shfmt():
     return run_tool(["shfmt", "-i=2", "-ci", "-sr", "-w"])
@@ -38,7 +45,7 @@ def shfmt():
 # ======================================================================================
 @app.route("/shellcheck", methods=["POST"])
 def shellcheck():
-    return run_tool(["shellcheck"])
+    return run_tool(["shellcheck"], timeout=30)
 
 
 # ======================================================================================
@@ -51,17 +58,31 @@ def mdformat():
 # ======================================================================================
 @app.route("/clangformat", methods=["POST"])
 def clangformat():
-    return run_tool(["clang-format", "--style=llvm", "-i"])
+    return run_tool(["clang_format_wrapper.sh"])
 
 
 # ======================================================================================
 @app.route("/cmakeformat", methods=["POST"])
 def cmakeformat():
-    return run_tool(["cmake-format", "-i"])
+    return run_tool(["cmake-format", "-i"], timeout=30)
 
 
 # ======================================================================================
-def run_tool(cmd, timeout=30):
+@app.route("/fortitude", methods=["POST"])
+def fortitude():
+    config = f"--config-file={os.getcwd()}/fortitude.toml"
+    return run_tool(["fortitude", config, "check", "--fix", "--unsafe-fixes"])
+
+
+# ======================================================================================
+@app.route("/fortitude_nofix", methods=["POST"])
+def fortitude_nofix():
+    config = f"--config-file={os.getcwd()}/fortitude.toml"
+    return run_tool(["fortitude", config, "check"])
+
+
+# ======================================================================================
+def run_tool(cmd, timeout=3):
     assert len(request.files) == 1
     orig_fn = list(request.files.keys())[0]
     data_before = request.files[orig_fn].read()
@@ -77,11 +98,11 @@ def run_tool(cmd, timeout=30):
             cmd + [fn], cwd=workdir.name, timeout=timeout, stdout=PIPE, stderr=STDOUT
         )
     except subprocess.TimeoutExpired:
+        # Note that GCP Cloud Run returns status 504 when its timeout is reached.
         app.logger.info(f"Timeout of {cmd[0]} on {data_kb:.1f}KB after {timeout}s.")
-        return f"Timeout while running {cmd[0]} - please try again.", 504
+        return f"Timeout while running {cmd[0]} - please try again.", 408  # Req Timeout
     t2 = time()
     app.logger.info(f"Ran {cmd[0]} on {data_kb:.1f}KB in {t2-t1:.1f}s.")
-
     if p.returncode != 0:
         return p.stdout, 422  # Unprocessable Entity
     data_after = open(abs_fn, "rb").read()

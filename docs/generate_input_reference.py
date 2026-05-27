@@ -11,7 +11,6 @@ from datetime import datetime
 from collections import defaultdict
 from functools import cache
 
-
 SectionPath = Tuple[str, ...]
 
 
@@ -336,7 +335,7 @@ def render_keyword(
 
     # Use Sphinx's py:data directive to document keywords.
     output += [f"```{{py:data}}  {canonical_name}"]
-    n_var_brackets = f"[{n_var}]" if n_var > 1 else ""
+    n_var_brackets = f"[{n_var}]" if n_var > 1 else "[ ]" if n_var == -1 else ""
     if section_xref:
         output += [f":module: {section_xref}"]
     else:

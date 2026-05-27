@@ -6,12 +6,12 @@
 [ "${BASH_SOURCE[0]}" ] && SCRIPT_NAME="${BASH_SOURCE[0]}" || SCRIPT_NAME=$0
 SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_NAME")/.." && pwd -P)"
 
-cosma_ver="2.6.6"
-cosma_sha256="1604be101e77192fbcc5551236bc87888d336e402f5409bbdd9dea900401cc37"
-costa_ver="2.2.2"
-costa_sha256="e87bc37aad14ac0c5922237be5d5390145c9ac6aef0350ed17d86cb2d994e67c"
-tiled_mm_ver="2.3.1"
-tiled_mm_sha256="68914a483e62f796b790ea428210b1d5ef5943d6289e53d1aa62f56a20fbccc8"
+cosma_ver="2.8.4"
+cosma_sha256="b478cc239a99baf6fdf889d123308a6b01a4521330bdb3f4def457feb0f7dfa0"
+costa_ver="2.3.2"
+costa_sha256="2beb8b30ab641693094efe0015e5cb7393c25cef4753deb67493e17d05f9a797"
+tiled_mm_ver="2.3.2"
+tiled_mm_sha256="1f91ca02f6ee8e400835fa90630618baf86a7b425b4bbbb4151068f72658b858"
 
 source "${SCRIPT_DIR}"/common_vars.sh
 source "${SCRIPT_DIR}"/tool_kit.sh
@@ -36,13 +36,9 @@ case "$with_cosma" in
     if verify_checksums "${install_lock_file}"; then
       echo "COSMA-${cosma_ver} is already installed, skipping it."
     else
-      if [ -f COSMA-v${cosma_ver}.tar.gz ]; then
-        echo "COSMA-v${cosma_ver}.tar.gz is found"
-      else
-        download_pkg_from_cp2k_org "${cosma_sha256}" "COSMA-v${cosma_ver}.tar.gz"
-        download_pkg_from_cp2k_org "${costa_sha256}" "COSTA-v${costa_ver}.tar.gz"
-        download_pkg_from_cp2k_org "${tiled_mm_sha256}" "Tiled-MM-v${tiled_mm_ver}.tar.gz"
-      fi
+      retrieve_package "${cosma_sha256}" "COSMA-v${cosma_ver}.tar.gz"
+      retrieve_package "${costa_sha256}" "COSTA-v${costa_ver}.tar.gz"
+      retrieve_package "${tiled_mm_sha256}" "Tiled-MM-v${tiled_mm_ver}.tar.gz"
       echo "Installing from scratch into ${pkg_install_dir}"
       [ -d COSMA-${cosma_ver} ] && rm -rf COSMA-${cosma_ver}
       tar -xzf COSMA-v${cosma_ver}.tar.gz
@@ -75,9 +71,9 @@ case "$with_cosma" in
         -DCMAKE_BUILD_TYPE="RelWithDebInfo" \
         -DBUILD_SHARED_LIBS=NO \
         -DCOSTA_SCALAPACK=${cosma_sl} \
-        .. > cmake.log 2>&1 || tail -n ${LOG_LINES} cmake.log
-      make -j $(get_nprocs) > make.log 2>&1 || tail -n ${LOG_LINES} make.log
-      make -j install > install.log 2>&1 || tail -n ${LOG_LINES} install.log
+        .. > cmake.log 2>&1 || tail_excerpt cmake.log
+      make -j $(get_nprocs) > make.log 2>&1 || tail_excerpt make.log
+      make -j install > install.log 2>&1 || tail_excerpt install.log
       cd ..
 
       if [ "$ENABLE_CUDA" = "__TRUE__" ]; then
@@ -89,9 +85,9 @@ case "$with_cosma" in
           -DCMAKE_BUILD_TYPE="RelWithDebInfo" \
           -DBUILD_SHARED_LIBS=NO \
           -DCOSTA_SCALAPACK=${cosma_sl} \
-          .. > cmake.log 2>&1 || tail -n ${LOG_LINES} cmake.log
-        make -j $(get_nprocs) > make.log 2>&1 || tail -n ${LOG_LINES} make.log
-        make -j install > install.log 2>&1 || tail -n ${LOG_LINES} install.log
+          .. > cmake.log 2>&1 || tail_excerpt cmake.log
+        make -j $(get_nprocs) > make.log 2>&1 || tail_excerpt make.log
+        make -j install > install.log 2>&1 || tail_excerpt install.log
         cd ..
       fi
 
@@ -105,9 +101,9 @@ case "$with_cosma" in
           -DBUILD_SHARED_LIBS=NO \
           -DCOSTA_BLAS=${cosma_blas} \
           -DCOSTA_SCALAPACK=${cosma_sl} \
-          .. > cmake.log 2>&1 || tail -n ${LOG_LINES} cmake.log
-        make -j $(get_nprocs) > make.log 2>&1 || tail -n ${LOG_LINES} make.log
-        make -j install > install.log 2>&1 || tail -n ${LOG_LINES} install.log
+          .. > cmake.log 2>&1 || tail_excerpt cmake.log
+        make -j $(get_nprocs) > make.log 2>&1 || tail_excerpt make.log
+        make -j install > install.log 2>&1 || tail_excerpt install.log
         cd ..
       fi
       cd ..
@@ -123,9 +119,9 @@ case "$with_cosma" in
           -DTILEDMM_GPU_BACKEND=CUDA \
           -DTILEDMM_WITH_EXAMPLES=OFF \
           -DTILEDMM_WITH_TESTS=OFF \
-          .. > cmake.log 2>&1 || tail -n ${LOG_LINES} cmake.log
-        make -j $(get_nprocs) > make.log 2>&1 || tail -n ${LOG_LINES} make.log
-        make -j install > install.log 2>&1 || tail -n ${LOG_LINES} install.log
+          .. > cmake.log 2>&1 || tail_excerpt cmake.log
+        make -j $(get_nprocs) > make.log 2>&1 || tail_excerpt make.log
+        make -j install > install.log 2>&1 || tail_excerpt install.log
         cd ..
       fi
 
@@ -139,14 +135,15 @@ case "$with_cosma" in
           -DTILEDMM_GPU_BACKEND=ROCM \
           -DTILEDMM_WITH_EXAMPLES=OFF \
           -DTILEDMM_WITH_TESTS=OFF \
-          .. > cmake.log 2>&1 || tail -n ${LOG_LINES} cmake.log
-        make -j $(get_nprocs) > make.log 2>&1 || tail -n ${LOG_LINES} make.log
-        make -j install > install.log 2>&1 || tail -n ${LOG_LINES} install.log
+          .. > cmake.log 2>&1 || tail_excerpt cmake.log
+        make -j $(get_nprocs) > make.log 2>&1 || tail_excerpt make.log
+        make -j install > install.log 2>&1 || tail_excerpt install.log
         cd ..
       fi
       cd ..
 
-      cd COSMA-${cosma_ver} && mkdir build-cpu && cd build-cpu
+      cd COSMA-${cosma_ver}
+      mkdir build-cpu && cd build-cpu
       cmake \
         -DCMAKE_INSTALL_PREFIX="${pkg_install_dir}" \
         -DCMAKE_INSTALL_LIBDIR=lib \
@@ -158,9 +155,9 @@ case "$with_cosma" in
         -DCOSMA_WITH_TESTS=NO \
         -DCOSMA_WITH_APPS=NO \
         -DCOSMA_WITH_BENCHMARKS=NO .. \
-        > cmake.log 2>&1 || tail -n ${LOG_LINES} cmake.log
-      make -j $(get_nprocs) > make.log 2>&1 || tail -n ${LOG_LINES} make.log
-      make -j $(get_nprocs) install > install.log 2>&1 || tail -n ${LOG_LINES} install.log
+        > cmake.log 2>&1 || tail_excerpt cmake.log
+      make -j $(get_nprocs) > make.log 2>&1 || tail_excerpt make.log
+      make -j $(get_nprocs) install > install.log 2>&1 || tail_excerpt install.log
       cd ..
 
       # Build CUDA version.
@@ -179,9 +176,9 @@ case "$with_cosma" in
           -DCOSMA_WITH_TESTS=NO \
           -DCOSMA_WITH_APPS=NO \
           -DCOSMA_WITH_BENCHMARKS=NO .. \
-          > cmake.log 2>&1 || tail -n ${LOG_LINES} cmake.log
-        make -j $(get_nprocs) > make.log 2>&1 || tail -n ${LOG_LINES} make.log
-        make -j $(get_nprocs) install > install.log 2>&1 || tail -n ${LOG_LINES} install.log
+          > cmake.log 2>&1 || tail_excerpt cmake.log
+        make -j $(get_nprocs) > make.log 2>&1 || tail_excerpt make.log
+        make -j $(get_nprocs) install > install.log 2>&1 || tail_excerpt install.log
         cd ..
       fi
 
@@ -201,9 +198,9 @@ case "$with_cosma" in
           -DCOSMA_WITH_TESTS=NO \
           -DCOSMA_WITH_APPS=NO \
           -DCOSMA_WITH_BENCHMARKS=NO .. \
-          > cmake.log 2>&1 || tail -n ${LOG_LINES} cmake.log
-        make -j $(get_nprocs) > make.log 2>&1 || tail -n ${LOG_LINES} make.log
-        make -j $(get_nprocs) install > install.log 2>&1 || tail -n ${LOG_LINES} install.log
+          > cmake.log 2>&1 || tail_excerpt cmake.log
+        make -j $(get_nprocs) > make.log 2>&1 || tail_excerpt make.log
+        make -j $(get_nprocs) install > install.log 2>&1 || tail_excerpt install.log
         cd ..
       fi
 
@@ -254,9 +251,6 @@ prepend_path LD_LIBRARY_PATH "${COSMA_LIBDIR}"
 prepend_path LD_RUN_PATH "${COSMA_LIBDIR}"
 prepend_path LIBRARY_PATH "${COSMA_LIBDIR}"
 prepend_path CPATH "$pkg_install_dir/include"
-export COSMA_INCLUDE_DIR="$pkg_install_dir/include"
-export COSMA_ROOT="${pkg_install_dir}"
-export PKG_CONFIG_PATH="$PKG_CONFIG_PATH:${COSMA_LIBDIR}/pkgconfig"
 prepend_path PKG_CONFIG_PATH "$pkg_install_dir/lib/pkgconfig"
 prepend_path CMAKE_PREFIX_PATH "$pkg_install_dir"
 EOF
@@ -273,10 +267,9 @@ export CP_LDFLAGS="\${CP_LDFLAGS} IF_CUDA(${COSMA_CUDA_LDFLAGS}|IF_HIP(${COSMA_H
 export COSMA_LIBS="${COSMA_LIBS}"
 export COSMA_ROOT="$pkg_install_dir"
 export COSMA_INCLUDE_DIR="$pkg_install_dir/include"
-export PKG_CONFIG_PATH="$PKG_CONFIG_PATH:${COSMA_LIBDIR}/pkgconfig"
 export CP_LIBS="IF_MPI(${COSMA_LIBS}|) \${CP_LIBS}"
 EOF
-  cat "${BUILDDIR}/setup_cosma" >> $SETUPFILE
+  filter_setup "${BUILDDIR}/setup_cosma" "${SETUPFILE}"
 
   cat << EOF >> ${INSTALLDIR}/lsan.supp
 # leaks related to COSMA (probably, only the last one is actually needed)

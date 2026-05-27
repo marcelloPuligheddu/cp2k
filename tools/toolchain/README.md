@@ -17,9 +17,9 @@ If you are new to CP2K, and want a basic CP2K binary, then just calling
 > ./install_cp2k_toolchain.sh
 ```
 
-may be enough. This will use your system gcc, and mpi library (if existing) and build libint, libxc,
-fftw and openblas (MKL will be used instead if MKLROOT env variable is found) from scratch, and give
-you a set of arch files that allow you to compile CP2K.
+may be enough. This will use your system GCC and MPI library (if existing), and build libint, libxc,
+FFTW and OpenBLAS (MKL will be used instead if `MKLROOT` env variable is found) from scratch, and
+then provide instructions on how to compile CP2K using the tools provided by toolchain.
 
 ## Complete toolchain build
 
@@ -43,7 +43,7 @@ scratch.
 
 ### MPI implementation choice
 
-If you do not have a MPI installation, by default the `--install-all` option will install MPICH for
+If you do not have an MPI installation, by default the `--install-all` option will install MPICH for
 you. You can change this default behavior by setting `--mpi-mode` after the `--install-all` option.
 
 ## Trouble Shooting
@@ -54,26 +54,25 @@ Below are solutions to some of the common problems you may encounter when runnin
 
 Look at the error message. If it does not indicate the reason for failure then it is likely that
 some error occurred during compilation of the package. You can look at the compiler log in the file
-make.log in the source directory of the package in `./build`.
+`make.log` in the source directory of the package in `./build`.
 
 One of the causes on some systems may be the fact that too many parallel make processes were
 initiated. By default the script tries to use all of the processors on you node. You can override
-this behavior using `-j` option.
+this behavior using `-j N` option, where `N` specifies the number of processors to use.
 
 ### The script failed at a tarball downloading stage
 
-Try run again with `--no-check-certificate` option. See the help section for this option for
-details.
+Simply try run again. The toolchain scripts will delete the broken tarball and re-download.
 
-### I've used --with-XYZ=system cannot find the XYZ library
+### I've used `--with-XYZ=system` but the XYZ library cannot be found
 
 The installation script in "system" mode will try to find a library in the following system PATHS:
-`LD_LIBRARY_PATH`, `LD_RUN_PATH`, `LIBRARY_PATH`, `/usr/local/lib64`, `/usr/local/lib`,
-`/usr/lib64`, `/usr/lib`.
+`LD_LIBRARY_PATH`, `LD_RUN_PATH`, `LIBRARY_PATH`, `/usr/local/lib64`, `/usr/local/lib`, `/usr/lib`,
+`/usr/lib64`, and if using Ubuntu, `/usr/lib/x86_64-linux-gnu` or `/usr/lib/aarch-linux-gnu`.
 
-For MKL libraries, the installation script will try to look for MKLROOT environment variable.
+For MKL libraries, the installation script will try to look for `MKLROOT` environment variable.
 
-You can use:
+If you are using environment modules, you can use:
 
 ```shell
 > module show XYZ
@@ -89,19 +88,21 @@ for the library.
 
 ## Licenses
 
-The toolchain only downloads and installs packages that are
-[compatible with the GPL](https://www.gnu.org/licenses/gpl-faq.html#WhatDoesCompatMean). The
+__The toolchain only downloads and installs packages that are__
+__[compatible with the GPL](https://www.gnu.org/licenses/gpl-faq.html#WhatDoesCompatMean).__ The
 following table list the licenses of all those packages. While the toolchain does support linking
 proprietary software packages, like e.g. MKL, these have to be installed separately by the user.
 
 | Package   | License                                                                            | GPL Compatible                                                                   |
 | --------- | ---------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- |
+| ace       | [GPL](https://github.com/ICAMS/lammps-user-pace/blob/main/LICENSE)                 | Yes                                                                              |
 | cmake     | [BSD 3-Clause](https://gitlab.kitware.com/cmake/cmake/raw/master/Copyright.txt)    | Yes                                                                              |
 | cosma     | [BSD 3-Clause](https://github.com/eth-cscs/COSMA/blob/master/LICENCE)              | Yes                                                                              |
 | deepmd    | [LGPL](https://github.com/deepmodeling/deepmd-kit/blob/master/LICENSE)             | Yes                                                                              |
 | elpa      | [LGPL](https://gitlab.mpcdf.mpg.de/elpa/elpa/blob/master/LICENSE)                  | Yes                                                                              |
 | fftw      | [GPL](http://www.fftw.org/doc/License-and-Copyright.html)                          | Yes                                                                              |
 | gcc       | [GPL](https://gcc.gnu.org/git/?p=gcc.git;a=blob_plain;f=COPYING;hb=HEAD)           | Yes                                                                              |
+| gauxc     | [BSD 3-Clause](https://github.com/wavefunction91/GauXC/blob/master/LICENSE.txt)    | Yes, with libtorch and Skala-1.1 model for OneDFT/SKALA support                  |
 | gsl       | [GPL](https://www.gnu.org/software/gsl/doc/html/gpl.html)                          | Yes                                                                              |
 | hdf5      | [BSD 3-Clause](https://support.hdfgroup.org/ftp/HDF5/releases/COPYING)             | Yes                                                                              |
 | libint    | [GPL](https://github.com/evaleev/libint/blob/master/LICENSE)                       | Yes                                                                              |
@@ -112,17 +113,11 @@ proprietary software packages, like e.g. MKL, these have to be installed separat
 | mpich     | [MPICH](https://github.com/pmodels/mpich/blob/master/COPYRIGHT)                    | [Yes](https://enterprise.dejacode.com/licenses/public/mpich/#license-conditions) |
 | openblas  | [BSD 3-Clause](https://github.com/xianyi/OpenBLAS/blob/develop/LICENSE)            | Yes                                                                              |
 | openmpi   | [BSD 3-Clause](https://github.com/open-mpi/ompi/blob/master/LICENSE)               | Yes                                                                              |
-| pexsi     | [BSD 3-Clause](https://bitbucket.org/berkeleylab/pexsi/src/master/LICENSE)         | Yes                                                                              |
 | plumed    | [LGPL](https://github.com/plumed/plumed2/blob/master/COPYING.LESSER)               | Yes                                                                              |
-| ptscotch  | [CeCILL-C](https://www.labri.fr/perso/pelegrin/scotch/)                            | [Yes](https://cecill.info/faq.en.html#gpl)                                       |
-| quip      | [GPL](https://github.com/libAtoms/QUIP/blob/public/src/libAtoms/COPYRIGHT)         | Yes                                                                              |
-| fox       | [BSD 3-Clause](https://github.com/andreww/fox/blob/master/LICENSE)                 | Yes                                                                              |
-| reflapack | [BSD 3-Clause](http://www.netlib.org/lapack/LICENSE.txt)                           | Yes                                                                              |
 | scalapack | [BSD 3-Clause](http://www.netlib.org/scalapack/LICENSE)                            | Yes                                                                              |
 | sirius    | [BSD 2-Clause](https://github.com/electronic-structure/SIRIUS/blob/master/LICENSE) | Yes                                                                              |
 | spfft     | [BSD 3-Clause](https://github.com/eth-cscs/SpFFT/blob/master/LICENSE)              | Yes                                                                              |
 | spglib    | [BSD 3-Clause](https://github.com/atztogo/spglib/blob/master/COPYING)              | Yes                                                                              |
-| superlu   | [BSD 3-Clause](https://github.com/xiaoyeli/superlu/blob/master/License.txt)        | Yes                                                                              |
 | valgrind  | [GPL](https://sourceware.org/git/?p=valgrind.git;a=blob_plain;f=COPYING;hb=HEAD)   | Yes                                                                              |
 
 ## For Developers
@@ -156,13 +151,6 @@ proprietary software packages, like e.g. MKL, these have to be installed separat
 - `script/parse_if.py` is a python code for parsing the `IF_XYZ(A|B)` constructs in the script.
   Nested structures will be parsed correctly. See
   [`IF_XYZ` constructs](./README_FOR_DEVELOPERS.md#the-if_xyz-constructs) below.
-
-- `checksums.sha256` contains the pre-calculated SHA256 checksums for the tar balls of all of the
-  packages. This is used by the `download_pkg` macro in `script/toolkit.sh`.
-
-- `arch_base.tmpl` contains the template skeleton structure for the arch files. The
-  `install_cp2k_toolchain` script will set all the variables used in the template file, and then do
-  an eval to expand all of `${VARIABLE}` items in `arch_base.tmpl` to give the cp2k arch files.
 
 ### `enable-FEATURE` options
 

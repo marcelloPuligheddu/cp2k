@@ -1,0 +1,150 @@
+#!/bin/bash -e
+
+# TODO: Review and if possible fix shellcheck errors.
+
+# shellcheck disable=all
+
+[ "${BASH_SOURCE[0]}" ] && SCRIPT_NAME="${BASH_SOURCE[0]}" || SCRIPT_NAME=$0
+SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_NAME")/.." && pwd -P)"
+
+mcl_ver="3.0.0"
+mcl_sha256="3e740582836fe90e04a693cfc5a219826bcac03217f70ea5570bad6aeafda685"
+
+# shellcheck source=/dev/null
+source "${SCRIPT_DIR}"/common_vars.sh
+source "${SCRIPT_DIR}"/tool_kit.sh
+source "${SCRIPT_DIR}"/signal_trap.sh
+source "${INSTALLDIR}"/toolchain.conf
+source "${INSTALLDIR}"/toolchain.env
+
+[ -f "${BUILDDIR}/setup_mcl" ] && rm "${BUILDDIR}/setup_mcl"
+
+! [ -d "${BUILDDIR}" ] && mkdir -p "${BUILDDIR}"
+cd "${BUILDDIR}"
+
+case "${with_mcl:=__INSTALL__}" in
+  __INSTALL__)
+    echo "==================== Installing MCL ===================="
+    pkg_install_dir="${INSTALLDIR}/mcl-${mcl_ver}"
+    install_lock_file="${pkg_install_dir}/install_successful"
+    if verify_checksums "${install_lock_file}"; then
+      echo "libmcl-${mcl_ver} is already installed, skipping it."
+    else
+      retrieve_package "${mcl_sha256}" mcl-${mcl_ver}.tar.gz
+      echo "Installing from scratch into ${pkg_install_dir}"
+      [ -d mcl-${mcl_ver} ] && rm -rf mcl-${mcl_ver}
+      tar -xzf mcl-${mcl_ver}.tar.gz
+
+      # Fix: ensure Fortran wrapper (mclf) links against the core MCL library (mcl)
+      # (otherwise you get undefined _MCL_* at link time)
+      mcl_src_cmake="mcl-${mcl_ver}/src/CMakeLists.txt"
+      mcl_top_cmake="mcl-${mcl_ver}/CMakeLists.txt"
+
+      if [ -f "${mcl_src_cmake}" ]; then
+        mcl_cmake_to_patch="${mcl_src_cmake}"
+      elif [ -f "${mcl_top_cmake}" ]; then
+        mcl_cmake_to_patch="${mcl_top_cmake}"
+      else
+        echo "ERROR: could not find MCL CMakeLists.txt to patch" >&2
+        exit 1
+      fi
+
+      if ! grep -q "target_link_libraries(mclf PRIVATE mcl)" "${mcl_cmake_to_patch}"; then
+        cat >> "${mcl_cmake_to_patch}" <<- 'EOF'
+      
+      # CP2K toolchain fix: ensure Fortran API links against the core library
+      if(TARGET mclf AND TARGET mcl)
+        target_link_libraries(mclf PRIVATE mcl)
+      endif()
+EOF
+      fi
+
+      mkdir "mcl-${mcl_ver}/build"
+      cd "mcl-${mcl_ver}/build"
+
+      # Ensure CMake links MPI correctly (especially on macOS/Homebrew),
+      # by using the MPI wrapper compilers for compile + link steps.
+      MPI_C_COMPILER="$(command -v mpicc || true)"
+      MPI_CXX_COMPILER="$(command -v mpicxx || command -v mpic++ || true)"
+      MPI_Fortran_COMPILER="$(command -v mpifort || true)"
+
+      if [ -n "${MPI_C_COMPILER}" ] && [ -n "${MPI_CXX_COMPILER}" ] && [ -n "${MPI_Fortran_COMPILER}" ]; then
+        CMAKE_MPI_COMPILERS=(
+          -DCMAKE_C_COMPILER="${MPI_C_COMPILER}"
+          -DCMAKE_CXX_COMPILER="${MPI_CXX_COMPILER}"
+          -DCMAKE_Fortran_COMPILER="${MPI_Fortran_COMPILER}"
+          -DMPI_C_COMPILER="${MPI_C_COMPILER}"
+          -DMPI_CXX_COMPILER="${MPI_CXX_COMPILER}"
+          -DMPI_Fortran_COMPILER="${MPI_Fortran_COMPILER}"
+        )
+      else
+        CMAKE_MPI_COMPILERS=()
+      fi
+
+      cmake \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_INSTALL_LIBDIR="lib" \
+        -DBUILD_SHARED_LIBS=YES \
+        -DBUILD_FORTRAN_API=YES \
+        -DCMAKE_INSTALL_PREFIX="${pkg_install_dir}" \
+        -DCMAKE_VERBOSE_MAKEFILE=ON \
+        "${CMAKE_MPI_COMPILERS[@]}" \
+        .. > cmake.log 2>&1 || tail_excerpt cmake.log
+      CMAKE_BUILD_PARALLEL_LEVEL="$(get_nprocs)" cmake --build . > build.log 2>&1 || tail_excerpt build.log
+      CMAKE_BUILD_PARALLEL_LEVEL="$(get_nprocs)" cmake --build . --target install > install.log 2>&1 || tail_excerpt install.log
+
+      write_checksums "${install_lock_file}" "${SCRIPT_DIR}/stage8/$(basename "${SCRIPT_NAME}")"
+    fi
+    MCL_LDFLAGS="-L'${pkg_install_dir}/lib/MiMiC' -Wl,-rpath,'${pkg_install_dir}/lib/MiMiC'"
+    ;;
+  __SYSTEM__)
+    echo "==================== Finding MCL from system paths ===================="
+    check_lib -lmclf "mcl"
+    add_lib_from_paths MCL_LDFLAGS "mclf.*" "$LIB_PATHS"
+    add_lib_from_paths MCL_LDFLAGS "mcl.*" "$LIB_PATHS"
+    ;;
+  __DONTUSE__) ;;
+
+  *)
+    echo "==================== Linking MCL to user paths ===================="
+    pkg_install_dir="${with_mcl}"
+
+    # use the lib64 directory if present (multi-abi distros may link lib/ to lib32/ instead)
+    MCL_LIBDIR="${pkg_install_dir}/lib/MiMiC"
+    [ -d "${pkg_install_dir}/lib64" ] && MCL_LIBDIR="${pkg_install_dir}/lib64/MiMiC"
+
+    check_dir "${MCL_LIBDIR}"
+    MCL_LDFLAGS="-L'${MCL_LIBDIR}' -Wl,-rpath,'$MCL_LIBDIR}'"
+    ;;
+esac
+
+if [ "$with_mcl" != "__DONTUSE__" ]; then
+  MCL_LIBS="-lmcl -lmclf -lstdc++"
+  if [ "$with_mcl" != "__SYSTEM__" ]; then
+    cat << EOF > "${BUILDDIR}/setup_mcl"
+prepend_path LD_LIBRARY_PATH "${pkg_install_dir}/lib/MiMiC"
+prepend_path LD_RUN_PATH "${pkg_install_dir}/lib/MiMiC"
+prepend_path LIBRARY_PATH "${pkg_install_dir}/lib/MiMiC"
+export MCL_LIBS="${MCL_LIBS}"
+export MCL_ROOT="${pkg_install_dir}"
+prepend_path PKG_CONFIG_PATH "$pkg_install_dir/lib/pkgconfig"
+prepend_path CMAKE_PREFIX_PATH "$pkg_install_dir"
+EOF
+  fi
+  cat << EOF >> "${BUILDDIR}/setup_mcl"
+export MCL_VER="${mcl_ver}"
+export MCL_ROOT="${pkg_install_dir}"
+export MCL_LDFLAGS="${MCL_LDFLAGS}"
+export MCL_LIBS="${MCL_LIBS}"
+export CP_DFLAGS="\${CP_DFLAGS} -D__MIMIC"
+export CP_LDFLAGS="\${CP_LDFLAGS} ${MCL_LDFLAGS}"
+export CP_LIBS="\${CP_LIBS} ${MCL_LIBS}"
+EOF
+  filter_setup "${BUILDDIR}/setup_mcl" "${SETUPFILE}"
+fi
+
+load "${BUILDDIR}/setup_mcl"
+write_toolchain_env "${INSTALLDIR}"
+
+cd "${ROOTDIR}"
+report_timing "MCL"

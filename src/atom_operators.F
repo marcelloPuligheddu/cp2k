@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2025 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2026 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -376,6 +376,9 @@ CONTAINS
                   CALL sg_nuclear(integrals%core(1:n, 1:n, l), l, basis%am(1:n, l), basis%am(1:n, l))
                END DO
             CASE (gth_pseudo)
+               IF (potential%gth_pot%soc) THEN
+                  CPWARN("Atom code: GTH SOC is ignored")
+               END IF
                alpha = 1._dp/potential%gth_pot%rc/SQRT(2._dp)
                DO l = 0, lmat
                   n = integrals%n(l)
@@ -600,7 +603,16 @@ CONTAINS
          ! add ecp_pseudo using numerical representation of basis
          IF (potential%ppot_type == ecp_pseudo) THEN
             ! scale 1/r potential
-            integrals%core = -potential%ecp_pot%zion*integrals%core
+            IF (ANY(potential%ecp_pot%nrloc(1:potential%ecp_pot%nloc) == 1)) THEN
+               alpha = 0.0_dp
+               DO k = 1, potential%ecp_pot%nloc
+                  n = potential%ecp_pot%nrloc(k)
+                  IF (n == 1) alpha = alpha + potential%ecp_pot%aloc(k)
+               END DO
+               integrals%core = (alpha - potential%ecp_pot%zion)*integrals%core
+            ELSE
+               integrals%core = -potential%ecp_pot%zion*integrals%core
+            END IF
             ! local potential
             m = basis%grid%nr
             rad => basis%grid%rad
@@ -609,7 +621,11 @@ CONTAINS
             DO k = 1, potential%ecp_pot%nloc
                n = potential%ecp_pot%nrloc(k)
                alpha = potential%ecp_pot%bloc(k)
-               cpot(:) = cpot + potential%ecp_pot%aloc(k)*rad**(n - 2)*EXP(-alpha*rad**2)
+               IF (n == 1) THEN
+                  cpot(:) = cpot + potential%ecp_pot%aloc(k)/rad*(EXP(-alpha*rad**2) - 1.0_dp)
+               ELSE
+                  cpot(:) = cpot + potential%ecp_pot%aloc(k)*rad**(n - 2)*EXP(-alpha*rad**2)
+               END IF
             END DO
             CALL numpot_matrix(integrals%core, cpot, basis, 0)
             ! non local pseudopotential

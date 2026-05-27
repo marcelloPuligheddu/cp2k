@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2025 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2026 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -402,7 +402,7 @@ CONTAINS
                                + 2._dp*ff*basis%dbf(:, i, l)*basis%bf(:, j, l)/rr(:) &
                                + 2._dp*ff*basis%bf(:, i, l)*basis%dbf(:, j, l)/rr(:)
                ELSE
-                  CPABORT("")
+                  CPABORT("Unknown matrix type specified. Check the code!")
                END IF
             END DO
          END DO
@@ -472,12 +472,12 @@ CONTAINS
 
          READ (extunit, *, IOSTAT=er) nbas
 
-         IF (er .NE. 0) THEN
+         IF (er /= 0) THEN
             WRITE (iw, fmt="(' ZMP       | ERROR! Restart file unreadable')")
             WRITE (iw, fmt="(' ZMP       | ERROR! Starting ZMP calculation form initial atomic guess')")
             doguess = .TRUE.
             atom%doread = .FALSE.
-         ELSE IF (nbas(1) .NE. atom%basis%nbas(1)) THEN
+         ELSE IF (nbas(1) /= atom%basis%nbas(1)) THEN
             WRITE (iw, fmt="(' ZMP       | ERROR! Restart file contains a different basis set')")
             WRITE (iw, fmt="(' ZMP       | ERROR! Starting ZMP calculation form initial atomic guess')")
             doguess = .TRUE.
@@ -535,7 +535,7 @@ CONTAINS
       IF (.NOT. ldm) THEN
          READ (extunit, *) nr
 
-         IF (nr .NE. atom%basis%grid%nr) THEN
+         IF (nr /= atom%basis%grid%nr) THEN
             IF (iw > 0) WRITE (iw, fmt="(' ZMP       | ERROR! External grid dimension ',I4,' differs from internal grid ',I4)") &
                nr, atom%basis%grid%nr
             IF (iw > 0) WRITE (iw, fmt="(' ZMP       | ERROR! Stopping ZMP calculation')")
@@ -544,7 +544,7 @@ CONTAINS
 
          DO ir = 1, nr
             READ (extunit, *) rr, density(ir)
-            IF (ABS(rr - atom%basis%grid%rad(ir)) .GT. atom%zmpgrid_tol) THEN
+            IF (ABS(rr - atom%basis%grid%rad(ir)) > atom%zmpgrid_tol) THEN
                IF (iw > 0) WRITE (iw, fmt="(' ZMP       | ERROR! Grid points do not coincide: ')")
                IF (iw > 0) WRITE (iw, fmt='(" ZMP       |",T20,"R_out[bohr]",T36,"R_in[bohr]",T61,"R_diff[bohr]")')
                IF (iw > 0) WRITE (iw, fmt='(" ZMP       |",T14,E24.15,T39,E24.15,T64,E24.15)') &
@@ -622,7 +622,7 @@ CONTAINS
       READ (extunit, *)
       READ (extunit, *) adum, nr
 
-      IF (nr .NE. atom%basis%grid%nr) THEN
+      IF (nr /= atom%basis%grid%nr) THEN
          IF (iw > 0) WRITE (iw, fmt="(' ZMP       | ERROR! External grid dimension ',I4,' differs from internal grid ',I4)") &
             nr, atom%basis%grid%nr
          IF (iw > 0) WRITE (iw, fmt="(' ZMP       | ERROR! Stopping ZMP calculation')")
@@ -630,7 +630,7 @@ CONTAINS
       END IF
       DO ir = 1, nr
          READ (extunit, *) rr, vxc(ir)
-         IF (ABS(rr - atom%basis%grid%rad(ir)) .GT. atom%zmpvxcgrid_tol) THEN
+         IF (ABS(rr - atom%basis%grid%rad(ir)) > atom%zmpvxcgrid_tol) THEN
             IF (iw > 0) WRITE (iw, fmt="(' ZMP       | ERROR! Grid points do not coincide: ')")
             IF (iw > 0) WRITE (iw, fmt='(" ZMP       |",T20,"R_out[bohr]",T36,"R_in[bohr]",T61,"R_diff[bohr]")')
             IF (iw > 0) WRITE (iw, fmt='(" ZMP       |",T14,E24.15,T39,E24.15,T64,E24.15)') &
@@ -1148,8 +1148,6 @@ CONTAINS
                   END DO
                   expa(:) = EXP(-z(:)**2)*ff/(a + b)**(l + 1)
                   SELECT CASE (l)
-                  CASE DEFAULT
-                     CPABORT("")
                   CASE (0)
                      cpot(:) = cpot(:) + 0.25_dp*erfa(:)
                   CASE (1)
@@ -1158,6 +1156,8 @@ CONTAINS
                      cpot(:) = cpot(:) + 0.9375_dp*erfa(:) - expa(:)*(0.875_dp + 0.25_dp*z(:)**2)
                   CASE (3)
                      cpot(:) = cpot(:) + 3.28125_dp*erfa(:) - expa(:)*(3.5625_dp + 1.375_dp*z(:)**2 + 0.25*z(:)**4)
+                  CASE DEFAULT
+                     CPABORT("Invalid l number for GTO specified. Check the code!")
                   END SELECT
                END DO
             END DO
@@ -1183,8 +1183,6 @@ CONTAINS
                   END DO
                   expa(:) = EXP(-z(:)**2)*ff/(a + b)**(l + 1)
                   SELECT CASE (l)
-                  CASE DEFAULT
-                     CPABORT("")
                   CASE (0)
                      cpot(:) = cpot(:) + 0.25_dp*erfa(:)
                   CASE (1)
@@ -1193,6 +1191,8 @@ CONTAINS
                      cpot(:) = cpot(:) + 0.9375_dp*erfa(:) - expa(:)*(0.875_dp + 0.25_dp*z(:)**2)
                   CASE (3)
                      cpot(:) = cpot(:) + 3.28125_dp*erfa(:) - expa(:)*(3.5625_dp + 1.375_dp*z(:)**2 + 0.25*z(:)**4)
+                  CASE DEFAULT
+                     CPABORT("Invalid l number for CGTO specified. Check the code!")
                   END SELECT
                END DO
             END DO
@@ -1442,11 +1442,11 @@ CONTAINS
 
       ! First Bessel transform
       work_inp(:nc) = density(:nc)*wr(:nc)
-      CALL DSYMV('U', nc, 1.0_dp, kernel, nc, work_inp, 1, 0.0_dp, work_out, 1)
+      CALL dsymv('U', nc, 1.0_dp, kernel, nc, work_inp, 1, 0.0_dp, work_out, 1)
 
       ! Second Bessel transform
       work_inp(:nc) = work_out(:nc)*EXP(-r(:nc)**2)/r(:nc)**2*wr(:nc)
-      CALL DSYMV('U', nc, 1.0_dp, kernel, nc, work_inp, 1, 0.0_dp, work_out, 1)
+      CALL dsymv('U', nc, 1.0_dp, kernel, nc, work_inp, 1, 0.0_dp, work_out, 1)
 
       cpot(:nc) = work_out(:nc)*(2.0_dp*REAL(nu, dp) + 1.0_dp)*4.0_dp/pi*omega
 

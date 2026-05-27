@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2025 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2026 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -44,12 +44,13 @@ MODULE qs_grid_atom
    TYPE grid_atom_type
       INTEGER                         :: quadrature = -1
       INTEGER                         :: nr = -1, ng_sphere = -1
+      REAL(dp)                        :: gapw_weight_alpha = -1.0_dp
       REAL(dp), DIMENSION(:), POINTER :: rad => NULL(), rad2 => NULL(), &
                                          wr => NULL(), wa => NULL(), &
                                          azi => NULL(), cos_azi => NULL(), sin_azi => NULL(), &
                                          pol => NULL(), cos_pol => NULL(), sin_pol => NULL(), usin_azi => NULL()
       REAL(dp), DIMENSION(:, :), &
-         POINTER :: rad2l => NULL(), oorad2l => NULL(), weight => NULL()
+         POINTER :: rad2l => NULL(), oorad2l => NULL(), weight => NULL(), gapw_weight_s => NULL()
    END TYPE grid_atom_type
 
    PUBLIC :: allocate_grid_atom, create_grid_atom, deallocate_grid_atom
@@ -82,6 +83,7 @@ CONTAINS
       NULLIFY (grid_atom%wr)
       NULLIFY (grid_atom%wa)
       NULLIFY (grid_atom%weight)
+      NULLIFY (grid_atom%gapw_weight_s)
       NULLIFY (grid_atom%azi)
       NULLIFY (grid_atom%cos_azi)
       NULLIFY (grid_atom%sin_azi)
@@ -124,6 +126,10 @@ CONTAINS
 
          IF (ASSOCIATED(grid_atom%weight)) THEN
             DEALLOCATE (grid_atom%weight)
+         END IF
+
+         IF (ASSOCIATED(grid_atom%gapw_weight_s)) THEN
+            DEALLOCATE (grid_atom%gapw_weight_s)
          END IF
 
          IF (ASSOCIATED(grid_atom%azi)) THEN
@@ -602,15 +608,12 @@ CONTAINS
       INTEGER                                            :: i
       REAL(dp)                                           :: cost, f, sint, sint2, t, w, x
 
-      f = pi/REAL(n + 1, dp)
+      f = pi/REAL(n + 1, KIND=dp)
 
       SELECT CASE (radial_quadrature)
-
       CASE (do_gapw_gcs)
-
-         !     *** Gauss-Chebyshev quadrature formula of the second kind ***
-         !     *** u [-1,+1] -> r [0,infinity] =>  r = (1 + u)/(1 - u)   ***
-
+         ! Gauss-Chebyshev quadrature formula of the second kind
+         ! u [-1,+1] -> r [0,infinity] =>  r = (1 + u)/(1 - u)
          DO i = 1, n
             t = REAL(i, dp)*f
             x = COS(t)
@@ -620,12 +623,9 @@ CONTAINS
             wr(i) = w/SQRT(1.0_dp - x**2)
             wr(i) = 2.0_dp*wr(i)*r2(i)/(1.0_dp - x)**2
          END DO
-
       CASE (do_gapw_gct)
-
-         !     *** Transformed Gauss-Chebyshev quadrature formula of the second kind ***
-         !     *** u [-1,+1] -> r [0,infinity] => r = (1 + u)/(1 - u)                ***
-
+         ! Transformed Gauss-Chebyshev quadrature formula of the second kind
+         ! u [-1,+1] -> r [0,infinity] => r = (1 + u)/(1 - u)
          DO i = 1, n
             t = REAL(i, dp)*f
             cost = COS(t)
@@ -638,12 +638,9 @@ CONTAINS
             r2(n + 1 - i) = r(n + 1 - i)**2
             wr(n + 1 - i) = 2.0_dp*w*r2(n + 1 - i)/(1.0_dp - x)**2
          END DO
-
       CASE (do_gapw_log)
-
-         !     *** Transformed Gauss-Chebyshev quadrature formula of the second kind ***
-         !     *** u [-1,+1] -> r [0,infinity] => r = ln(2/(1 - u))/ln(2)            ***
-
+         ! Logarithmic transformed Gauss-Chebyshev quadrature formula of the second kind
+         ! u [-1,+1] -> r [0,infinity] => r = ln(2/(1 - u))/ln(2)
          DO i = 1, n
             t = REAL(i, dp)*f
             cost = COS(t)
@@ -656,11 +653,8 @@ CONTAINS
             r2(n + 1 - i) = r(n + 1 - i)**2
             wr(n + 1 - i) = w*r2(n + 1 - i)/(LOG(2.0_dp)*(1.0_dp - x))
          END DO
-
       CASE DEFAULT
-
          CPABORT("Invalid radial quadrature type specified")
-
       END SELECT
 
    END SUBROUTINE radial_grid

@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2025 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2026 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -13,7 +13,6 @@
 ! **************************************************************************************************
 MODULE bsse
    USE atomic_kind_types,               ONLY: get_atomic_kind
-   USE cell_types,                      ONLY: cell_type
    USE cp2k_info,                       ONLY: write_restart_header
    USE cp_external_control,             ONLY: external_control
    USE cp_log_handling,                 ONLY: cp_get_default_logger,&
@@ -236,7 +235,6 @@ CONTAINS
                                                             my_targ, n_rep, num_of_frag, old_size, &
                                                             present_charge, present_multpl
       INTEGER, DIMENSION(:), POINTER                     :: atom_index, atom_list, my_conf, tmplist
-      TYPE(cell_type), POINTER                           :: cell
       TYPE(cp_subsys_type), POINTER                      :: subsys
       TYPE(mp_para_env_type), POINTER                    :: para_env
       TYPE(particle_list_type), POINTER                  :: particles
@@ -245,7 +243,7 @@ CONTAINS
 
       CALL section_vals_get(n_frags, n_repetition=num_of_frag)
       CPASSERT(SIZE(conf) == num_of_frag)
-      NULLIFY (subsys, particles, para_env, cell, atom_index, atom_type, tmplist, &
+      NULLIFY (subsys, particles, para_env, atom_index, atom_type, tmplist, &
                force_env_section)
       CALL force_env_get(force_env, force_env_section=force_env_section)
       CALL section_vals_val_get(force_env_section, "METHOD", i_val=method_name_id)
@@ -255,8 +253,7 @@ CONTAINS
 
       ALLOCATE (my_conf(SIZE(conf)))
       my_conf = conf
-      CALL force_env_get(force_env=force_env, subsys=subsys, para_env=para_env, &
-                         cell=cell)
+      CALL force_env_get(force_env=force_env, subsys=subsys, para_env=para_env)
       CALL cp_subsys_get(subsys, particles=particles)
       isize = 0
       ALLOCATE (atom_index(isize))
@@ -313,7 +310,7 @@ CONTAINS
             TYPE(cp_subsys_type), POINTER                      :: subsys_loc
             NULLIFY (subsys_loc)
             CALL create_small_subsys(subsys_loc, big_subsys=subsys, &
-                                     small_para_env=para_env, small_cell=cell, sub_atom_index=atom_index, &
+                                     small_para_env=para_env, small_cell=subsys%cell, sub_atom_index=atom_index, &
                                      sub_atom_kind_name=atom_type, para_env=para_env, &
                                      force_env_section=force_env_section, subsys_section=subsys_section)
 
@@ -334,7 +331,7 @@ CONTAINS
             DEALLOCATE (qs_env)
          END BLOCK
       ELSE
-         CPABORT("")
+         CPABORT("BSSE calculation is only available for QuickStep method!")
       END IF
       DEALLOCATE (atom_index)
       DEALLOCATE (atom_type)
@@ -373,11 +370,11 @@ CONTAINS
       iw = cp_print_key_unit_nr(logger, bsse_section, "PRINT%PROGRAM_RUN_INFO", &
                                 extension=".log")
       IF (iw > 0) THEN
-         WRITE (conf_s, fmt="(1000I0)", iostat=istat) conf; 
-         IF (istat .NE. 0) conf_s = "exceeded"
+         WRITE (conf_s, fmt="(1000I0)", iostat=istat) conf;
+         IF (istat /= 0) conf_s = "exceeded"
          CALL compress(conf_s, full=.TRUE.)
-         WRITE (conf_loc_s, fmt="(1000I0)", iostat=istat) conf_loc; 
-         IF (istat .NE. 0) conf_loc_s = "exceeded"
+         WRITE (conf_loc_s, fmt="(1000I0)", iostat=istat) conf_loc;
+         IF (istat /= 0) conf_loc_s = "exceeded"
          CALL compress(conf_loc_s, full=.TRUE.)
 
          WRITE (UNIT=iw, FMT="(/,T2,A)") REPEAT("-", 79)
@@ -487,7 +484,7 @@ CONTAINS
          WRITE (UNIT=iw, FMT="(T2,A,T20,A,F16.6,T80,A)") "-", "CP-corrected Total energy:", SUM(Em), "-"
          WRITE (UNIT=iw, FMT="(T2,A,T80,A)") "-", "-"
          DO i = 1, SIZE(conf, 1)
-            IF (i .GT. 1) THEN
+            IF (i > 1) THEN
                IF (SUM(conf(i - 1, :)) == 1 .AND. SUM(conf(i, :)) /= 1) THEN
                   WRITE (UNIT=iw, FMT="(T2,A,T80,A)") "-", "-"
                END IF

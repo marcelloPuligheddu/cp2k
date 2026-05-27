@@ -6,8 +6,8 @@
 [ "${BASH_SOURCE[0]}" ] && SCRIPT_NAME="${BASH_SOURCE[0]}" || SCRIPT_NAME=$0
 SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_NAME")/.." && pwd -P)"
 
-fftw_ver="3.3.10"
-fftw_sha256="56c932549852cddcfafdab3820b0200c7742675be92179e59e6215b340e26467"
+fftw_ver="3.3.11"
+fftw_sha256="5630c24cdeb33b131612f7eb4b1a9934234754f9f388ff8617458d0be6f239a1"
 fftw_pkg="fftw-${fftw_ver}.tar.gz"
 
 source "${SCRIPT_DIR}"/common_vars.sh
@@ -18,9 +18,6 @@ source "${INSTALLDIR}"/toolchain.env
 
 [ -f "${BUILDDIR}/setup_fftw" ] && rm "${BUILDDIR}/setup_fftw"
 
-FFTW_CFLAGS=''
-FFTW_LDFLAGS=''
-FFTW_LIBS=''
 ! [ -d "${BUILDDIR}" ] && mkdir -p "${BUILDDIR}"
 cd "${BUILDDIR}"
 
@@ -34,11 +31,7 @@ case "$with_fftw" in
     if verify_checksums "${install_lock_file}"; then
       echo "fftw-${fftw_ver} is already installed, skipping it."
     else
-      if [ -f ${fftw_pkg} ]; then
-        echo "${fftw_pkg} is found"
-      else
-        download_pkg_from_cp2k_org "${fftw_sha256}" "${fftw_pkg}"
-      fi
+      retrieve_package "${fftw_sha256}" "${fftw_pkg}"
       echo "Installing from scratch into ${pkg_install_dir}"
       [ -d fftw-${fftw_ver} ] && rm -rf fftw-${fftw_ver}
       tar -xzf ${fftw_pkg}
@@ -52,12 +45,16 @@ case "$with_fftw" in
           grep '\bavx\b' /proc/cpuinfo 1> /dev/null && FFTW_FLAGS="${FFTW_FLAGS} --enable-avx"
           grep '\bavx2\b' /proc/cpuinfo 1> /dev/null && FFTW_FLAGS="${FFTW_FLAGS} --enable-avx2"
           grep '\bavx512f\b' /proc/cpuinfo 1> /dev/null && FFTW_FLAGS="${FFTW_FLAGS} --enable-avx512"
+          grep '\bsse2\b' /proc/cpuinfo 1> /dev/null && FFTW_FLAGS="${FFTW_FLAGS} --enable-sse2"
         fi
       fi
-      ./configure --prefix=${pkg_install_dir} --libdir="${pkg_install_dir}/lib" ${FFTW_FLAGS} \
-        > configure.log 2>&1 || tail -n ${LOG_LINES} configure.log
-      make -j $(get_nprocs) > make.log 2>&1 || tail -n ${LOG_LINES} make.log
-      make install > install.log 2>&1 || tail -n ${LOG_LINES} install.log
+      ./configure CFLAGS="${CFLAGS} -std=c17" \
+        --prefix=${pkg_install_dir} \
+        --libdir="${pkg_install_dir}/lib" \
+        ${FFTW_FLAGS} \
+        > configure.log 2>&1 || tail_excerpt configure.log
+      make -j $(get_nprocs) > make.log 2>&1 || tail_excerpt make.log
+      make install > install.log 2>&1 || tail_excerpt install.log
       cd ..
       write_checksums "${install_lock_file}" "${SCRIPT_DIR}/stage3/$(basename ${SCRIPT_NAME})"
     fi
@@ -69,6 +66,13 @@ case "$with_fftw" in
     check_lib -lfftw3 "FFTW"
     check_lib -lfftw3_omp "FFTW"
     [ "${MPI_MODE}" != "no" ] && check_lib -lfftw3_mpi "FFTW"
+    pkg_install_dir="$(dirname $(dirname $(find_in_paths "libfftw3.*" $LIB_PATHS)))"
+    # Deal with the condition that libfftw3 is installed in "/usr/lib/x86_64-linux-gnu"
+    if [[ "${pkg_install_dir}" == "/usr/lib"* ]]; then
+      pkg_install_dir="/usr"
+    else
+      INCLUDE_PATHS=${INCLUDE_PATHS}:"$pkg_install_dir/include"
+    fi
     add_include_from_paths FFTW_CFLAGS "fftw3.h" FFTW_INC ${INCLUDE_PATHS}
     add_lib_from_paths FFTW_LDFLAGS "libfftw3.*" ${LIB_PATHS}
     ;;
@@ -109,10 +113,10 @@ export CP_DFLAGS="\${CP_DFLAGS} -D__FFTW3 IF_COVERAGE(IF_MPI(|-U__FFTW3)|)"
 export CP_CFLAGS="\${CP_CFLAGS} ${FFTW_CFLAGS}"
 export CP_LDFLAGS="\${CP_LDFLAGS} ${FFTW_LDFLAGS}"
 export CP_LIBS="${FFTW_LIBS} \${CP_LIBS}"
-export FFTW_ROOT=${FFTW_ROOT:-${pkg_install_dir}}
-export FFTW3_ROOT=${pkg_install_dir}
+export FFTW_ROOT="${FFTW_ROOT:-${pkg_install_dir}}"
+export FFTW3_ROOT="${FFTW_ROOT:-${pkg_install_dir}}"
 EOF
-  cat "${BUILDDIR}/setup_fftw" >> $SETUPFILE
+  filter_setup "${BUILDDIR}/setup_fftw" "${SETUPFILE}"
 fi
 cd "${ROOTDIR}"
 

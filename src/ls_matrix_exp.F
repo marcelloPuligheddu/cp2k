@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2025 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2026 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -13,9 +13,11 @@
 MODULE ls_matrix_exp
 
    USE cp_dbcsr_api,                    ONLY: &
-        dbcsr_add, dbcsr_add_on_diag, dbcsr_copy, dbcsr_create, dbcsr_deallocate_matrix, &
-        dbcsr_filter, dbcsr_frobenius_norm, dbcsr_multiply, dbcsr_p_type, dbcsr_release, &
-        dbcsr_scale, dbcsr_set, dbcsr_transposed, dbcsr_type
+        dbcsr_add, dbcsr_copy, dbcsr_create, dbcsr_deallocate_matrix, dbcsr_filter, &
+        dbcsr_multiply, dbcsr_p_type, dbcsr_release, dbcsr_scale, dbcsr_set, dbcsr_transposed, &
+        dbcsr_type
+   USE cp_dbcsr_contrib,                ONLY: dbcsr_add_on_diag,&
+                                              dbcsr_frobenius_norm
    USE cp_log_handling,                 ONLY: cp_logger_get_default_io_unit
    USE kinds,                           ONLY: dp
 #include "./base/base_uses.f90"
@@ -217,7 +219,7 @@ CONTAINS
       END DO
 
       !Square the matrices, due to the scaling and squaring procedure
-      IF (nsquare .GT. 0) THEN
+      IF (nsquare > 0) THEN
          DO i = 1, nsquare
             CALL cp_complex_dbcsr_gemm_3("N", "N", one, Tres_re, Tres_im, &
                                          Tres_re, Tres_im, zero, exp_H(1)%matrix, exp_H(2)%matrix, &
@@ -311,7 +313,7 @@ CONTAINS
          CALL dbcsr_copy(T1_im, T2_im)
       END DO
 
-      IF (nsquare .GT. 0) THEN
+      IF (nsquare > 0) THEN
          DO i = 1, nsquare
             ! T2 = Tres * Tres
             CALL cp_complex_dbcsr_gemm_3("N", "N", alpha=1.0_dp, beta=0.0_dp, &

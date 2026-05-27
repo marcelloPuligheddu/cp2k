@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2025 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2026 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -12,6 +12,7 @@
 MODULE qs_force
    USE atomic_kind_types,               ONLY: atomic_kind_type,&
                                               get_atomic_kind_set
+   USE cell_types,                      ONLY: cell_type
    USE cp_control_types,                ONLY: dft_control_type
    USE cp_dbcsr_api,                    ONLY: dbcsr_copy,&
                                               dbcsr_p_type,&
@@ -33,9 +34,9 @@ MODULE qs_force
    USE energy_corrections,              ONLY: energy_correction
    USE excited_states,                  ONLY: excited_state_energy
    USE hfx_exx,                         ONLY: calculate_exx
-   USE input_constants,                 ONLY: ri_mp2_laplace,&
-                                              ri_mp2_method_gpw,&
-                                              ri_rpa_method_gpw
+   USE input_constants,                 ONLY: &
+        do_method_gapw, do_method_gapw_xc, do_method_gpw, do_method_lrigpw, do_method_ofgpw, &
+        do_method_rigpw, ri_mp2_laplace, ri_mp2_method_gpw, ri_rpa_method_gpw
    USE input_section_types,             ONLY: section_vals_get,&
                                               section_vals_get_subs_vals,&
                                               section_vals_type,&
@@ -77,7 +78,10 @@ MODULE qs_force
                                               velocity_gauge_nl_force
    USE se_core_core,                    ONLY: se_core_core_interaction
    USE se_core_matrix,                  ONLY: build_se_core_matrix
-   USE virial_types,                    ONLY: symmetrize_virial,&
+   USE tblite_interface,                ONLY: build_tblite_matrices,&
+                                              tb_reference_cli_compare
+   USE virial_types,                    ONLY: project_virial_to_periodic_subspace,&
+                                              symmetrize_virial,&
                                               virial_type
    USE xtb_matrices,                    ONLY: build_xtb_matrices
 #include "./base/base_uses.f90"
@@ -139,6 +143,7 @@ CONTAINS
                                                             perform_ec, reuse_hfx
       REAL(dp)                                           :: dummy_real, dummy_real2(2)
       TYPE(atomic_kind_type), DIMENSION(:), POINTER      :: atomic_kind_set
+      TYPE(cell_type), POINTER                           :: cell
       TYPE(cp_logger_type), POINTER                      :: logger
       TYPE(dbcsr_p_type), DIMENSION(:), POINTER          :: matrix_s, matrix_w, rho_ao
       TYPE(dbcsr_p_type), DIMENSION(:, :), POINTER       :: matrix_w_kp
@@ -196,7 +201,7 @@ CONTAINS
          dft_control%qs_control%cdft_control%save_pot = .TRUE.
       END IF
 
-      ! recalculate energy with forces
+      ! recalculate energy and the response vector for the Z-vector linear equation system if calc_force = .true.
       CALL qs_energies(qs_env, calc_forces=.TRUE.)
 
       NULLIFY (para_env)
@@ -240,9 +245,9 @@ CONTAINS
       ! Add non-Pulay contribution of DFT+U to W matrix, since it has also to be
       ! digested with overlap matrix derivatives
       IF (dft_control%dft_plus_u) THEN
-         NULLIFY (matrix_w)
-         CALL get_qs_env(qs_env, matrix_w=matrix_w)
-         CALL plus_u(qs_env=qs_env, matrix_w=matrix_w)
+         NULLIFY (matrix_w_kp)
+         CALL get_qs_env(qs_env, matrix_w_kp=matrix_w_kp)
+         CALL plus_u(qs_env=qs_env, matrix_w=matrix_w_kp)
       END IF
 
       ! Write W Matrix to output (if requested)
@@ -287,7 +292,11 @@ CONTAINS
          CALL calculate_dftb_dispersion(qs_env=qs_env, para_env=para_env, &
                                         calculate_forces=.TRUE.)
       ELSEIF (dft_control%qs_control%xtb) THEN
-         CALL build_xtb_matrices(qs_env=qs_env, calculate_forces=.TRUE.)
+         IF (dft_control%qs_control%xtb_control%do_tblite) THEN
+            CALL build_tblite_matrices(qs_env=qs_env, calculate_forces=.TRUE.)
+         ELSE
+            CALL build_xtb_matrices(qs_env=qs_env, calculate_forces=.TRUE.)
+         END IF
       ELSEIF (perform_ec) THEN
          ! Calculates core and grid based forces
          CALL energy_correction(qs_env, ec_init=.FALSE., calculate_forces=.TRUE.)
@@ -369,6 +378,8 @@ CONTAINS
       END IF
 
       ! Excited state forces
+      ! Solve the response linear equation system for the Z-vector method
+      ! and calculate remaining terms of the force
       CALL excited_state_energy(qs_env, calculate_forces=.TRUE.)
 
       ! replicate forces (get current pointer)
@@ -389,8 +400,8 @@ CONTAINS
          particle_set(iatom)%f = -force(ikind)%total(1:3, i)
       END DO
 
-      NULLIFY (virial, energy)
-      CALL get_qs_env(qs_env=qs_env, virial=virial, energy=energy)
+      NULLIFY (cell, virial, energy)
+      CALL get_qs_env(qs_env=qs_env, cell=cell, virial=virial, energy=energy)
       IF (virial%pv_availability) THEN
          CALL para_env%sum(virial%pv_overlap)
          CALL para_env%sum(virial%pv_ekinetic)
@@ -439,6 +450,17 @@ CONTAINS
                ! There should be a more elegant solution to that ...
             END DO
          END IF
+         IF ((.NOT. virial%pv_numer) .AND. COUNT(cell%perd /= 0) == 2) THEN
+            SELECT CASE (dft_control%qs_control%method_id)
+            CASE (do_method_gapw, do_method_gapw_xc, do_method_gpw, &
+                  do_method_lrigpw, do_method_ofgpw, do_method_rigpw)
+               CALL project_virial_to_periodic_subspace(virial, cell%perd)
+            END SELECT
+         END IF
+      END IF
+
+      IF (dft_control%qs_control%xtb .AND. dft_control%qs_control%xtb_control%do_tblite) THEN
+         CALL tb_reference_cli_compare(qs_env)
       END IF
 
       output_unit = cp_print_key_unit_nr(logger, qs_env%input, "DFT%PRINT%DERIVATIVES", &
@@ -593,10 +615,12 @@ CONTAINS
                   iatom, ikind, "      gth_nlcc", qs_force(ikind)%gth_nlcc(1:3, i), &
                   iatom, ikind, "      gth_ppnl", qs_force(ikind)%gth_ppnl(1:3, i), &
                   iatom, ikind, " all_potential", qs_force(ikind)%all_potential(1:3, i), &
+                  iatom, ikind, "cneo_potential", qs_force(ikind)%cneo_potential(1:3, i), &
                   iatom, ikind, "  core_overlap", qs_force(ikind)%core_overlap(1:3, i), &
                   iatom, ikind, "      rho_core", qs_force(ikind)%rho_core(1:3, i), &
                   iatom, ikind, "      rho_elec", qs_force(ikind)%rho_elec(1:3, i), &
                   iatom, ikind, "  rho_lri_elec", qs_force(ikind)%rho_lri_elec(1:3, i), &
+                  iatom, ikind, "  rho_cneo_nuc", qs_force(ikind)%rho_cneo_nuc(1:3, i), &
                   iatom, ikind, "     vhxc_atom", qs_force(ikind)%vhxc_atom(1:3, i), &
                   iatom, ikind, "   g0s_Vh_elec", qs_force(ikind)%g0s_Vh_elec(1:3, i), &
                   iatom, ikind, "      ch_pulay", qs_force(ikind)%ch_pulay(1:3, i), &

@@ -16,9 +16,6 @@ source "${INSTALLDIR}"/toolchain.env
 
 [ -f "${BUILDDIR}/setup_libxc" ] && rm "${BUILDDIR}/setup_libxc"
 
-LIBXC_CFLAGS=""
-LIBXC_LDFLAGS=""
-LIBXC_LIBS=""
 ! [ -d "${BUILDDIR}" ] && mkdir -p "${BUILDDIR}"
 cd "${BUILDDIR}"
 
@@ -30,28 +27,44 @@ case "$with_libxc" in
     if verify_checksums "${install_lock_file}"; then
       echo "libxc-${libxc_ver} is already installed, skipping it."
     else
-      if [ -f libxc-${libxc_ver}.tar.bz2 ]; then
-        echo "libxc-${libxc_ver}.tar.bz2 is found"
-      else
-        download_pkg_from_cp2k_org "${libxc_sha256}" "libxc-${libxc_ver}.tar.bz2"
-      fi
+      retrieve_package "${libxc_sha256}" "libxc-${libxc_ver}.tar.bz2"
       echo "Installing from scratch into ${pkg_install_dir}"
       [ -d libxc-${libxc_ver} ] && rm -rf libxc-${libxc_ver}
       tar -xjf libxc-${libxc_ver}.tar.bz2
       cd libxc-${libxc_ver}
       mkdir build
       cd build
+
+      # Lower the optimization level of KXC functionals for GCC to reduce time cost
+      # LXC functionals are not used so ignore them
+      if [ "${with_gcc}" != "__DONTUSE__" ]; then
+        if [ "${with_intel}" = "__DONTUSE__" ] && [ "${with_amd}" = "__DONTUSE__" ]; then
+          MAPLE2C_DIR="../src/maple2c"
+          for f in "$MAPLE2C_DIR"/gga_exc/*.c "$MAPLE2C_DIR"/mgga_exc/*.c "$MAPLE2C_DIR"/lda_exc/*.c; do
+            [ -f "$f" ] || continue
+            if grep -q "^func_kxc_" "$f" && ! grep -q "__attribute__((optimize" "$f"; then
+              sed -i 's/^func_kxc_/__attribute__((optimize("O1"))) func_kxc_/' "$f"
+            fi
+          done
+          LIBXC_CFLAGS="${CFLAGS} -fno-var-tracking"
+        else
+          LIBXC_CFLAGS="${CFLAGS}"
+        fi
+      fi
+
       # CP2K does not make use of fourth derivatives, so skip their compilation with -DDISABLE_KXC=OFF
-      cmake \
+      # Add "-DCMAKE_POLICY_VERSION_MINIMUM=3.5" to keep legacy compatibility for CMake version 4.x
+      CFLAGS="${LIBXC_CFLAGS}" cmake \
         -DCMAKE_INSTALL_PREFIX="${pkg_install_dir}" \
         -DCMAKE_INSTALL_LIBDIR=lib \
         -DCMAKE_VERBOSE_MAKEFILE=ON \
         -DBUILD_TESTING=OFF \
         -DENABLE_FORTRAN=ON \
         -DDISABLE_KXC=OFF \
-        .. > configure.log 2>&1 || tail -n ${LOG_LINES} configure.log
-      make -j $(get_nprocs) > make.log 2>&1 || tail -n ${LOG_LINES} make.log
-      make install > install.log 2>&1 || tail -n ${LOG_LINES} install.log
+        -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
+        .. > configure.log 2>&1 || tail_excerpt configure.log
+      make -j $(get_nprocs) > make.log 2>&1 || tail_excerpt make.log
+      make install > install.log 2>&1 || tail_excerpt install.log
       write_checksums "${install_lock_file}" "${SCRIPT_DIR}/stage3/$(basename ${SCRIPT_NAME})"
       cd ..
     fi
@@ -62,6 +75,10 @@ case "$with_libxc" in
     echo "==================== Finding LIBXC from system paths ===================="
     check_lib -lxcf03 "libxc"
     check_lib -lxc "libxc"
+    if [ "$(find_in_paths "libxc.*" $LIB_PATHS)" != "__FALSE__" ]; then
+      pkg_install_dir="$(dirname $(dirname $(find_in_paths "libscalapack*" $LIB_PATHS)))"
+      INCLUDE_PATHS=${INCLUDE_PATHS}:"$pkg_install_dir/include"
+    fi
     add_include_from_paths LIBXC_CFLAGS "xc.h" $INCLUDE_PATHS
     add_lib_from_paths LIBXC_LDFLAGS "libxc.*" $LIB_PATHS
     ;;
@@ -90,7 +107,6 @@ prepend_path CPATH "$pkg_install_dir/include"
 prepend_path PKG_CONFIG_PATH "$pkg_install_dir/lib/pkgconfig"
 prepend_path CMAKE_PREFIX_PATH "$pkg_install_dir"
 EOF
-    cat "${BUILDDIR}/setup_libxc" >> $SETUPFILE
   fi
   cat << EOF >> "${BUILDDIR}/setup_libxc"
 export LIBXC_CFLAGS="${LIBXC_CFLAGS}"
@@ -102,6 +118,7 @@ export CP_LDFLAGS="\${CP_LDFLAGS} ${LIBXC_LDFLAGS}"
 export CP_LIBS="${LIBXC_LIBS} \${CP_LIBS}"
 export LIBXC_ROOT="${pkg_install_dir}"
 EOF
+  filter_setup "${BUILDDIR}/setup_libxc" "${SETUPFILE}"
 fi
 
 load "${BUILDDIR}/setup_libxc"

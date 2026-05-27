@@ -1,123 +1,211 @@
 # Build from Source
 
-CP2K can be compiled with the [CMake] build system. [CMake] is used to detect CP2K dependencies and
-configure the compilation process.
+CP2K uses the [CMake](https://cmake.org) build system, which detects dependencies and controls the
+compilation process. The dependencies have to be installed in advance.
 
-CP2K dependencies should be installed independently, either manually or using a package manager. See
-[CP2K's Spack Documentation] for documentation on how to use the [Spack] package manager to build
-CP2K's dependencies.
+Currently, CP2K offers two convenient ways for building CP2K from source with its dependencies:
 
-## Using CMake
+- The toolchain scripts, which customize and install the required dependencies in a single step,
+  thereby preparing the environment for compiling CP2K. Run `install_cp2k_toolchain.sh` under
+  `cp2k/tools/toolchain` to perform the toolchain steps; for detailed information, see
+  <https://github.com/cp2k/cp2k/blob/master/tools/toolchain/README.md>. After building toolchain,
+  you can use `build_cp2k.sh` to build and install CP2K with prepared toolchain environment.
+- The `make_cp2k.sh` script, a more modern and automated approach which leverages
+  [Spack](https://spack.readthedocs.io) to install the dependencies and subsequently build CP2K.
 
-The most common [CMake] workflow is to create a `build/` directory in the root directory of the
-source tree, and run [CMake] as follows:
+```{note}
+- The toolchain does not cover all optional dependencies due to their complicated dependencies
+  requirements, such as DLA-Future. SIRIUS with complete support (including DFT-D4 and NLCG) is
+  also unavailable via toolchain due to the same reason.
+- The latter approach with Spack is only available for the current
+[CP2K master branch](https://github.com/cp2k/cp2k) and CP2K release versions `2026.02` and newer.
+```
+
+## make_cp2k.sh
+
+The `make_cp2k.sh` script supports and facilitates the build of CP2K and its dependencies from
+scratch using [Spack](https://spack.readthedocs.io) and
+[CMake](https://cmake.org/cmake/help/latest/index.html). The build is performed locally within the
+folder `CP2K_ROOT` which defaults to the current working directory. This should be a `cp2k` folder
+containing the CP2K source tree which can be download with
+
+```
+> git clone https://github.com/cp2k/cp2k.git cp2k
+```
+
+and after
+
+```
+> cd cp2k
+```
+
+this script can be run using the default options with
+
+```
+> ./make_cp2k.sh
+```
+
+The flags `-h` or `--help` print the available options.
+
+<details>
+
+<summary>Click to see all options (of version 1.7)</summary>
+
+```
+Usage: make_cp2k.sh [-bd | --build_deps]
+                    [-bd_only | --build_deps_only]
+                    [-bsl | --build_static_libcp2k]
+                    [-bt | --build_type (Debug | Release | RelWithDebInfo)]
+                    [-cray]
+                    [-cv | --cp2k_version (pdbg | psmp | sdbg | ssmp | ssmp-static)]
+                    [-df | --disable | --disable_feature (all | FEATURE | PACKAGE | none)
+                    [-ef | --enable | --enable_feature (all | FEATURE | PACKAGE | none)
+                    [-gm | -gpu  | --gpu_model (<CUDA SM code> | P100 | V100 | T400 | A100 | H100 | H200 | GH200 | none)]
+                    [-gv | --gcc_version (10 | 11 | 12 | 13 | 14 | 15 | 16)]
+                    [-h | --help]
+                    [-ip | --install_path PATH]
+                    [-j #PROCESSES]
+                    [-mpi | --mpi_mode (mpich | no | openmpi)]
+                    [-np | --num_packages #PACKAGES]
+                    [-rc | --rebuild_cp2k]
+                    [-t | -test "TESTOPTS"]
+                    [-uc | --use_cache (folder | minio | no | none)]
+                    [-ue | --use_externals]
+                    [-v | --verbose]
+
+Flags:
+ --build_deps          : Force a rebuild of all CP2K dependencies from scratch (removes the spack folder)
+ --build_deps_only     : Rebuild ONLY the CP2K dependencies from scratch (removes the spack folder)
+ --build_static_libcp2k: Build a static CP2K library libcp2k.a instead of the default shared one libcp2k.so"
+ --build_type          : Set preferred CMake build type for CP2K (default: Release)
+ --cp2k_version        : CP2K version to be built (default: psmp)
+ -cray                 : Use Cray specific spack configuration
+ --disable_local_cache : Don't add local spack cache
+ --enable_feature      : Enable feature or package (default: all)
+ --disable_feature     : Disable feature or package
+ --help                : Print this help information
+ --gcc_version         : Use the specified GCC version (default: automatically decided by spack)
+ --gpu_model           : Select GPU model (default: none)
+ --install_path        : Define the CP2K installation path (default: ./install)
+ -j                    : Maximum number of processes used in parallel
+ --mpi_mode            : Set preferred MPI mode (default: mpich)
+ --num_packages        : Maximum number of packages built by spack in parallel (default: 4)
+ --rebuild_cp2k        : Rebuild CP2K: removes the build folder (default: no)
+ --test                : Perform a regression test run after a successful build
+ --use_cache           : Use a "folder", a "MinIO" object storage container (requires podman) or "no" cache
+                         Set the environment variable SPACK_CACHE to specify the folder name, e.g.
+                         SPACK_CACHE="file://${CP2K_ROOT}/spack_cache" (default)
+ --use_externals       : Use external packages installed on the host system. This results in much
+                         faster build times, but it can also cause conflicts with outdated packages
+                         pulled in from the host system, e.g. old python or gcc versions
+ --verbose             : Write verbose output
+
+Hints:
+ - Remove the folder ${CP2K_ROOT}/build to (re)build CP2K from scratch
+   (see also --rebuild_cp2k flag)
+ - Remove the folder ${CP2K_ROOT}/spack to (re)build CP2K and all its dependencies from scratch
+   (see also --build_deps flag)
+ - The folder ${CP2K_ROOT}/install is updated after each successful run
+
+Packages: all | ace | cosma | deepmd | dftd4 | dlaf | elpa | fftw3 | greenx | hdf5 | libint2 |
+          libsmeagol | libtorch | libvdwxc | libxsmm | mimic | openpmd | pexsi | plumed | sirius |
+          spfft | spglib | spla | tblite | trexio | vori
+
+Features: cray_pm_accel_energy | cusolver_mp | dbm_gpu | elpa_gpu | grid_gpu | pw_gpu |
+          spla_gemm_offloading | unified_memory
+```
+
+</details>
+
+The first run will take longer as it will build all requested CP2K dependencies with Spack. The
+Spack installation is kept fully local in the subfolder `cp2k/spack` which corresponds to the
+`tools/toolchain/install` folder created by the CP2K toolchain.
+
+Subsequent runs of the `make_cp2k.sh` script will use the software stack from that `cp2k/spack`
+folder. A rebuild of all CP2K dependencies can be enforced simply by removing or renaming the folder
+`cp2k/spack`. The latter allows for keeping different software stacks (see also `-bd` and `-bd_only`
+flags).
+
+It is recommended to store already compiled packages in a cache (default). This will accelerate the
+(re)build of the CP2K dependencies with Spack significantly (see -uc flag).
+
+After the CP2K dependencies are built with Spack, CP2K itself is built and installed using `CMake`
+in the subfolders `cp2k/build` and `cp2k/install`, respectively.
+
+Subsequent runs of the script will use the CMake configuration in the subfolder `cp2k/build`. A
+rebuild of CP2K from scratch can be enforced by removing or renaming that subfolder.
+
+A CP2K regression run can be launched automatically by adding the flag `-t ""` (or `--test ""`).
+This flag expects a string with the `TESTOPTS`, e.g.
+
+```
+> ./make_cp2k.sh -t "--maxtasks 8 --restrictdir QS/regtest-gpw-1"
+```
+
+Alternatively, the script `cp2k/install/bin/run_tests` can be launched after a successful CP2K
+build. Usage examples are printed at the end of a (successful) `make_cp2k.sh` run.
+
+### Docker containers
+
+Check the folder [`cp2k/tools/docker`](https://github.com/cp2k/cp2k/tree/master/tools/docker) for
+Docker files with the name pattern `Dockerfile.test_spack_*` like `Dockerfile.test_spack_psmp` to
+build Docker containers using `make_cp2k.sh`. Each Docker file provides a usage example in its
+header which employs [`podman`](https://docs.podman.io/en/latest/) for building the CP2K docker
+containers.
+
+## Dependencies and build options
+
+At a minimum CP2K requirements a modern C and Fortran compiler,
+[DBCSR](https://github.com/cp2k/dbcsr/), BLAS, and LAPACK. For parallel builds it also needs at
+least MPI and ScaLAPACK.
+
+For currently supported compilers, see [here](https://www.cp2k.org/dev:compiler_support).
+
+Detailed descriptions of most build options can be found in the technologies section:
+
+- **[](../technologies/eigensolvers/index)**
+- **[](../technologies/accelerators/index)**
+- **[](../technologies/libraries)**
+
+There are some other important general options you may want to know:
+
+- `-G <Generator>` Specifies which type of build files would be generated. Default is
+  `Unix Makefiles`, which generates a GNU Makefile and allows you to build with running `make` in
+  the build directory. For GPU-accelerated builds, it is strongly advised to use `Ninja` as
+  generator, which is also used by `make_cp2k.sh`; in this case, please ensure that Ninja is
+  installed on your host system.
+- `-DCMAKE_BUILD_TYPE` Valid vaules are `Release` (default) and `Debug` (enables debug settings and
+  generates `pdbg` or `sdbg` instead of `psmp` or `ssmp`; recommended for development).
+- `-DCMAKE_INSTALL_PREFIX` Specifies the installation path of CP2K. Assuming it is set to
+  `/path/to/installation`, there will be several subdirectories: `bin` for binaries like
+  `cp2k.psmp`, `include` for module files and headers, `lib` or `lib64` for libraries, and `share`
+  for some other files such as basis data. Default is `/usr/local`.
+- `-DBUILD_SHARED_LIBS` Specifies if shared libraries are built. Default is `ON`; if set `OFF`, a
+  static library will be built instead.
+- `-DCMAKE_POSITION_INDEPENDENT_CODE` Specifies if position-independent code is enabled.
+
+Along with some options with CP2K:
+
+- `-DCP2K_USE_EVERYTHING` Enables all dependencies or not.
+- `-DCP2K_DATA_DIR` Specifies the location of the data of basis and potentials. Default is
+  `/path/to/installation/share/cp2k/data`.
+- `-DCP2K_ENABLE_CONSISTENCY_CHECKS` Only used for
+  [testing](https://dashboard.cp2k.org/archive/misc/index.html).
+- `-DCP2K_USE_CRAY_PM_ENERGY` Enables power monitoring on Cray systems.
+- `-DCP2K_USE_CRAY_PM_ACCEL_ENERGY` Enables power monitoring of accelerators on Cray systems.
+- `-DCP2K_USE_DBCSR_CONFIG` Make dbcsr cmake options (`DBCSR_USE_BLA`) available.
+
+Note that CMake is typically run *out-of-tree* in a seperate `build/` directory. We don't allow
+in-source builds; if you run CMake in the root directory, it will give error.
+
+### Example
+
+The following example builds CP2K with CUDA acceleration for Nvidia A100 GPUs and a few optional
+dependencies :
 
 ```bash
 cd <CP2K_REPOSITORY>
 mkdir build/
-cmake -S . -B build             # -S <SOURCE_DIR> -B <BUILD_DIR>
-cmake --build build -- -j 32    # -build <BUILD_DIR> -- <BUILD_TOOL_OPTIONS>
-```
-
-`<CP2K_REPOSITORY>` is a placeholder for the path to the CP2K repository, containing the source code
-to be compiled.
-
-### Generators
-
-By default, [CMake] generates GNU Makefiles (on Linux). With [CMake], it is possible to generate
-files for other build systems such as Ninja:
-
-```bash
-cmake -S . -B build -GNinja 
-```
-
-### Release and Debug Builds
-
-[CMake] allows to specify a build type. `-DCMAKE_BUILD_TYPE=Release` turns on optimizations, while
-`-DCMAKE_BUILD_TYPE=Debug` turns on debug options.
-
-## Requirements
-
-The minimum requirements to use the [CMake] build system are the following:
-
-- [CMake]
-- C, C++, and Fortran compilers
-- [DBCSR]
-- OpenMP
-- BLAS and LAPACK
-
-For an MPI build, the following dependencies are also required:
-
-- MPI
-- ScaLAPACK
-
-### DBCSR
-
-[DBCSR] is a required dependency of CP2K, and [CMake] expects [DBCSR] as an external dependency.
-
-### BLAS, LAPACK, and ScaLAPACK
-
-The major vendors' implementations of BLAS and LAPACK are supported. If CP2K is compiled with MPI
-support (`-DCP2K_USE_MPI=ON`), ScaLAPACK is also required.
-
-`-DCP2K_BLAS_VENDOR` and `-DCP2K_SCALAPACK_VENDOR` can be used to control which vendor library to
-use.
-
-To build with Intel OneAPI MKL:
-
-```bash
-cmake -S . -B build -DCP2K_BLAS_VENDOR=MKL -DCP2K_SCALAPACK_VENDOR=MKL
-cmake --build build
-```
-
-To build with Cray LibSci:
-
-```bash
-cmake -S . -B build -DCP2K_BLAS_VENDOR=SCI -DCP2K_SCALAPACK_VENDOR=SCI
-cmake --build build
-```
-
-## Build Customization
-
-### Default Dependencies
-
-All optional dependencies are turned off by default, with the exception of MPI.
-
-For simplicity, `-DCP2K_BUILD_OPTIONS` is provided to turn on some of the optional dependencies.
-`-DCP2K_BUILD_OPTIONS` can take the following values:
-
-- `CUSTOM` (default)
-- `DEFAULT`
-- `MINIMAL`
-- `FULL`
-- `SERIAL`
-
-By default, `-DCP2K_BUILD_OPTIONS=CUSTOM`, meaning that each dependency must be turned on explicitly
-with `-DCP2K_USE_<LIBRARY>=ON`. `<LIBRARY>` is the name of the optional dependency (for example:
-`-DCP2K_USE_COSMA=ON`, `-DCP2K_USE_LIBXC=ON`, ...).
-
-Please refer to the `CMakeLists.txt` file for an up-to-date list of the dependencies enabled by each
-option.
-
-### GPUs
-
-CP2K is GPU-accelerated. In order to enable GPU acceleration with [CUDA] or [HIP],
-`-DCP2K_USE_ACCEL` can be used:
-
-- `-DCP2K_USE_ACCEL=CUDA`: enables [CUDA]
-- `-DCP2K_USE_ACCEL=HIP`: enables [HIP]
-
-The target architecture can be selected with `-DCP2K_WITH_GPU`.
-
-CUDA can either be build using the NVIDIA HPC package (`-DCP2K_USE_NVHPC=ON`) or the CUDA toolkit
-package(`-DCP2K_USE_NVHPC=OFF`).
-
-## Example
-
-Build CP2K with CUDA acceleration for Nvidia A100 GPUs, with multiple optional dependencies:
-
-```bash
-cd <CP2K_REPOSITORY> && make build/
 cmake -S . -B build \
     -GNinja \
     -DCP2K_USE_LIBXC=ON \
@@ -130,11 +218,10 @@ cmake -S . -B build \
     -DCP2K_USE_ACCEL=CUDA -DCP2K_WITH_GPU=A100
 
 cmake --build build -j 32
+cmake --install build
 ```
 
-[cmake]: https://cmake.org
-[cp2k's spack documentation]: https://packages.spack.io/package.html?name=cp2k
-[cuda]: https://developer.nvidia.com/cuda-toolkit
-[dbcsr]: https://cp2k.github.io/dbcsr/develop/
-[hip]: https://rocm.docs.amd.com/projects/HIP/en/latest/
-[spack]: https://spack.readthedocs.io/en/latest/
+- The commands `cmake --build build -j 32` and `cmake --install build` can be replaced by a single
+  command `cmake --build build --target install -j 32`
+- If you want to clean your build cache after installing in order to save space, simply run
+  `cmake --build build --target clean`

@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2025 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2026 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -13,7 +13,7 @@
 MODULE bse_print
 
    USE atomic_kind_types,               ONLY: get_atomic_kind
-   USE bse_properties,                  ONLY: compute_absorption_spectrum,&
+   USE bse_properties,                  ONLY: compute_and_print_absorption_spectrum,&
                                               exciton_descr_type
    USE bse_util,                        ONLY: filter_eigvec_contrib
    USE cp_fm_types,                     ONLY: cp_fm_get_info,&
@@ -80,7 +80,7 @@ CONTAINS
 
       CALL timestop(handle)
 
-   END SUBROUTINE
+   END SUBROUTINE print_BSE_start_flag
 
 ! **************************************************************************************************
 !> \brief ...
@@ -197,7 +197,7 @@ CONTAINS
 
       CALL timestop(handle)
 
-   END SUBROUTINE
+   END SUBROUTINE print_output_header
 
 ! **************************************************************************************************
 !> \brief ...
@@ -406,12 +406,12 @@ CONTAINS
             WRITE (unit_nr, '(T2,A4,T7,A)') 'BSE|', &
                'Check for Thomas-Reiche-Kuhn sum rule'
             WRITE (unit_nr, '(T2,A4)') 'BSE|'
-            WRITE (unit_nr, '(T2,A4,T35,A)') 'BSE|', &
+            WRITE (unit_nr, '(T2,A4,T35,A15)') 'BSE|', &
                'N_e = Σ_n f^n'
             WRITE (unit_nr, '(T2,A4)') 'BSE|'
             WRITE (unit_nr, '(T2,A4,T7,A24,T65,I16)') 'BSE|', &
                'Number of electrons N_e:', homo_irred*2
-            WRITE (unit_nr, '(T2,A4,T7,A,T66,F16.3)') 'BSE|', &
+            WRITE (unit_nr, '(T2,A4,T7,A40,T66,F16.3)') 'BSE|', &
                'Sum over oscillator strengths Σ_n f^n :', SUM(oscill_str)
             WRITE (unit_nr, '(T2,A4)') 'BSE|'
             IF (mp2_env%bse%bse_cutoff_occ > 0 .OR. mp2_env%bse%bse_cutoff_empty > 0) THEN
@@ -422,8 +422,8 @@ CONTAINS
 
          ! Compute and print the absorption spectrum to external file
          IF (mp2_env%bse%bse_print_spectrum) THEN
-            CALL compute_absorption_spectrum(oscill_str, polarizability_residues, Exc_ens, &
-                                             info_approximation, unit_nr, mp2_env)
+            CALL compute_and_print_absorption_spectrum(oscill_str, polarizability_residues, Exc_ens, &
+                                                       info_approximation, unit_nr, mp2_env)
          END IF
 
       ELSE
@@ -488,7 +488,7 @@ CONTAINS
       DEALLOCATE (eigvec_entries)
       CALL timestop(handle)
 
-   END SUBROUTINE
+   END SUBROUTINE print_transition_amplitudes_core
 
 ! **************************************************************************************************
 !> \brief                              Prints exciton descriptors, cf. Mewes et al., JCTC 14, 710-725 (2018)
@@ -520,8 +520,6 @@ CONTAINS
       CHARACTER(LEN=1), DIMENSION(3)                     :: array_direction_str
       CHARACTER(LEN=5)                                   :: method_name
       INTEGER                                            :: handle, i_dir, i_exc
-      REAL(KIND=dp)                                      :: d_eh_dir, d_exc_dir, sigma_e_dir, &
-                                                            sigma_h_dir
       TYPE(particle_type), DIMENSION(:), POINTER         :: particle_set
 
       IF (prefix_output == 'BSE|') THEN
@@ -619,7 +617,7 @@ CONTAINS
                prefix_output, i_exc, exc_descr(i_exc)%norm_XpY, &
                exc_descr(i_exc)%diff_r_abs*angstrom, &
                exc_descr(i_exc)%sigma_e*angstrom, exc_descr(i_exc)%sigma_h*angstrom, &
-               exc_descr(i_exc)%diff_r_sqr*angstrom, exc_descr(i_exc)%corr_e_h*angstrom
+               exc_descr(i_exc)%diff_r_sqr*angstrom, exc_descr(i_exc)%corr_e_h
          END DO
          WRITE (unit_nr, '(T2,A4)') prefix_output
          ! For debug runs, print first d_exc separately to allow the regtests to read in
@@ -647,14 +645,20 @@ CONTAINS
                'σ_h^x    = sqrt( <x_h^2>_exc - <x_h>_exc^2 )'
             WRITE (unit_nr, '(T2,A4)') prefix_output
             WRITE (unit_nr, '(T2,A4,T15,A)') prefix_output, &
-               'COV_eh^x = <x_e x_h>_exc - <x_e>_exc <x_h>_exc'
+               "COV_eh^{μμ'} = <r^μ_e r^μ'_h>_exc - <r^μ_e>_exc <r^μ'_h>_exc"
             WRITE (unit_nr, '(T2,A4)') prefix_output
             WRITE (unit_nr, '(T2,A4,T15,A)') prefix_output, &
                'd_exc^x  = sqrt( | < |x_h - x_e|^2 >_exc )'
             WRITE (unit_nr, '(T2,A4,T15,A)') prefix_output, &
                '         = sqrt( (d_eh^x)^2 + (σ_e^x)^2'
             WRITE (unit_nr, '(T2,A4,T15,A)') prefix_output, &
-               '                 + (σ_h^x)^2 - 2 * (COV_eh^x) )'
+               "                 + (σ_h^x)^2 - 2 * (COV_eh^{xx}) )"
+            WRITE (unit_nr, '(T2,A4)') prefix_output
+            WRITE (unit_nr, '(T2,A4,T7,A)') prefix_output, &
+               "Subsequently, the cross-correlation matrix R_eh^{μμ'} is printed"
+            WRITE (unit_nr, '(T2,A4)') prefix_output
+            WRITE (unit_nr, '(T2,A4,T15,A)') prefix_output, &
+               "R_eh^{μμ'} = COV_eh^{μμ'}/(σ^μ_e σ^μ_h) "
             WRITE (unit_nr, '(T2,A4)') prefix_output
             WRITE (unit_nr, '(T2,A4)') prefix_output
             IF (exc_descr(1)%flag_TDA) THEN
@@ -669,19 +673,37 @@ CONTAINS
                'n', 'r = x/y/z', 'd_eh^r [Å]', 'σ_e^r [Å]', 'σ_h^r [Å]', 'd_exc^r [Å]'
             DO i_exc = 1, num_print_exc_descr
                DO i_dir = 1, 3
-                  array_direction_str = (/"x", "y", "z"/)
-                  d_eh_dir = ABS(exc_descr(i_exc)%r_h(i_dir) - exc_descr(i_exc)%r_e(i_dir))
-                  sigma_e_dir = SQRT(exc_descr(i_exc)%r_e_sq(i_dir) - exc_descr(i_exc)%r_e(i_dir)**2)
-                  sigma_h_dir = SQRT(exc_descr(i_exc)%r_h_sq(i_dir) - exc_descr(i_exc)%r_h(i_dir)**2)
-                  d_exc_dir = SQRT(d_eh_dir**2 + sigma_e_dir**2 + sigma_h_dir**2 &
-                                   - 2*exc_descr(i_exc)%cov_e_h(i_dir))
+                  array_direction_str = ["x", "y", "z"]
                   WRITE (unit_nr, '(T2,A4,T9,I4,10X,A1,1X,4(4X,F10.4))') &
                      prefix_output, i_exc, array_direction_str(i_dir), &
-                     d_eh_dir*angstrom, &
-                     sigma_e_dir*angstrom, sigma_h_dir*angstrom, &
-                     d_exc_dir*angstrom
+                     exc_descr(i_exc)%d_eh_dir(i_dir)*angstrom, &
+                     exc_descr(i_exc)%sigma_e_dir(i_dir)*angstrom, &
+                     exc_descr(i_exc)%sigma_h_dir(i_dir)*angstrom, &
+                     exc_descr(i_exc)%d_exc_dir(i_dir)*angstrom
                END DO
                WRITE (unit_nr, '(T2,A4)') prefix_output
+            END DO
+            WRITE (unit_nr, '(T2,A4)') prefix_output
+            WRITE (unit_nr, '(T2,A4)') prefix_output
+            IF (exc_descr(1)%flag_TDA) THEN
+               WRITE (unit_nr, '(T2,A4,T7,A,A,A)') prefix_output, &
+                  'Crosscorrelation matrix from solving the ', method_name, ' within the TDA:'
+            ELSE
+               WRITE (unit_nr, '(T2,A4,T7,A,A,A)') prefix_output, &
+                  'Crosscorrelation matrix from solving the ', method_name, ' without the TDA:'
+            END IF
+            WRITE (unit_nr, '(T2,A4)') prefix_output
+            WRITE (unit_nr, '(T2,A4,T12,A1,8X,6(8X,A2))') prefix_output, &
+               'n', 'xx', 'yy', 'zz', 'xy', 'xz', 'yz'
+            DO i_exc = 1, num_print_exc_descr
+               WRITE (unit_nr, '(T2,A4,T9,I4,8X,6(3X,F7.4),3X,F7.4)') &
+                  prefix_output, i_exc, &
+                  exc_descr(i_exc)%corr_e_h_matrix(1, 1), &
+                  exc_descr(i_exc)%corr_e_h_matrix(2, 2), &
+                  exc_descr(i_exc)%corr_e_h_matrix(3, 3), &
+                  exc_descr(i_exc)%corr_e_h_matrix(1, 2), &
+                  exc_descr(i_exc)%corr_e_h_matrix(1, 3), &
+                  exc_descr(i_exc)%corr_e_h_matrix(2, 3)
             END DO
             WRITE (unit_nr, '(T2,A4)') prefix_output
          END IF
@@ -691,8 +713,13 @@ CONTAINS
          WRITE (unit_nr, '(T2,A4,T15,A7,F10.4,A2,F10.4,A2,F10.4,A1)') prefix_output, &
             'r_0 = (', ref_point_multipole(1)*angstrom, ', ', ref_point_multipole(2)*angstrom, ', ', &
             ref_point_multipole(3)*angstrom, ')'
-         WRITE (unit_nr, '(T2,A4,T7,A,A,A)') prefix_output, &
-            'we further obtain r_e and r_h from solving the ', method_name, ' within the TDA'
+         IF (exc_descr(1)%flag_TDA) THEN
+            WRITE (unit_nr, '(T2,A4,T7,A,A,A)') prefix_output, &
+               'we further obtain r_e and r_h from solving the ', method_name, ' within the TDA'
+         ELSE
+            WRITE (unit_nr, '(T2,A4,T7,A,A,A)') prefix_output, &
+               'we further obtain r_e and r_h from solving the ', method_name, ' without the TDA'
+         END IF
          WRITE (unit_nr, '(T2,A4)') prefix_output
          WRITE (unit_nr, '(T2,A4,T8,A12,1X,13X,A9,13X,A9,13X,A9)') prefix_output, &
             'Excitation n', 'x_e [Å]', 'y_e [Å]', 'z_e [Å]'
@@ -765,8 +792,10 @@ CONTAINS
          DO i = 1, nrow_local
             DO j = 1, ncol_local
                IF (ABS(fm%local_data(i, j)) > thresh) THEN
-                  WRITE (unit_nr, "(A7,T10,I5,T20,I5,T30,F13.5)") header, row_indices(i), col_indices(j), &
-                     ABS(fm%local_data(i, j))
+                  IF (unit_nr > 0) THEN
+                     WRITE (unit_nr, "(A7,T10,I5,T20,I5,T30,F13.5)") header, row_indices(i), col_indices(j), &
+                        ABS(fm%local_data(i, j))
+                  END IF
                END IF
             END DO
          END DO
@@ -774,8 +803,10 @@ CONTAINS
          DO i = 1, nrow_local
             DO j = 1, ncol_local
                IF (ABS(fm%local_data(i, j)) > thresh) THEN
-                  WRITE (unit_nr, "(A7,T10,I5,T20,I5,T30,F13.5)") header, row_indices(i), col_indices(j), &
-                     fm%local_data(i, j)
+                  IF (unit_nr > 0) THEN
+                     WRITE (unit_nr, "(A7,T10,I5,T20,I5,T30,F13.5)") header, row_indices(i), col_indices(j), &
+                        fm%local_data(i, j)
+                  END IF
                END IF
             END DO
          END DO
@@ -787,7 +818,7 @@ CONTAINS
 
       CALL timestop(handle)
 
-   END SUBROUTINE
+   END SUBROUTINE fm_write_thresh
 
 ! **************************************************************************************************
 !> \brief Write the atomic coordinates to the output unit.

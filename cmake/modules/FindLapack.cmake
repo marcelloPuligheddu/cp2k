@@ -1,6 +1,6 @@
 #!-------------------------------------------------------------------------------------------------!
 #!   CP2K: A general program to perform molecular dynamics simulations                             !
-#!   Copyright 2000-2025 CP2K developers group <https://cp2k.org>                                  !
+#!   Copyright 2000-2026 CP2K developers group <https://cp2k.org>                                  !
 #!                                                                                                 !
 #!   SPDX-License-Identifier: GPL-2.0-or-later                                                     !
 #!-------------------------------------------------------------------------------------------------!
@@ -48,13 +48,19 @@ if(NOT CP2K_CONFIG_PACKAGE)
     endif()
   endif()
 endif()
+
 # check if found
-find_package_handle_standard_args(Lapack
+find_package_handle_standard_args(${CMAKE_FIND_PACKAGE_NAME}
                                   REQUIRED_VARS CP2K_LAPACK_LINK_LIBRARIES)
 
 if(NOT TARGET cp2k::LAPACK::lapack)
   add_library(cp2k::LAPACK::lapack INTERFACE IMPORTED)
   add_library(cp2k::LAPACK::LAPACK ALIAS cp2k::LAPACK::lapack)
+endif()
+# Compatibility: some external packages (e.g. tblite/multicharge) expect
+# LAPACK::LAPACK
+if(NOT TARGET LAPACK::LAPACK)
+  add_library(LAPACK::LAPACK ALIAS cp2k::LAPACK::lapack)
 endif()
 
 set_property(TARGET cp2k::LAPACK::lapack PROPERTY INTERFACE_LINK_LIBRARIES
@@ -66,4 +72,4 @@ if(CP2K_LAPACK_INCLUDE_DIRS)
 endif()
 
 # prevent clutter in cache
-mark_as_advanced(CP2K_LAPACK_LIBRARIES CP2K_LAPACK_INCLUDE_DIRS)
+mark_as_advanced(CP2K_LAPACK_LINK_LIBRARIES CP2K_LAPACK_INCLUDE_DIRS)

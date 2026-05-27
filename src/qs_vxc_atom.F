@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2025 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2026 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -15,9 +15,7 @@ MODULE qs_vxc_atom
    USE basis_set_types,                 ONLY: get_gto_basis_set,&
                                               gto_basis_set_type
    USE cp_control_types,                ONLY: dft_control_type
-   USE input_constants,                 ONLY: tddfpt_excitations,&
-                                              tddfpt_triplet,&
-                                              xc_none
+   USE input_constants,                 ONLY: xc_none
    USE input_section_types,             ONLY: section_vals_get_subs_vals,&
                                               section_vals_type,&
                                               section_vals_val_get
@@ -41,6 +39,7 @@ MODULE qs_vxc_atom
                                               rho_atom_type
    USE util,                            ONLY: get_limit
    USE xc_atom,                         ONLY: fill_rho_set,&
+                                              vxc_of_r_epr,&
                                               vxc_of_r_new,&
                                               xc_2nd_deriv_of_r,&
                                               xc_rho_set_atom_update
@@ -61,7 +60,18 @@ MODULE qs_vxc_atom
 
    CHARACTER(len=*), PARAMETER, PRIVATE :: moduleN = 'qs_vxc_atom'
 
+   TYPE tau_basis_cache_type
+      INTEGER                                            :: maxso = 0, na = 0, nr = 0, nsatbas = 0, &
+                                                            nset = 0
+      INTEGER, DIMENSION(:), POINTER                     :: lmax => NULL(), lmin => NULL(), &
+                                                            n2oindex => NULL(), npgf => NULL(), &
+                                                            o2nindex => NULL()
+      REAL(dp), DIMENSION(:, :), POINTER                 :: zet => NULL()
+      REAL(dp), ALLOCATABLE, DIMENSION(:, :, :)          :: grad
+   END TYPE tau_basis_cache_type
+
    PUBLIC :: calculate_vxc_atom, &
+             calculate_vxc_atom_epr, &
              calculate_xc_2nd_deriv_atom, &
              calc_rho_angular, &
              calculate_gfxc_atom, &
@@ -75,21 +85,18 @@ CONTAINS
 !> \param qs_env ...
 !> \param energy_only ...
 !> \param exc1 the on-body ex energy contribution
-!> \param gradient_atom_set ...
 !> \param adiabatic_rescale_factor ...
 !> \param kind_set_external provides a non-default kind_set to use
 !> \param rho_atom_set_external provides a non-default atomic density set to use
 !> \param xc_section_external provides an external non-default XC
 ! **************************************************************************************************
-   SUBROUTINE calculate_vxc_atom(qs_env, energy_only, exc1, gradient_atom_set, &
+   SUBROUTINE calculate_vxc_atom(qs_env, energy_only, exc1, &
                                  adiabatic_rescale_factor, kind_set_external, &
                                  rho_atom_set_external, xc_section_external)
 
       TYPE(qs_environment_type), POINTER                 :: qs_env
       LOGICAL, INTENT(IN)                                :: energy_only
       REAL(dp), INTENT(INOUT)                            :: exc1
-      TYPE(nablavks_atom_type), DIMENSION(:), OPTIONAL, &
-         POINTER                                         :: gradient_atom_set
       REAL(dp), INTENT(IN), OPTIONAL                     :: adiabatic_rescale_factor
       TYPE(qs_kind_type), DIMENSION(:), OPTIONAL, &
          POINTER                                         :: kind_set_external
@@ -99,18 +106,18 @@ CONTAINS
 
       CHARACTER(LEN=*), PARAMETER :: routineN = 'calculate_vxc_atom'
 
-      INTEGER                                            :: bo(2), handle, ia, iat, iatom, idir, &
-                                                            ikind, ir, ispin, myfun, na, natom, &
-                                                            nr, nspins, num_pe
+      INTEGER                                            :: bo(2), handle, iat, iatom, ikind, ir, &
+                                                            myfun, na, natom, nr, nspins, num_pe
       INTEGER, DIMENSION(2, 3)                           :: bounds
       INTEGER, DIMENSION(:), POINTER                     :: atom_list
-      LOGICAL                                            :: donlcc, epr_xc, gradient_f, lsd, nlcc, &
+      LOGICAL                                            :: accint, donlcc, gradient_f, lsd, nlcc, &
                                                             paw_atom, tau_f
-      REAL(dp)                                           :: density_cut, exc_h, exc_s, gradient_cut, &
+      REAL(dp)                                           :: agr, alpha, density_cut, exc_h, exc_s, &
+                                                            gradient_cut, &
                                                             my_adiabatic_rescale_factor, tau_cut
       REAL(dp), DIMENSION(1, 1, 1)                       :: tau_d
       REAL(dp), DIMENSION(1, 1, 1, 1)                    :: rho_d
-      REAL(dp), DIMENSION(:, :), POINTER                 :: rho_nlcc, weight
+      REAL(dp), DIMENSION(:, :), POINTER                 :: rho_nlcc, weight_h, weight_s
       REAL(dp), DIMENSION(:, :, :), POINTER              :: rho_h, rho_s, tau_h, tau_s, vtau_h, &
                                                             vtau_s, vxc_h, vxc_s
       REAL(dp), DIMENSION(:, :, :, :), POINTER           :: drho_h, drho_s, vxg_h, vxg_s
@@ -126,6 +133,7 @@ CONTAINS
       TYPE(rho_atom_type), DIMENSION(:), POINTER         :: my_rho_atom_set
       TYPE(rho_atom_type), POINTER                       :: rho_atom
       TYPE(section_vals_type), POINTER                   :: input, my_xc_section, xc_fun_section
+      TYPE(tau_basis_cache_type)                         :: tau_basis_cache
       TYPE(xc_derivative_set_type)                       :: deriv_set
       TYPE(xc_rho_cflags_type)                           :: needs
       TYPE(xc_rho_set_type)                              :: rho_set_h, rho_set_s
@@ -145,11 +153,6 @@ CONTAINS
       NULLIFY (my_rho_atom_set)
       NULLIFY (rho_nlcc)
 
-      epr_xc = .FALSE.
-      IF (PRESENT(gradient_atom_set)) THEN
-         epr_xc = .TRUE.
-      END IF
-
       IF (PRESENT(adiabatic_rescale_factor)) THEN
          my_adiabatic_rescale_factor = adiabatic_rescale_factor
       ELSE
@@ -168,13 +171,9 @@ CONTAINS
       IF (PRESENT(rho_atom_set_external)) my_rho_atom_set => rho_atom_set_external
 
       nlcc = has_nlcc(my_kind_set)
+      accint = dft_control%qs_control%gapw_control%accurate_xcint
 
-      IF (epr_xc) THEN
-         my_xc_section => section_vals_get_subs_vals(input, &
-                                                     "PROPERTIES%LINRES%EPR%PRINT%G_TENSOR%XC")
-      ELSE
-         my_xc_section => section_vals_get_subs_vals(input, "DFT%XC")
-      END IF
+      my_xc_section => section_vals_get_subs_vals(input, "DFT%XC")
 
       IF (PRESENT(xc_section_external)) my_xc_section => xc_section_external
 
@@ -200,9 +199,6 @@ CONTAINS
                                           lsd=lsd, &
                                           calc_potential=.TRUE.)
 
-         ! whatever the xc, if epr_xc, drho_spin is needed
-         IF (epr_xc) needs%drho_spin = .TRUE.
-
          gradient_f = (needs%drho .OR. needs%drho_spin)
          tau_f = (needs%tau .OR. needs%tau_spin)
 
@@ -210,7 +206,7 @@ CONTAINS
          exc1 = 0.0_dp
 
          ! Nullify some pointers for work-arrays
-         NULLIFY (rho_h, drho_h, rho_s, drho_s, weight)
+         NULLIFY (rho_h, drho_h, rho_s, drho_s, weight_h, weight_s)
          NULLIFY (vxc_h, vxc_s, vxg_h, vxg_s)
          NULLIFY (tau_h, tau_s)
          NULLIFY (vtau_h, vtau_s)
@@ -237,6 +233,27 @@ CONTAINS
             bounds(2, 1) = na
             bounds(2, 2) = nr
 
+            ! set integration weights
+            IF (accint) THEN
+               weight_h => grid_atom%weight
+               alpha = dft_control%qs_control%gapw_control%aw(ikind)
+               IF (ASSOCIATED(grid_atom%gapw_weight_s)) THEN
+                  IF (grid_atom%gapw_weight_alpha /= alpha) DEALLOCATE (grid_atom%gapw_weight_s)
+               END IF
+               IF (.NOT. ASSOCIATED(grid_atom%gapw_weight_s)) THEN
+                  ALLOCATE (grid_atom%gapw_weight_s(na, nr))
+                  DO ir = 1, nr
+                     agr = 1.0_dp - EXP(-alpha*grid_atom%rad2(ir))
+                     grid_atom%gapw_weight_s(:, ir) = grid_atom%weight(:, ir)*agr
+                  END DO
+                  grid_atom%gapw_weight_alpha = alpha
+               END IF
+               weight_s => grid_atom%gapw_weight_s
+            ELSE
+               weight_h => grid_atom%weight
+               weight_s => grid_atom%weight
+            END IF
+
             ! create a place where to put the derivatives
             CALL xc_dset_create(deriv_set, local_bounds=bounds)
             ! create the place where to store the argument for the functionals
@@ -251,7 +268,6 @@ CONTAINS
 
             CALL reallocate(rho_h, 1, na, 1, nr, 1, nspins)
             CALL reallocate(rho_s, 1, na, 1, nr, 1, nspins)
-            weight => grid_atom%weight
             CALL reallocate(vxc_h, 1, na, 1, nr, 1, nspins)
             CALL reallocate(vxc_s, 1, na, 1, nr, 1, nspins)
             !
@@ -263,6 +279,7 @@ CONTAINS
             END IF
 
             IF (tau_f) THEN
+               CALL create_tau_basis_cache(tau_basis_cache, grid_atom, basis_1c, harmonics)
                CALL reallocate(tau_h, 1, na, 1, nr, 1, nspins)
                CALL reallocate(tau_s, 1, na, 1, nr, 1, nspins)
                CALL reallocate(vtau_h, 1, na, 1, nr, 1, nspins)
@@ -306,7 +323,7 @@ CONTAINS
                END IF
                IF (tau_f) THEN
                   !compute tau on the grid all at once
-                  CALL calc_tau_atom(tau_h, tau_s, rho_atom, my_kind_set(ikind), nspins)
+                  CALL calc_tau_atom(tau_h, tau_s, rho_atom, tau_basis_cache, nspins)
                ELSE
                   tau_d = 0.0_dp
                END IF
@@ -320,6 +337,7 @@ CONTAINS
                                         ir, rho_nlcc(:, 1), rho_h, rho_s, rho_nlcc(:, 2), drho_h, drho_s)
                   END IF
                END DO
+
                DO ir = 1, nr
                   IF (tau_f) THEN
                      CALL fill_rho_set(rho_set_h, lsd, nspins, needs, rho_h, drho_h, tau_h, na, ir)
@@ -337,36 +355,19 @@ CONTAINS
                ! hard atom density !
                !-------------------!
                CALL xc_dset_zero_all(deriv_set)
-               CALL vxc_of_r_new(xc_fun_section, rho_set_h, deriv_set, 1, needs, weight, &
+               CALL vxc_of_r_new(xc_fun_section, rho_set_h, deriv_set, 1, needs, weight_h, &
                                  lsd, na, nr, exc_h, vxc_h, vxg_h, vtau_h, energy_only=energy_only, &
-                                 epr_xc=epr_xc, adiabatic_rescale_factor=my_adiabatic_rescale_factor)
+                                 adiabatic_rescale_factor=my_adiabatic_rescale_factor)
                rho_atom%exc_h = rho_atom%exc_h + exc_h
 
                !-------------------!
                ! soft atom density !
                !-------------------!
                CALL xc_dset_zero_all(deriv_set)
-               CALL vxc_of_r_new(xc_fun_section, rho_set_s, deriv_set, 1, needs, weight, &
+               CALL vxc_of_r_new(xc_fun_section, rho_set_s, deriv_set, 1, needs, weight_s, &
                                  lsd, na, nr, exc_s, vxc_s, vxg_s, vtau_s, energy_only=energy_only, &
-                                 epr_xc=epr_xc, adiabatic_rescale_factor=my_adiabatic_rescale_factor)
+                                 adiabatic_rescale_factor=my_adiabatic_rescale_factor)
                rho_atom%exc_s = rho_atom%exc_s + exc_s
-
-               IF (epr_xc) THEN
-                  DO ispin = 1, nspins
-                     DO idir = 1, 3
-                        DO ir = 1, nr
-                           DO ia = 1, na
-                              gradient_atom_set(iatom)%nablavks_vec_rad_h(idir, ispin)%r_coef(ir, ia) = &
-                                 gradient_atom_set(iatom)%nablavks_vec_rad_h(idir, ispin)%r_coef(ir, ia) &
-                                 + vxg_h(idir, ia, ir, ispin)
-                              gradient_atom_set(iatom)%nablavks_vec_rad_s(idir, ispin)%r_coef(ir, ia) = &
-                                 gradient_atom_set(iatom)%nablavks_vec_rad_s(idir, ispin)%r_coef(ir, ia) &
-                                 + vxg_s(idir, ia, ir, ispin)
-                           END DO ! ia
-                        END DO ! ir
-                     END DO ! idir
-                  END DO ! ispin
-               END IF
 
                ! Add contributions to the exc energy
 
@@ -388,17 +389,18 @@ CONTAINS
                   END IF
                   IF (tau_f) THEN
                      CALL dgaVtaudgb(vtau_h, vtau_s, int_hh, int_ss, &
-                                     grid_atom, basis_1c, harmonics, nspins)
+                                     tau_basis_cache, nspins)
                   END IF
                END IF ! energy_only
                NULLIFY (r_h, r_s, dr_h, dr_s)
             END DO ! iat
 
+            IF (tau_f) CALL release_tau_basis_cache(tau_basis_cache)
+
             ! Release the xc structure used to store the xc derivatives
             CALL xc_dset_release(deriv_set)
             CALL xc_rho_set_release(rho_set_h)
             CALL xc_rho_set_release(rho_set_s)
-
          END DO ! ikind
 
          CALL para_env%sum(exc1)
@@ -430,48 +432,389 @@ CONTAINS
 
 ! **************************************************************************************************
 !> \brief ...
+!> \param qs_env ...
+!> \param exc1 the on-body ex energy contribution
+!> \param gradient_atom_set ...
+! **************************************************************************************************
+   SUBROUTINE calculate_vxc_atom_epr(qs_env, exc1, gradient_atom_set)
+
+      TYPE(qs_environment_type), POINTER                 :: qs_env
+      REAL(dp), INTENT(INOUT)                            :: exc1
+      TYPE(nablavks_atom_type), DIMENSION(:), POINTER    :: gradient_atom_set
+
+      CHARACTER(LEN=*), PARAMETER :: routineN = 'calculate_vxc_atom_epr'
+
+      INTEGER                                            :: bo(2), handle, ia, iat, iatom, idir, &
+                                                            ikind, ir, ispin, myfun, na, natom, &
+                                                            nr, nspins, num_pe
+      INTEGER, DIMENSION(2, 3)                           :: bounds
+      INTEGER, DIMENSION(:), POINTER                     :: atom_list
+      LOGICAL                                            :: accint, donlcc, gradient_f, lsd, nlcc, &
+                                                            paw_atom, tau_f
+      REAL(dp)                                           :: agr, alpha, density_cut, exc_h, exc_s, &
+                                                            gradient_cut, tau_cut
+      REAL(dp), DIMENSION(1, 1, 1)                       :: tau_d
+      REAL(dp), DIMENSION(1, 1, 1, 1)                    :: rho_d
+      REAL(dp), DIMENSION(:, :), POINTER                 :: rho_nlcc, weight_h, weight_s
+      REAL(dp), DIMENSION(:, :, :), POINTER              :: rho_h, rho_s, tau_h, tau_s, vtau_h, &
+                                                            vtau_s, vxc_h, vxc_s
+      REAL(dp), DIMENSION(:, :, :, :), POINTER           :: drho_h, drho_s, vxg_h, vxg_s
+      TYPE(atomic_kind_type), DIMENSION(:), POINTER      :: atomic_kind_set
+      TYPE(dft_control_type), POINTER                    :: dft_control
+      TYPE(grid_atom_type), POINTER                      :: grid_atom
+      TYPE(gto_basis_set_type), POINTER                  :: basis_1c
+      TYPE(harmonics_atom_type), POINTER                 :: harmonics
+      TYPE(mp_para_env_type), POINTER                    :: para_env
+      TYPE(qs_kind_type), DIMENSION(:), POINTER          :: my_kind_set
+      TYPE(rho_atom_coeff), DIMENSION(:), POINTER        :: dr_h, dr_s, int_hh, int_ss, r_h, r_s
+      TYPE(rho_atom_coeff), DIMENSION(:, :), POINTER     :: r_h_d, r_s_d
+      TYPE(rho_atom_type), DIMENSION(:), POINTER         :: my_rho_atom_set
+      TYPE(rho_atom_type), POINTER                       :: rho_atom
+      TYPE(section_vals_type), POINTER                   :: input, my_xc_section, xc_fun_section
+      TYPE(tau_basis_cache_type)                         :: tau_basis_cache
+      TYPE(xc_derivative_set_type)                       :: deriv_set
+      TYPE(xc_rho_cflags_type)                           :: needs
+      TYPE(xc_rho_set_type)                              :: rho_set_h, rho_set_s
+
+! -------------------------------------------------------------------------
+
+      CALL timeset(routineN, handle)
+
+      NULLIFY (atom_list)
+      NULLIFY (my_kind_set)
+      NULLIFY (atomic_kind_set)
+      NULLIFY (grid_atom)
+      NULLIFY (harmonics)
+      NULLIFY (input)
+      NULLIFY (para_env)
+      NULLIFY (rho_atom)
+      NULLIFY (my_rho_atom_set)
+      NULLIFY (rho_nlcc)
+
+      CALL get_qs_env(qs_env=qs_env, &
+                      dft_control=dft_control, &
+                      para_env=para_env, &
+                      atomic_kind_set=atomic_kind_set, &
+                      qs_kind_set=my_kind_set, &
+                      input=input, &
+                      rho_atom_set=my_rho_atom_set)
+
+      nlcc = has_nlcc(my_kind_set)
+      accint = dft_control%qs_control%gapw_control%accurate_xcint
+
+      my_xc_section => section_vals_get_subs_vals(input, &
+                                                  "PROPERTIES%LINRES%EPR%PRINT%G_TENSOR%XC")
+      xc_fun_section => section_vals_get_subs_vals(my_xc_section, "XC_FUNCTIONAL")
+      CALL section_vals_val_get(xc_fun_section, "_SECTION_PARAMETERS_", &
+                                i_val=myfun)
+
+      IF (myfun == xc_none) THEN
+         exc1 = 0.0_dp
+         my_rho_atom_set(:)%exc_h = 0.0_dp
+         my_rho_atom_set(:)%exc_s = 0.0_dp
+      ELSE
+         CALL section_vals_val_get(my_xc_section, "DENSITY_CUTOFF", &
+                                   r_val=density_cut)
+         CALL section_vals_val_get(my_xc_section, "GRADIENT_CUTOFF", &
+                                   r_val=gradient_cut)
+         CALL section_vals_val_get(my_xc_section, "TAU_CUTOFF", &
+                                   r_val=tau_cut)
+
+         lsd = dft_control%lsd
+         nspins = dft_control%nspins
+         needs = xc_functionals_get_needs(xc_fun_section, &
+                                          lsd=lsd, &
+                                          calc_potential=.TRUE.)
+
+         ! whatever the xc, if epr_xc, drho_spin is needed
+         needs%drho_spin = .TRUE.
+
+         gradient_f = (needs%drho .OR. needs%drho_spin)
+         tau_f = (needs%tau .OR. needs%tau_spin)
+
+         ! Initialize energy contribution from the one center XC terms to zero
+         exc1 = 0.0_dp
+
+         ! Nullify some pointers for work-arrays
+         NULLIFY (rho_h, drho_h, rho_s, drho_s, weight_h, weight_s)
+         NULLIFY (vxc_h, vxc_s, vxg_h, vxg_s)
+         NULLIFY (tau_h, tau_s)
+         NULLIFY (vtau_h, vtau_s)
+
+         ! Here starts the loop over all the atoms
+
+         DO ikind = 1, SIZE(atomic_kind_set)
+            CALL get_atomic_kind(atomic_kind_set(ikind), atom_list=atom_list, natom=natom)
+            CALL get_qs_kind(my_kind_set(ikind), paw_atom=paw_atom, &
+                             harmonics=harmonics, grid_atom=grid_atom)
+            CALL get_qs_kind(my_kind_set(ikind), basis_set=basis_1c, basis_type="GAPW_1C")
+
+            IF (.NOT. paw_atom) CYCLE
+
+            nr = grid_atom%nr
+            na = grid_atom%ng_sphere
+
+            ! Prepare the structures needed to calculate and store the xc derivatives
+
+            ! Array dimension: here anly one dimensional arrays are used,
+            ! i.e. only the first column of deriv_data is read.
+            ! The other to dimensions  are set to size equal 1
+            bounds(1:2, 1:3) = 1
+            bounds(2, 1) = na
+            bounds(2, 2) = nr
+
+            ! set integration weights
+            IF (accint) THEN
+               weight_h => grid_atom%weight
+               alpha = dft_control%qs_control%gapw_control%aw(ikind)
+               IF (ASSOCIATED(grid_atom%gapw_weight_s)) THEN
+                  IF (grid_atom%gapw_weight_alpha /= alpha) DEALLOCATE (grid_atom%gapw_weight_s)
+               END IF
+               IF (.NOT. ASSOCIATED(grid_atom%gapw_weight_s)) THEN
+                  ALLOCATE (grid_atom%gapw_weight_s(na, nr))
+                  DO ir = 1, nr
+                     agr = 1.0_dp - EXP(-alpha*grid_atom%rad2(ir))
+                     grid_atom%gapw_weight_s(:, ir) = grid_atom%weight(:, ir)*agr
+                  END DO
+                  grid_atom%gapw_weight_alpha = alpha
+               END IF
+               weight_s => grid_atom%gapw_weight_s
+            ELSE
+               weight_h => grid_atom%weight
+               weight_s => grid_atom%weight
+            END IF
+
+            ! create a place where to put the derivatives
+            CALL xc_dset_create(deriv_set, local_bounds=bounds)
+            ! create the place where to store the argument for the functionals
+            CALL xc_rho_set_create(rho_set_h, bounds, rho_cutoff=density_cut, &
+                                   drho_cutoff=gradient_cut, tau_cutoff=tau_cut)
+            CALL xc_rho_set_create(rho_set_s, bounds, rho_cutoff=density_cut, &
+                                   drho_cutoff=gradient_cut, tau_cutoff=tau_cut)
+
+            ! allocate the required 3d arrays where to store rho and drho
+            CALL xc_rho_set_atom_update(rho_set_h, needs, nspins, bounds)
+            CALL xc_rho_set_atom_update(rho_set_s, needs, nspins, bounds)
+
+            CALL reallocate(rho_h, 1, na, 1, nr, 1, nspins)
+            CALL reallocate(rho_s, 1, na, 1, nr, 1, nspins)
+            CALL reallocate(vxc_h, 1, na, 1, nr, 1, nspins)
+            CALL reallocate(vxc_s, 1, na, 1, nr, 1, nspins)
+            !
+            IF (gradient_f) THEN
+               CALL reallocate(drho_h, 1, 4, 1, na, 1, nr, 1, nspins)
+               CALL reallocate(drho_s, 1, 4, 1, na, 1, nr, 1, nspins)
+               CALL reallocate(vxg_h, 1, 3, 1, na, 1, nr, 1, nspins)
+               CALL reallocate(vxg_s, 1, 3, 1, na, 1, nr, 1, nspins)
+            END IF
+
+            IF (tau_f) THEN
+               CALL create_tau_basis_cache(tau_basis_cache, grid_atom, basis_1c, harmonics)
+               CALL reallocate(tau_h, 1, na, 1, nr, 1, nspins)
+               CALL reallocate(tau_s, 1, na, 1, nr, 1, nspins)
+               CALL reallocate(vtau_h, 1, na, 1, nr, 1, nspins)
+               CALL reallocate(vtau_s, 1, na, 1, nr, 1, nspins)
+            END IF
+
+            ! NLCC: prepare rho and drho of the core charge for this KIND
+            donlcc = .FALSE.
+            IF (nlcc) THEN
+               NULLIFY (rho_nlcc)
+               rho_nlcc => my_kind_set(ikind)%nlcc_pot
+               IF (ASSOCIATED(rho_nlcc)) donlcc = .TRUE.
+            END IF
+
+            ! Distribute the atoms of this kind
+
+            num_pe = para_env%num_pe
+            bo = get_limit(natom, para_env%num_pe, para_env%mepos)
+
+            DO iat = bo(1), bo(2)
+               iatom = atom_list(iat)
+
+               my_rho_atom_set(iatom)%exc_h = 0.0_dp
+               my_rho_atom_set(iatom)%exc_s = 0.0_dp
+
+               rho_atom => my_rho_atom_set(iatom)
+               rho_h = 0.0_dp
+               rho_s = 0.0_dp
+               IF (gradient_f) THEN
+                  NULLIFY (r_h, r_s, dr_h, dr_s, r_h_d, r_s_d)
+                  CALL get_rho_atom(rho_atom=rho_atom, rho_rad_h=r_h, &
+                                    rho_rad_s=r_s, drho_rad_h=dr_h, &
+                                    drho_rad_s=dr_s, rho_rad_h_d=r_h_d, &
+                                    rho_rad_s_d=r_s_d)
+                  drho_h = 0.0_dp
+                  drho_s = 0.0_dp
+               ELSE
+                  NULLIFY (r_h, r_s)
+                  CALL get_rho_atom(rho_atom=rho_atom, rho_rad_h=r_h, rho_rad_s=r_s)
+                  rho_d = 0.0_dp
+               END IF
+               IF (tau_f) THEN
+                  !compute tau on the grid all at once
+                  CALL calc_tau_atom(tau_h, tau_s, rho_atom, tau_basis_cache, nspins)
+               ELSE
+                  tau_d = 0.0_dp
+               END IF
+
+               DO ir = 1, nr
+                  CALL calc_rho_angular(grid_atom, harmonics, nspins, gradient_f, &
+                                        ir, r_h, r_s, rho_h, rho_s, dr_h, dr_s, &
+                                        r_h_d, r_s_d, drho_h, drho_s)
+                  IF (donlcc) THEN
+                     CALL calc_rho_nlcc(grid_atom, nspins, gradient_f, &
+                                        ir, rho_nlcc(:, 1), rho_h, rho_s, rho_nlcc(:, 2), drho_h, drho_s)
+                  END IF
+               END DO
+               DO ir = 1, nr
+                  IF (tau_f) THEN
+                     CALL fill_rho_set(rho_set_h, lsd, nspins, needs, rho_h, drho_h, tau_h, na, ir)
+                     CALL fill_rho_set(rho_set_s, lsd, nspins, needs, rho_s, drho_s, tau_s, na, ir)
+                  ELSE IF (gradient_f) THEN
+                     CALL fill_rho_set(rho_set_h, lsd, nspins, needs, rho_h, drho_h, tau_d, na, ir)
+                     CALL fill_rho_set(rho_set_s, lsd, nspins, needs, rho_s, drho_s, tau_d, na, ir)
+                  ELSE
+                     CALL fill_rho_set(rho_set_h, lsd, nspins, needs, rho_h, rho_d, tau_d, na, ir)
+                     CALL fill_rho_set(rho_set_s, lsd, nspins, needs, rho_s, rho_d, tau_d, na, ir)
+                  END IF
+               END DO
+
+               !-------------------!
+               ! hard atom density !
+               !-------------------!
+               CALL xc_dset_zero_all(deriv_set)
+               CALL vxc_of_r_epr(xc_fun_section, rho_set_h, deriv_set, needs, weight_h, &
+                                 lsd, na, nr, exc_h, vxc_h, vxg_h, vtau_h)
+               rho_atom%exc_h = rho_atom%exc_h + exc_h
+
+               !-------------------!
+               ! soft atom density !
+               !-------------------!
+               CALL xc_dset_zero_all(deriv_set)
+               CALL vxc_of_r_epr(xc_fun_section, rho_set_s, deriv_set, needs, weight_s, &
+                                 lsd, na, nr, exc_s, vxc_s, vxg_s, vtau_s)
+               rho_atom%exc_s = rho_atom%exc_s + exc_s
+
+               DO ispin = 1, nspins
+                  DO idir = 1, 3
+                     DO ir = 1, nr
+                        DO ia = 1, na
+                           gradient_atom_set(iatom)%nablavks_vec_rad_h(idir, ispin)%r_coef(ir, ia) = &
+                              gradient_atom_set(iatom)%nablavks_vec_rad_h(idir, ispin)%r_coef(ir, ia) &
+                              + vxg_h(idir, ia, ir, ispin)
+                           gradient_atom_set(iatom)%nablavks_vec_rad_s(idir, ispin)%r_coef(ir, ia) = &
+                              gradient_atom_set(iatom)%nablavks_vec_rad_s(idir, ispin)%r_coef(ir, ia) &
+                              + vxg_s(idir, ia, ir, ispin)
+                        END DO ! ia
+                     END DO ! ir
+                  END DO ! idir
+               END DO ! ispin
+
+               ! Add contributions to the exc energy
+
+               exc1 = exc1 + rho_atom%exc_h - rho_atom%exc_s
+
+               ! Integration to get the matrix elements relative to the vxc_atom
+               ! here the products with the primitives is done: gaVxcgb
+               ! internal transformation to get the integral in cartesian Gaussians
+
+               NULLIFY (int_hh, int_ss)
+               CALL get_rho_atom(rho_atom=rho_atom, ga_Vlocal_gb_h=int_hh, ga_Vlocal_gb_s=int_ss)
+               IF (gradient_f) THEN
+                  CALL gaVxcgb_GC(vxc_h, vxc_s, vxg_h, vxg_s, int_hh, int_ss, &
+                                  grid_atom, basis_1c, harmonics, nspins)
+               ELSE
+                  CALL gaVxcgb_noGC(vxc_h, vxc_s, int_hh, int_ss, &
+                                    grid_atom, basis_1c, harmonics, nspins)
+               END IF
+               IF (tau_f) THEN
+                  CALL dgaVtaudgb(vtau_h, vtau_s, int_hh, int_ss, &
+                                  tau_basis_cache, nspins)
+               END IF
+               NULLIFY (r_h, r_s, dr_h, dr_s)
+            END DO ! iat
+
+            IF (tau_f) CALL release_tau_basis_cache(tau_basis_cache)
+
+            ! Release the xc structure used to store the xc derivatives
+            CALL xc_dset_release(deriv_set)
+            CALL xc_rho_set_release(rho_set_h)
+            CALL xc_rho_set_release(rho_set_s)
+         END DO ! ikind
+
+         CALL para_env%sum(exc1)
+
+         IF (ASSOCIATED(rho_h)) DEALLOCATE (rho_h)
+         IF (ASSOCIATED(rho_s)) DEALLOCATE (rho_s)
+         IF (ASSOCIATED(vxc_h)) DEALLOCATE (vxc_h)
+         IF (ASSOCIATED(vxc_s)) DEALLOCATE (vxc_s)
+
+         IF (gradient_f) THEN
+            IF (ASSOCIATED(drho_h)) DEALLOCATE (drho_h)
+            IF (ASSOCIATED(drho_s)) DEALLOCATE (drho_s)
+            IF (ASSOCIATED(vxg_h)) DEALLOCATE (vxg_h)
+            IF (ASSOCIATED(vxg_s)) DEALLOCATE (vxg_s)
+         END IF
+
+         IF (tau_f) THEN
+            IF (ASSOCIATED(tau_h)) DEALLOCATE (tau_h)
+            IF (ASSOCIATED(tau_s)) DEALLOCATE (tau_s)
+            IF (ASSOCIATED(vtau_h)) DEALLOCATE (vtau_h)
+            IF (ASSOCIATED(vtau_s)) DEALLOCATE (vtau_s)
+         END IF
+
+      END IF !xc_none
+
+      CALL timestop(handle)
+
+   END SUBROUTINE calculate_vxc_atom_epr
+
+! **************************************************************************************************
+!> \brief ...
 !> \param rho_atom_set ...
 !> \param rho1_atom_set ...
 !> \param qs_env ...
 !> \param xc_section ...
 !> \param para_env ...
-!> \param do_tddft   Initial implementation of TDDFT. Control parameters are read directly from
-!>                   'DFT' input section
 !> \param do_tddfpt2 New implementation of TDDFT.
 !> \param do_triplet ...
+!> \param do_sf ...
 !> \param kind_set_external ...
 ! **************************************************************************************************
    SUBROUTINE calculate_xc_2nd_deriv_atom(rho_atom_set, rho1_atom_set, qs_env, xc_section, para_env, &
-                                          do_tddft, do_tddfpt2, do_triplet, kind_set_external)
+                                          do_tddfpt2, do_triplet, do_sf, kind_set_external)
 
       TYPE(rho_atom_type), DIMENSION(:), POINTER         :: rho_atom_set, rho1_atom_set
       TYPE(qs_environment_type), POINTER                 :: qs_env
       TYPE(section_vals_type), POINTER                   :: xc_section
       TYPE(mp_para_env_type), INTENT(IN)                 :: para_env
-      LOGICAL, INTENT(IN), OPTIONAL                      :: do_tddft, do_tddfpt2, do_triplet
+      LOGICAL, INTENT(IN), OPTIONAL                      :: do_tddfpt2, do_triplet, do_sf
       TYPE(qs_kind_type), DIMENSION(:), OPTIONAL, &
          POINTER                                         :: kind_set_external
 
       CHARACTER(LEN=*), PARAMETER :: routineN = 'calculate_xc_2nd_deriv_atom'
 
-      INTEGER                                            :: atom, excitations, handle, iatom, ikind, &
-                                                            ir, na, natom, nr, nspins, res_etype
+      INTEGER                                            :: atom, handle, iatom, ikind, ir, na, &
+                                                            natom, nr, nspins
       INTEGER, DIMENSION(2)                              :: local_loop_limit
       INTEGER, DIMENSION(2, 3)                           :: bounds
       INTEGER, DIMENSION(:), POINTER                     :: atom_list
-      LOGICAL                                            :: gradient_functional, lsd, lsd_singlets, &
-                                                            my_tddft, paw_atom, scale_rho, tau_f
-      REAL(KIND=dp)                                      :: density_cut, gradient_cut, rtot, tau_cut
+      LOGICAL                                            :: accint, gradient_functional, lsd, &
+                                                            my_do_sf, paw_atom, scale_rho, tau_f
+      REAL(KIND=dp)                                      :: agr, alpha, density_cut, gradient_cut, &
+                                                            rtot, tau_cut
       REAL(KIND=dp), CONTIGUOUS, DIMENSION(:, :, :), &
-         POINTER                                         :: vxc_h, vxc_s
+         POINTER                                         :: vtau_h, vtau_s, vxc_h, vxc_s
       REAL(KIND=dp), DIMENSION(1, 1, 1)                  :: rtau
       REAL(KIND=dp), DIMENSION(1, 1, 1, 1)               :: rrho
-      REAL(KIND=dp), DIMENSION(:, :), POINTER            :: weight
+      REAL(KIND=dp), DIMENSION(:, :), POINTER            :: weight_h, weight_s
       REAL(KIND=dp), DIMENSION(:, :, :), POINTER         :: rho1_h, rho1_s, rho_h, rho_s, tau1_h, &
                                                             tau1_s, tau_h, tau_s
       REAL(KIND=dp), DIMENSION(:, :, :, :), POINTER      :: drho1_h, drho1_s, drho_h, drho_s, vxg_h, &
                                                             vxg_s
       TYPE(atomic_kind_type), DIMENSION(:), POINTER      :: atomic_kind_set
+      TYPE(dft_control_type), POINTER                    :: dft_control
       TYPE(grid_atom_type), POINTER                      :: grid_atom
       TYPE(gto_basis_set_type), POINTER                  :: basis_1c
       TYPE(harmonics_atom_type), POINTER                 :: harmonics
@@ -481,6 +824,7 @@ CONTAINS
       TYPE(rho_atom_coeff), DIMENSION(:, :), POINTER     :: r1_h_d, r1_s_d, r_h_d, r_s_d
       TYPE(rho_atom_type), POINTER                       :: rho1_atom, rho_atom
       TYPE(section_vals_type), POINTER                   :: input, xc_fun_section
+      TYPE(tau_basis_cache_type)                         :: tau_basis_cache
       TYPE(xc_derivative_set_type)                       :: deriv_set
       TYPE(xc_rho_cflags_type)                           :: needs
       TYPE(xc_rho_set_type)                              :: rho1_set_h, rho1_set_s, rho_set_h, &
@@ -491,13 +835,14 @@ CONTAINS
       CALL timeset(routineN, handle)
 
       NULLIFY (qs_kind_set)
-      NULLIFY (rho_h, rho_s, drho_h, drho_s, weight)
+      NULLIFY (rho_h, rho_s, drho_h, drho_s, weight_h, weight_s)
       NULLIFY (rho1_h, rho1_s, drho1_h, drho1_s)
       NULLIFY (vxc_h, vxc_s, vxg_h, vxg_s)
-      NULLIFY (tau_h, tau_s, tau1_h, tau1_s)
+      NULLIFY (tau_h, tau_s, tau1_h, tau1_s, vtau_h, vtau_s)
 
       CALL get_qs_env(qs_env=qs_env, &
                       input=input, &
+                      dft_control=dft_control, &
                       qs_kind_set=qs_kind_set, &
                       atomic_kind_set=atomic_kind_set)
 
@@ -507,8 +852,8 @@ CONTAINS
          my_kind_set => qs_kind_set
       END IF
 
-      my_tddft = .FALSE.
-      IF (PRESENT(do_tddft)) my_tddft = do_tddft
+      accint = dft_control%qs_control%gapw_control%accurate_xcint
+
       CALL section_vals_val_get(input, "DFT%LSD", l_val=lsd)
       CALL section_vals_val_get(xc_section, "DENSITY_CUTOFF", &
                                 r_val=density_cut)
@@ -516,14 +861,9 @@ CONTAINS
                                 r_val=gradient_cut)
       CALL section_vals_val_get(xc_section, "TAU_CUTOFF", &
                                 r_val=tau_cut)
-      IF (my_tddft) THEN
-         CALL section_vals_val_get(input, "DFT%EXCITATIONS", &
-                                   i_val=excitations)
-         CALL section_vals_val_get(input, "DFT%TDDFPT%LSD_SINGLETS", &
-                                   l_val=lsd_singlets)
-         CALL section_vals_val_get(input, "DFT%TDDFPT%RES_ETYPE", &
-                                   i_val=res_etype)
-      END IF
+
+      my_do_sf = .FALSE.
+      IF (PRESENT(do_sf)) my_do_sf = do_sf
 
       xc_fun_section => section_vals_get_subs_vals(xc_section, &
                                                    "XC_FUNCTIONAL")
@@ -534,13 +874,7 @@ CONTAINS
       END IF
 
       scale_rho = .FALSE.
-      IF (my_tddft) THEN
-         IF (excitations == tddfpt_excitations) THEN
-            IF (nspins == 1 .AND. (lsd_singlets .OR. res_etype == tddfpt_triplet)) THEN
-               lsd = .TRUE.
-            END IF
-         END IF
-      ELSEIF (PRESENT(do_tddfpt2) .AND. PRESENT(do_triplet)) THEN
+      IF (PRESENT(do_tddfpt2) .AND. PRESENT(do_triplet)) THEN
          IF (nspins == 1 .AND. do_triplet) THEN
             lsd = .TRUE.
             scale_rho = .TRUE.
@@ -553,11 +887,7 @@ CONTAINS
                                        calc_potential=.TRUE.)
       gradient_functional = needs%drho .OR. needs%drho_spin
       tau_f = (needs%tau .OR. needs%tau_spin)
-      IF (tau_f) THEN
-         CPABORT("Tau functionals not implemented for GAPW 2nd derivatives")
-      ELSE
-         rtau = 0.0_dp
-      END IF
+      IF (.NOT. tau_f) rtau = 0.0_dp
 
       !  Here starts the loop over all the atoms
       DO ikind = 1, SIZE(atomic_kind_set)
@@ -571,6 +901,27 @@ CONTAINS
 
          nr = grid_atom%nr
          na = grid_atom%ng_sphere
+
+         ! set integration weights
+         IF (accint) THEN
+            weight_h => grid_atom%weight
+            alpha = dft_control%qs_control%gapw_control%aw(ikind)
+            IF (ASSOCIATED(grid_atom%gapw_weight_s)) THEN
+               IF (grid_atom%gapw_weight_alpha /= alpha) DEALLOCATE (grid_atom%gapw_weight_s)
+            END IF
+            IF (.NOT. ASSOCIATED(grid_atom%gapw_weight_s)) THEN
+               ALLOCATE (grid_atom%gapw_weight_s(na, nr))
+               DO ir = 1, nr
+                  agr = 1.0_dp - EXP(-alpha*grid_atom%rad2(ir))
+                  grid_atom%gapw_weight_s(:, ir) = grid_atom%weight(:, ir)*agr
+               END DO
+               grid_atom%gapw_weight_alpha = alpha
+            END IF
+            weight_s => grid_atom%gapw_weight_s
+         ELSE
+            weight_h => grid_atom%weight
+            weight_s => grid_atom%weight
+         END IF
 
          ! Array dimension: here anly one dimensional arrays are used,
          ! i.e. only the first column of deriv_data is read.
@@ -609,7 +960,12 @@ CONTAINS
          vxc_h = 0.0_dp
          vxc_s = 0.0_dp
 
-         weight => grid_atom%weight
+         IF (tau_f) THEN
+            CALL create_tau_basis_cache(tau_basis_cache, grid_atom, basis_1c, harmonics)
+            ALLOCATE (tau_h(1:na, 1:nr, 1:nspins), tau1_h(1:na, 1:nr, 1:nspins), &
+                      tau_s(1:na, 1:nr, 1:nspins), tau1_s(1:na, 1:nr, 1:nspins))
+            ALLOCATE (vtau_h(1:na, 1:nr, 1:nspins), vtau_s(1:na, 1:nr, 1:nspins))
+         END IF
 
          IF (gradient_functional) THEN
             ALLOCATE (drho_h(1:4, 1:na, 1:nr, 1:nspins), drho1_h(1:4, 1:na, 1:nr, 1:nspins), &
@@ -671,12 +1027,20 @@ CONTAINS
                                      ir, r1_h, r1_s, rho1_h, rho1_s, dr1_h, dr1_s, r1_h_d, r1_s_d, &
                                      drho1_h, drho1_s)
             END DO
+            IF (tau_f) THEN
+               CALL calc_tau_atom(tau_h, tau_s, rho_atom, tau_basis_cache, nspins)
+               CALL calc_tau_atom(tau1_h, tau1_s, rho1_atom, tau_basis_cache, nspins)
+            END IF
             IF (scale_rho) THEN
                rho_h = 2.0_dp*rho_h
                rho_s = 2.0_dp*rho_s
                IF (gradient_functional) THEN
                   drho_h = 2.0_dp*drho_h
                   drho_s = 2.0_dp*drho_s
+               END IF
+               IF (tau_f) THEN
+                  tau_h = 2.0_dp*tau_h
+                  tau_s = 2.0_dp*tau_s
                END IF
             END IF
 
@@ -702,11 +1066,13 @@ CONTAINS
             CALL xc_2nd_deriv_of_r(xc_section=xc_section, &
                                    rho_set=rho_set_h, rho1_set=rho1_set_h, &
                                    deriv_set=deriv_set, &
-                                   w=weight, vxc=vxc_h, vxg=vxg_h, do_triplet=do_triplet)
+                                   w=weight_h, vxc=vxc_h, vxg=vxg_h, vtau=vtau_h, do_triplet=do_triplet, &
+                                   do_sf=my_do_sf)
             CALL xc_2nd_deriv_of_r(xc_section=xc_section, &
                                    rho_set=rho_set_s, rho1_set=rho1_set_s, &
                                    deriv_set=deriv_set, &
-                                   w=weight, vxc=vxc_s, vxg=vxg_s, do_triplet=do_triplet)
+                                   w=weight_s, vxc=vxc_s, vxg=vxg_s, vtau=vtau_s, do_triplet=do_triplet, &
+                                   do_sf=my_do_sf)
 
             CALL get_rho_atom(rho_atom=rho1_atom, ga_Vlocal_gb_h=int_hh, ga_Vlocal_gb_s=int_ss)
             IF (gradient_functional) THEN
@@ -716,23 +1082,30 @@ CONTAINS
                CALL gaVxcgb_noGC(vxc_h, vxc_s, int_hh, int_ss, &
                                  grid_atom, basis_1c, harmonics, nspins)
             END IF
+            IF (tau_f) THEN
+               CALL dgaVtaudgb(vtau_h, vtau_s, int_hh, int_ss, &
+                               tau_basis_cache, nspins)
+            END IF
 
             NULLIFY (r_h, r_s, dr_h, dr_s)
 
          END DO
 
          ! some cleanup
-         NULLIFY (weight)
          DEALLOCATE (rho_h, rho_s, rho1_h, rho1_s, vxc_h, vxc_s)
          DEALLOCATE (drho_h, drho_s, vxg_h, vxg_s)
          DEALLOCATE (drho1_h, drho1_s)
+         IF (tau_f) THEN
+            DEALLOCATE (tau_h, tau_s, tau1_h, tau1_s)
+            DEALLOCATE (vtau_h, vtau_s)
+            CALL release_tau_basis_cache(tau_basis_cache)
+         END IF
 
          CALL xc_dset_release(deriv_set)
          CALL xc_rho_set_release(rho_set_h)
          CALL xc_rho_set_release(rho1_set_h)
          CALL xc_rho_set_release(rho_set_s)
          CALL xc_rho_set_release(rho1_set_s)
-
       END DO
 
       CALL timestop(handle)
@@ -769,13 +1142,14 @@ CONTAINS
                                                             nr, ns, nspins, nstep, num_pe
       INTEGER, DIMENSION(2, 3)                           :: bounds
       INTEGER, DIMENSION(:), POINTER                     :: atom_list
-      LOGICAL                                            :: donlcc, gradient_f, lsd, nlcc, paw_atom, &
-                                                            tau_f
-      REAL(dp)                                           :: beta, density_cut, exc_h, exc_s, &
-                                                            gradient_cut, oeps1, oeps2, tau_cut
+      LOGICAL                                            :: accint, donlcc, gradient_f, lsd, nlcc, &
+                                                            paw_atom, tau_f
+      REAL(dp)                                           :: agr, alpha, beta, density_cut, exc_h, &
+                                                            exc_s, gradient_cut, oeps1, oeps2, &
+                                                            tau_cut
       REAL(dp), DIMENSION(1, 1, 1)                       :: tau_d
       REAL(dp), DIMENSION(1, 1, 1, 1)                    :: rho_d
-      REAL(dp), DIMENSION(:, :), POINTER                 :: rho_nlcc, weight
+      REAL(dp), DIMENSION(:, :), POINTER                 :: rho_nlcc, weight_h, weight_s
       REAL(dp), DIMENSION(:, :, :), POINTER              :: rho0_h, rho0_s, rho1_h, rho1_s, rho_h, &
                                                             rho_s, tau0_h, tau0_s, tau1_h, tau1_s, &
                                                             tau_h, tau_s, vtau_h, vtau_s, vxc_h, &
@@ -794,29 +1168,32 @@ CONTAINS
       TYPE(rho_atom_coeff), DIMENSION(:, :), POINTER     :: r_h_d, r_s_d
       TYPE(rho_atom_type), POINTER                       :: rho0_atom, rho1_atom, rho2_atom
       TYPE(section_vals_type), POINTER                   :: xc_fun_section
+      TYPE(tau_basis_cache_type)                         :: tau_basis_cache
       TYPE(xc_derivative_set_type)                       :: deriv_set
       TYPE(xc_rho_cflags_type)                           :: needs
       TYPE(xc_rho_set_type)                              :: rho_set_h, rho_set_s
 
       CALL timeset(routineN, handle)
 
+      NULLIFY (vtau_h, vtau_s)
+
       ak = 0.0_dp
       bl = 0.0_dp
       SELECT CASE (accuracy)
       CASE (:4)
          nstep = 2
-         ak(-2:2) = (/1.0_dp, -8.0_dp, 0.0_dp, 8.0_dp, -1.0_dp/)/12.0_dp
-         bl(-2:2) = (/-1.0_dp, 16.0_dp, -30.0_dp, 16.0_dp, -1.0_dp/)/12.0_dp
+         ak(-2:2) = [1.0_dp, -8.0_dp, 0.0_dp, 8.0_dp, -1.0_dp]/12.0_dp
+         bl(-2:2) = [-1.0_dp, 16.0_dp, -30.0_dp, 16.0_dp, -1.0_dp]/12.0_dp
       CASE (5:7)
          nstep = 3
-         ak(-3:3) = (/-1.0_dp, 9.0_dp, -45.0_dp, 0.0_dp, 45.0_dp, -9.0_dp, 1.0_dp/)/60.0_dp
-         bl(-3:3) = (/2.0_dp, -27.0_dp, 270.0_dp, -490.0_dp, 270.0_dp, -27.0_dp, 2.0_dp/)/180.0_dp
+         ak(-3:3) = [-1.0_dp, 9.0_dp, -45.0_dp, 0.0_dp, 45.0_dp, -9.0_dp, 1.0_dp]/60.0_dp
+         bl(-3:3) = [2.0_dp, -27.0_dp, 270.0_dp, -490.0_dp, 270.0_dp, -27.0_dp, 2.0_dp]/180.0_dp
       CASE (8:)
          nstep = 4
-         ak(-4:4) = (/1.0_dp, -32.0_dp/3.0_dp, 56.0_dp, -224.0_dp, 0.0_dp, &
-                      224.0_dp, -56.0_dp, 32.0_dp/3.0_dp, -1.0_dp/)/280.0_dp
-         bl(-4:4) = (/-1.0_dp, 128.0_dp/9.0_dp, -112.0_dp, 896.0_dp, -14350.0_dp/9.0_dp, &
-                      896.0_dp, -112.0_dp, 128.0_dp/9.0_dp, -1.0_dp/)/560.0_dp
+         ak(-4:4) = [1.0_dp, -32.0_dp/3.0_dp, 56.0_dp, -224.0_dp, 0.0_dp, &
+                     224.0_dp, -56.0_dp, 32.0_dp/3.0_dp, -1.0_dp]/280.0_dp
+         bl(-4:4) = [-1.0_dp, 128.0_dp/9.0_dp, -112.0_dp, 896.0_dp, -14350.0_dp/9.0_dp, &
+                     896.0_dp, -112.0_dp, 128.0_dp/9.0_dp, -1.0_dp]/560.0_dp
       END SELECT
       oeps1 = 1.0_dp/epsrho
       oeps2 = 1.0_dp/(epsrho**2)
@@ -828,6 +1205,8 @@ CONTAINS
 
       xc_fun_section => section_vals_get_subs_vals(xc_section, "XC_FUNCTIONAL")
       CALL section_vals_val_get(xc_fun_section, "_SECTION_PARAMETERS_", i_val=myfun)
+
+      accint = dft_control%qs_control%gapw_control%accurate_xcint
 
       IF (myfun == xc_none) THEN
          ! no action needed?
@@ -861,6 +1240,27 @@ CONTAINS
             nr = grid_atom%nr
             na = grid_atom%ng_sphere
 
+            ! set integration weights
+            IF (accint) THEN
+               weight_h => grid_atom%weight
+               alpha = dft_control%qs_control%gapw_control%aw(ikind)
+               IF (ASSOCIATED(grid_atom%gapw_weight_s)) THEN
+                  IF (grid_atom%gapw_weight_alpha /= alpha) DEALLOCATE (grid_atom%gapw_weight_s)
+               END IF
+               IF (.NOT. ASSOCIATED(grid_atom%gapw_weight_s)) THEN
+                  ALLOCATE (grid_atom%gapw_weight_s(na, nr))
+                  DO ir = 1, nr
+                     agr = 1.0_dp - EXP(-alpha*grid_atom%rad2(ir))
+                     grid_atom%gapw_weight_s(:, ir) = grid_atom%weight(:, ir)*agr
+                  END DO
+                  grid_atom%gapw_weight_alpha = alpha
+               END IF
+               weight_s => grid_atom%gapw_weight_s
+            ELSE
+               weight_h => grid_atom%weight
+               weight_s => grid_atom%weight
+            END IF
+
             ! Prepare the structures needed to calculate and store the xc derivatives
 
             ! Array dimension: here anly one dimensional arrays are used,
@@ -882,8 +1282,6 @@ CONTAINS
             CALL xc_rho_set_atom_update(rho_set_h, needs, mspins, bounds)
             CALL xc_rho_set_atom_update(rho_set_s, needs, mspins, bounds)
 
-            weight => grid_atom%weight
-
             ALLOCATE (rho_h(na, nr, mspins), rho_s(na, nr, mspins), &
                       rho0_h(na, nr, nspins), rho0_s(na, nr, nspins), &
                       rho1_h(na, nr, nspins), rho1_s(na, nr, nspins))
@@ -895,6 +1293,7 @@ CONTAINS
                ALLOCATE (vxg_h(3, na, nr, mspins), vxg_s(3, na, nr, mspins))
             END IF
             IF (tau_f) THEN
+               CALL create_tau_basis_cache(tau_basis_cache, grid_atom, basis_1c, harmonics)
                ALLOCATE (tau_h(na, nr, mspins), tau_s(na, nr, mspins), &
                          tau0_h(na, nr, nspins), tau0_s(na, nr, nspins), &
                          tau1_h(na, nr, nspins), tau1_s(na, nr, nspins))
@@ -953,7 +1352,7 @@ CONTAINS
                END DO
                IF (tau_f) THEN
                   !compute tau on the grid all at once
-                  CALL calc_tau_atom(tau0_h, tau0_s, rho0_atom, kind_set(ikind), nspins)
+                  CALL calc_tau_atom(tau0_h, tau0_s, rho0_atom, tau_basis_cache, nspins)
                ELSE
                   tau_d = 0.0_dp
                END IF
@@ -978,7 +1377,7 @@ CONTAINS
                END DO
                IF (tau_f) THEN
                   !compute tau on the grid all at once
-                  CALL calc_tau_atom(tau1_h, tau1_s, rho1_atom, kind_set(ikind), nspins)
+                  CALL calc_tau_atom(tau1_h, tau1_s, rho1_atom, tau_basis_cache, nspins)
                END IF
                ! RHO2
                rho2_atom => rho2_atom_set(iatom)
@@ -1050,7 +1449,7 @@ CONTAINS
 
                   ! hard atom density !
                   CALL xc_dset_zero_all(deriv_set)
-                  CALL vxc_of_r_new(xc_fun_section, rho_set_h, deriv_set, 1, needs, weight, &
+                  CALL vxc_of_r_new(xc_fun_section, rho_set_h, deriv_set, 1, needs, weight_h, &
                                     lsd, na, nr, exc_h, vxc_h, vxg_h, vtau_h)
                   IF (is_triplet) THEN
                      vxc_h(:, :, 1) = vxc_h(:, :, 1) - vxc_h(:, :, 2)
@@ -1063,7 +1462,7 @@ CONTAINS
                   END IF
                   ! soft atom density !
                   CALL xc_dset_zero_all(deriv_set)
-                  CALL vxc_of_r_new(xc_fun_section, rho_set_s, deriv_set, 1, needs, weight, &
+                  CALL vxc_of_r_new(xc_fun_section, rho_set_s, deriv_set, 1, needs, weight_s, &
                                     lsd, na, nr, exc_s, vxc_s, vxg_s, vtau_s)
                   IF (is_triplet) THEN
                      vxc_s(:, :, 1) = vxc_s(:, :, 1) - vxc_s(:, :, 2)
@@ -1088,7 +1487,7 @@ CONTAINS
                   END IF
                   IF (tau_f) THEN
                      CALL dgaVtaudgb(vtau_h, vtau_s, fint_hh, fint_ss, &
-                                     grid_atom, basis_1c, harmonics, nspins)
+                                     tau_basis_cache, nspins)
                   END IF
                   ! first derivative fxc
                   NULLIFY (int_hh, int_ss)
@@ -1128,8 +1527,8 @@ CONTAINS
             IF (tau_f) THEN
                DEALLOCATE (tau_h, tau_s, tau0_h, tau0_s, tau1_h, tau1_s)
                DEALLOCATE (vtau_h, vtau_s)
+               CALL release_tau_basis_cache(tau_basis_cache)
             END IF
-
          END DO ! ikind
 
       END IF !xc_none
@@ -1169,17 +1568,17 @@ CONTAINS
                                                             nr, ns, nspins, nstep, num_pe
       INTEGER, DIMENSION(2, 3)                           :: bounds
       INTEGER, DIMENSION(:), POINTER                     :: atom_list
-      LOGICAL                                            :: donlcc, gradient_f, lsd, nlcc, paw_atom, &
-                                                            tau_f
-      REAL(dp)                                           :: beta, density_cut, gradient_cut, oeps1, &
-                                                            tau_cut
-      REAL(dp), CONTIGUOUS, DIMENSION(:, :, :), POINTER  :: vxc_h, vxc_s
+      LOGICAL                                            :: accint, donlcc, gradient_f, lsd, nlcc, &
+                                                            paw_atom, tau_f
+      REAL(dp)                                           :: agr, alpha, beta, density_cut, &
+                                                            gradient_cut, oeps1, tau_cut
+      REAL(dp), CONTIGUOUS, DIMENSION(:, :, :), POINTER  :: vtau_h, vtau_s, vxc_h, vxc_s
       REAL(dp), DIMENSION(1, 1, 1)                       :: tau_d
       REAL(dp), DIMENSION(1, 1, 1, 1)                    :: rho_d
-      REAL(dp), DIMENSION(:, :), POINTER                 :: rho_nlcc, weight
+      REAL(dp), DIMENSION(:, :), POINTER                 :: rho_nlcc, weight_h, weight_s
       REAL(dp), DIMENSION(:, :, :), POINTER              :: rho0_h, rho0_s, rho1_h, rho1_s, rho_h, &
                                                             rho_s, tau0_h, tau0_s, tau1_h, tau1_s, &
-                                                            tau_h, tau_s, vtau_h, vtau_s
+                                                            tau_h, tau_s
       REAL(dp), DIMENSION(:, :, :, :), POINTER           :: drho0_h, drho0_s, drho1_h, drho1_s, &
                                                             drho_h, drho_s, vxg_h, vxg_s
       REAL(KIND=dp), DIMENSION(-4:4)                     :: ak
@@ -1194,6 +1593,7 @@ CONTAINS
       TYPE(rho_atom_coeff), DIMENSION(:, :), POINTER     :: r_h_d, r_s_d
       TYPE(rho_atom_type), POINTER                       :: rho0_atom, rho1_atom, rho2_atom
       TYPE(section_vals_type), POINTER                   :: xc_fun_section
+      TYPE(tau_basis_cache_type)                         :: tau_basis_cache
       TYPE(xc_derivative_set_type)                       :: deriv_set
       TYPE(xc_rho_cflags_type)                           :: needs
       TYPE(xc_rho_set_type)                              :: rho1_set_h, rho1_set_s, rho_set_h, &
@@ -1201,18 +1601,20 @@ CONTAINS
 
       CALL timeset(routineN, handle)
 
+      NULLIFY (vtau_h, vtau_s)
+
       ak = 0.0_dp
       SELECT CASE (accuracy)
       CASE (:4)
          nstep = 2
-         ak(-2:2) = (/1.0_dp, -8.0_dp, 0.0_dp, 8.0_dp, -1.0_dp/)/12.0_dp
+         ak(-2:2) = [1.0_dp, -8.0_dp, 0.0_dp, 8.0_dp, -1.0_dp]/12.0_dp
       CASE (5:7)
          nstep = 3
-         ak(-3:3) = (/-1.0_dp, 9.0_dp, -45.0_dp, 0.0_dp, 45.0_dp, -9.0_dp, 1.0_dp/)/60.0_dp
+         ak(-3:3) = [-1.0_dp, 9.0_dp, -45.0_dp, 0.0_dp, 45.0_dp, -9.0_dp, 1.0_dp]/60.0_dp
       CASE (8:)
          nstep = 4
-         ak(-4:4) = (/1.0_dp, -32.0_dp/3.0_dp, 56.0_dp, -224.0_dp, 0.0_dp, &
-                      224.0_dp, -56.0_dp, 32.0_dp/3.0_dp, -1.0_dp/)/280.0_dp
+         ak(-4:4) = [1.0_dp, -32.0_dp/3.0_dp, 56.0_dp, -224.0_dp, 0.0_dp, &
+                     224.0_dp, -56.0_dp, 32.0_dp/3.0_dp, -1.0_dp]/280.0_dp
       END SELECT
       oeps1 = 1.0_dp/epsrho
 
@@ -1223,6 +1625,8 @@ CONTAINS
 
       xc_fun_section => section_vals_get_subs_vals(xc_section, "XC_FUNCTIONAL")
       CALL section_vals_val_get(xc_fun_section, "_SECTION_PARAMETERS_", i_val=myfun)
+
+      accint = dft_control%qs_control%gapw_control%accurate_xcint
 
       IF (myfun == xc_none) THEN
          ! no action needed?
@@ -1260,6 +1664,27 @@ CONTAINS
             nr = grid_atom%nr
             na = grid_atom%ng_sphere
 
+            ! set integration weights
+            IF (accint) THEN
+               weight_h => grid_atom%weight
+               alpha = dft_control%qs_control%gapw_control%aw(ikind)
+               IF (ASSOCIATED(grid_atom%gapw_weight_s)) THEN
+                  IF (grid_atom%gapw_weight_alpha /= alpha) DEALLOCATE (grid_atom%gapw_weight_s)
+               END IF
+               IF (.NOT. ASSOCIATED(grid_atom%gapw_weight_s)) THEN
+                  ALLOCATE (grid_atom%gapw_weight_s(na, nr))
+                  DO ir = 1, nr
+                     agr = 1.0_dp - EXP(-alpha*grid_atom%rad2(ir))
+                     grid_atom%gapw_weight_s(:, ir) = grid_atom%weight(:, ir)*agr
+                  END DO
+                  grid_atom%gapw_weight_alpha = alpha
+               END IF
+               weight_s => grid_atom%gapw_weight_s
+            ELSE
+               weight_h => grid_atom%weight
+               weight_s => grid_atom%weight
+            END IF
+
             ! Prepare the structures needed to calculate and store the xc derivatives
 
             ! Array dimension: here anly one dimensional arrays are used,
@@ -1287,8 +1712,6 @@ CONTAINS
             CALL xc_rho_set_atom_update(rho1_set_h, needs, mspins, bounds)
             CALL xc_rho_set_atom_update(rho1_set_s, needs, mspins, bounds)
 
-            weight => grid_atom%weight
-
             ALLOCATE (rho_h(na, nr, nspins), rho_s(na, nr, nspins), &
                       rho0_h(na, nr, nspins), rho0_s(na, nr, nspins), &
                       rho1_h(na, nr, nspins), rho1_s(na, nr, nspins))
@@ -1300,6 +1723,7 @@ CONTAINS
                ALLOCATE (vxg_h(3, na, nr, nspins), vxg_s(3, na, nr, nspins))
             END IF
             IF (tau_f) THEN
+               CALL create_tau_basis_cache(tau_basis_cache, grid_atom, basis_1c, harmonics)
                ALLOCATE (tau_h(na, nr, nspins), tau_s(na, nr, nspins), &
                          tau0_h(na, nr, nspins), tau0_s(na, nr, nspins), &
                          tau1_h(na, nr, nspins), tau1_s(na, nr, nspins))
@@ -1358,7 +1782,7 @@ CONTAINS
                END DO
                IF (tau_f) THEN
                   !compute tau on the grid all at once
-                  CALL calc_tau_atom(tau0_h, tau0_s, rho0_atom, kind_set(ikind), nspins)
+                  CALL calc_tau_atom(tau0_h, tau0_s, rho0_atom, tau_basis_cache, nspins)
                ELSE
                   tau_d = 0.0_dp
                END IF
@@ -1383,7 +1807,7 @@ CONTAINS
                END DO
                IF (tau_f) THEN
                   !compute tau on the grid all at once
-                  CALL calc_tau_atom(tau1_h, tau1_s, rho1_atom, kind_set(ikind), nspins)
+                  CALL calc_tau_atom(tau1_h, tau1_s, rho1_atom, tau_basis_cache, nspins)
                END IF
 
                DO ir = 1, nr
@@ -1447,13 +1871,15 @@ CONTAINS
                   CALL xc_2nd_deriv_of_r(xc_section=xc_section, &
                                          rho_set=rho_set_h, rho1_set=rho1_set_h, &
                                          deriv_set=deriv_set, &
-                                         w=weight, vxc=vxc_h, vxg=vxg_h, do_triplet=is_triplet)
+                                         w=weight_h, vxc=vxc_h, vxg=vxg_h, vtau=vtau_h, &
+                                         do_triplet=is_triplet)
                   ! soft atom density !
                   CALL xc_dset_zero_all(deriv_set)
                   CALL xc_2nd_deriv_of_r(xc_section=xc_section, &
                                          rho_set=rho_set_s, rho1_set=rho1_set_s, &
                                          deriv_set=deriv_set, &
-                                         w=weight, vxc=vxc_s, vxg=vxg_s, do_triplet=is_triplet)
+                                         w=weight_s, vxc=vxc_s, vxg=vxg_s, vtau=vtau_s, &
+                                         do_triplet=is_triplet)
                   ! potentials
                   DO ns = 1, nspins
                      fint_hh(ns)%r_coef(:, :) = 0.0_dp
@@ -1468,7 +1894,7 @@ CONTAINS
                   END IF
                   IF (tau_f) THEN
                      CALL dgaVtaudgb(vtau_h, vtau_s, fint_hh, fint_ss, &
-                                     grid_atom, basis_1c, harmonics, nspins)
+                                     tau_basis_cache, nspins)
                   END IF
                   ! second derivative gxc
                   NULLIFY (int_hh, int_ss)
@@ -1503,8 +1929,8 @@ CONTAINS
             IF (tau_f) THEN
                DEALLOCATE (tau_h, tau_s, tau0_h, tau0_s, tau1_h, tau1_s)
                DEALLOCATE (vtau_h, vtau_s)
+               CALL release_tau_basis_cache(tau_basis_cache)
             END IF
-
          END DO ! ikind
 
       END IF !xc_none
@@ -1619,239 +2045,187 @@ CONTAINS
                                              r_s_d(3, ispin)%r_coef(ir, iso)* &
                                              harmonics%slm(ia, iso)
 
-                  drho_h(4, ia, ir, ispin) = SQRT( &
-                                             drho_h(1, ia, ir, ispin)*drho_h(1, ia, ir, ispin) + &
-                                             drho_h(2, ia, ir, ispin)*drho_h(2, ia, ir, ispin) + &
-                                             drho_h(3, ia, ir, ispin)*drho_h(3, ia, ir, ispin))
-
-                  drho_s(4, ia, ir, ispin) = SQRT( &
-                                             drho_s(1, ia, ir, ispin)*drho_s(1, ia, ir, ispin) + &
-                                             drho_s(2, ia, ir, ispin)*drho_s(2, ia, ir, ispin) + &
-                                             drho_s(3, ia, ir, ispin)*drho_s(3, ia, ir, ispin))
-
                END DO ! ia
             END DO ! iso
+            DO ia = 1, na
+               drho_h(4, ia, ir, ispin) = SQRT( &
+                                          drho_h(1, ia, ir, ispin)*drho_h(1, ia, ir, ispin) + &
+                                          drho_h(2, ia, ir, ispin)*drho_h(2, ia, ir, ispin) + &
+                                          drho_h(3, ia, ir, ispin)*drho_h(3, ia, ir, ispin))
+
+               drho_s(4, ia, ir, ispin) = SQRT( &
+                                          drho_s(1, ia, ir, ispin)*drho_s(1, ia, ir, ispin) + &
+                                          drho_s(2, ia, ir, ispin)*drho_s(2, ia, ir, ispin) + &
+                                          drho_s(3, ia, ir, ispin)*drho_s(3, ia, ir, ispin))
+            END DO ! ia
          END DO ! ispin
       END IF
 
    END SUBROUTINE calc_rho_angular
 
 ! **************************************************************************************************
-!> \brief Computes tau hard and soft on the atomic grids for meta-GGA calculations
-!> \param tau_h the hard part of tau
-!> \param tau_s the soft part of tau
-!> \param rho_atom ...
-!> \param qs_kind ...
-!> \param nspins ...
-!> \note This is a rewrite to correct a meta-GGA GAPW bug. This is more brute force than the original,
-!>       which was done along in qs_rho_atom_methods.F, but makes sure that no corner is cut in
-!>       terms of accuracy (A. Bussy)
+!> \brief Precompute radial and angular factors for GAPW meta-GGA tau contractions
+!> \param tau_cache precomputed compact one-center gradient basis
+!> \param grid_atom atom-centered integration grid
+!> \param basis_1c GAPW one-center basis
+!> \param harmonics spherical harmonics on the atom-centered grid
 ! **************************************************************************************************
-   SUBROUTINE calc_tau_atom(tau_h, tau_s, rho_atom, qs_kind, nspins)
+   SUBROUTINE create_tau_basis_cache(tau_cache, grid_atom, basis_1c, harmonics)
 
-      REAL(dp), DIMENSION(:, :, :), INTENT(INOUT)        :: tau_h, tau_s
-      TYPE(rho_atom_type), POINTER                       :: rho_atom
-      TYPE(qs_kind_type), INTENT(IN)                     :: qs_kind
-      INTEGER, INTENT(IN)                                :: nspins
-
-      CHARACTER(len=*), PARAMETER                        :: routineN = 'calc_tau_atom'
-
-      INTEGER                                            :: dir, handle, ia, ip, ipgf, ir, iset, &
-                                                            iso, ispin, jp, jpgf, jset, jso, l, &
-                                                            maxso, na, nr, nset, starti, startj
-      INTEGER, DIMENSION(:), POINTER                     :: lmax, lmin, npgf, o2nindex
-      REAL(dp)                                           :: cpc_h, cpc_s
-      REAL(dp), ALLOCATABLE, DIMENSION(:, :)             :: fga, fgr, r1, r2
-      REAL(dp), ALLOCATABLE, DIMENSION(:, :, :)          :: a1, a2
-      REAL(dp), DIMENSION(:, :), POINTER                 :: slm, zet
-      REAL(dp), DIMENSION(:, :, :), POINTER              :: dslm_dxyz
+      TYPE(tau_basis_cache_type), INTENT(INOUT)          :: tau_cache
       TYPE(grid_atom_type), POINTER                      :: grid_atom
       TYPE(gto_basis_set_type), POINTER                  :: basis_1c
       TYPE(harmonics_atom_type), POINTER                 :: harmonics
 
-      NULLIFY (harmonics, grid_atom, basis_1c, lmax, lmin, npgf, zet, slm, dslm_dxyz, o2nindex)
+      INTEGER                                            :: dir, ia, igrid, ip, ipgf, ir, iset, iso, &
+                                                            l, starti
+      REAL(dp), ALLOCATABLE, DIMENSION(:)                :: a1, a2, gexp, r1, r2
+      REAL(dp), DIMENSION(:, :), POINTER                 :: slm
+      REAL(dp), DIMENSION(:, :, :), POINTER              :: dslm_dxyz
 
-      CALL timeset(routineN, handle)
+      NULLIFY (slm, dslm_dxyz)
 
-      !We need to put 0.5* grad_g1 dot grad_gw on the grid
-      !For this we need grid info, basis info, and projector info
-      CALL get_qs_kind(qs_kind, grid_atom=grid_atom, harmonics=harmonics)
-      CALL get_qs_kind(qs_kind, basis_set=basis_1c, basis_type="GAPW_1C")
+      CALL release_tau_basis_cache(tau_cache)
 
-      nr = grid_atom%nr
-      na = grid_atom%ng_sphere
+      CALL get_gto_basis_set(gto_basis_set=basis_1c, lmax=tau_cache%lmax, &
+                             lmin=tau_cache%lmin, maxso=tau_cache%maxso, &
+                             npgf=tau_cache%npgf, nset=tau_cache%nset, &
+                             zet=tau_cache%zet)
+      CALL get_paw_basis_info(basis_1c, o2nindex=tau_cache%o2nindex, &
+                              n2oindex=tau_cache%n2oindex, &
+                              nsatbas=tau_cache%nsatbas)
 
+      tau_cache%nr = grid_atom%nr
+      tau_cache%na = grid_atom%ng_sphere
       slm => harmonics%slm
       dslm_dxyz => harmonics%dslm_dxyz
 
-      CALL get_paw_basis_info(basis_1c, o2nindex=o2nindex)
+      ALLOCATE (tau_cache%grad(tau_cache%na*tau_cache%nr, tau_cache%nsatbas, 3))
+      ALLOCATE (a1(tau_cache%na), a2(tau_cache%na), gexp(tau_cache%nr), &
+                r1(tau_cache%nr), r2(tau_cache%nr))
+      tau_cache%grad = 0.0_dp
+
+      DO iset = 1, tau_cache%nset
+         DO ipgf = 1, tau_cache%npgf(iset)
+            starti = (iset - 1)*tau_cache%maxso + &
+                     (ipgf - 1)*nsoset(tau_cache%lmax(iset))
+            gexp(1:tau_cache%nr) = EXP(-tau_cache%zet(ipgf, iset)* &
+                                       grid_atom%rad2(1:tau_cache%nr))
+            DO iso = nsoset(tau_cache%lmin(iset) - 1) + 1, nsoset(tau_cache%lmax(iset))
+               ip = tau_cache%o2nindex(starti + iso)
+               IF (ip == 0) CYCLE
+               l = indso(1, iso)
+
+               r1(1:tau_cache%nr) = grid_atom%rad(1:tau_cache%nr)**(l - 1)*gexp(1:tau_cache%nr)
+               r2(1:tau_cache%nr) = -2.0_dp*tau_cache%zet(ipgf, iset)* &
+                                    grid_atom%rad2(1:tau_cache%nr)*r1(1:tau_cache%nr)
+
+               DO dir = 1, 3
+                  a1(1:tau_cache%na) = dslm_dxyz(dir, 1:tau_cache%na, iso)
+                  a2(1:tau_cache%na) = harmonics%a(dir, 1:tau_cache%na)*slm(1:tau_cache%na, iso)
+                  DO ir = 1, tau_cache%nr
+                     DO ia = 1, tau_cache%na
+                        igrid = ia + (ir - 1)*tau_cache%na
+                        tau_cache%grad(igrid, ip, dir) = r1(ir)*a1(ia) + r2(ir)*a2(ia)
+                     END DO
+                  END DO
+               END DO
+            END DO
+         END DO
+      END DO
+
+      DEALLOCATE (a1, a2, gexp, r1, r2)
+
+   END SUBROUTINE create_tau_basis_cache
+
+! **************************************************************************************************
+!> \brief Release precomputed GAPW meta-GGA tau factors
+!> \param tau_cache precomputed compact one-center gradient basis
+! **************************************************************************************************
+   SUBROUTINE release_tau_basis_cache(tau_cache)
+
+      TYPE(tau_basis_cache_type), INTENT(INOUT)          :: tau_cache
+
+      IF (ALLOCATED(tau_cache%grad)) DEALLOCATE (tau_cache%grad)
+      IF (ASSOCIATED(tau_cache%n2oindex)) DEALLOCATE (tau_cache%n2oindex)
+      IF (ASSOCIATED(tau_cache%o2nindex)) DEALLOCATE (tau_cache%o2nindex)
+      NULLIFY (tau_cache%lmax, tau_cache%lmin, tau_cache%n2oindex, tau_cache%npgf, &
+               tau_cache%zet, tau_cache%o2nindex)
+      tau_cache%maxso = 0
+      tau_cache%na = 0
+      tau_cache%nr = 0
+      tau_cache%nsatbas = 0
+      tau_cache%nset = 0
+
+   END SUBROUTINE release_tau_basis_cache
+
+! **************************************************************************************************
+!> \brief Computes tau hard and soft on the atomic grids for meta-GGA calculations
+!> \param tau_h the hard part of tau
+!> \param tau_s the soft part of tau
+!> \param rho_atom atom-centered density matrices
+!> \param tau_cache precomputed compact one-center gradient basis
+!> \param nspins number of spin channels
+!> \note This is a rewrite to correct a meta-GGA GAPW bug. This is more brute force than the original,
+!>       which was done along in qs_rho_atom_methods.F, but makes sure that no corner is cut in
+!>       terms of accuracy (A. Bussy)
+! **************************************************************************************************
+   SUBROUTINE calc_tau_atom(tau_h, tau_s, rho_atom, tau_cache, nspins)
+
+      REAL(dp), DIMENSION(:, :, :), INTENT(INOUT)        :: tau_h, tau_s
+      TYPE(rho_atom_type), POINTER                       :: rho_atom
+      TYPE(tau_basis_cache_type), INTENT(IN)             :: tau_cache
+      INTEGER, INTENT(IN)                                :: nspins
+
+      CHARACTER(len=*), PARAMETER                        :: routineN = 'calc_tau_atom'
+
+      INTEGER                                            :: dir, handle, ia, ibas, igrid, ir, ispin, &
+                                                            na, nbas, ngrid, nr
+      REAL(dp), ALLOCATABLE, DIMENSION(:, :)             :: work
+
+      CALL timeset(routineN, handle)
+
+      CPASSERT(ALLOCATED(tau_cache%grad))
 
       !zeroing tau, assuming it is already allocated
       tau_h = 0.0_dp
       tau_s = 0.0_dp
 
-      CALL get_gto_basis_set(gto_basis_set=basis_1c, lmax=lmax, lmin=lmin, npgf=npgf, &
-                             nset=nset, zet=zet, maxso=maxso)
+      nr = tau_cache%nr
+      na = tau_cache%na
+      nbas = tau_cache%nsatbas
+      ngrid = na*nr
+      ALLOCATE (work(ngrid, nbas))
 
-      !Separate the functions into purely r and purely angular parts, precompute them all
-      ALLOCATE (a1(na, nset*maxso, 3), a2(na, nset*maxso, 3))
-      ALLOCATE (r1(nr, nset*maxso), r2(nr, nset*maxso))
-      a1 = 0.0_dp; a2 = 0.0_dp
-      r1 = 0.0_dp; r2 = 0.0_dp
-
-      DO iset = 1, nset
-         DO ipgf = 1, npgf(iset)
-            starti = (iset - 1)*maxso + (ipgf - 1)*nsoset(lmax(iset))
-            DO iso = nsoset(lmin(iset) - 1) + 1, nsoset(lmax(iset))
-               l = indso(1, iso)
-
-               ! The x derivative of the spherical orbital, divided in angular and radial parts
-               ! Two of each are needed because d/dx(r^l Y_lm) * exp(-al*r^2) + r^l Y_lm * ! d/dx(exp-al*r^2)
-
-               ! the purely radial part of d/dx(r^l Y_lm) * exp(-al*r^2) (same for y, z)
-               r1(1:nr, starti + iso) = grid_atom%rad(1:nr)**(l - 1)*EXP(-zet(ipgf, iset)*grid_atom%rad2(1:nr))
-
-               ! the purely radial part of r^l Y_lm * d/dx(exp-al*r^2) (same for y, z)
-               r2(1:nr, starti + iso) = -2.0_dp*zet(ipgf, iset)*grid_atom%rad(1:nr)**(l + 1) &
-                                        *EXP(-zet(ipgf, iset)*grid_atom%rad2(1:nr))
-
-               DO dir = 1, 3
-                  ! the purely angular part of d/dx(r^l Y_lm) * exp(-al*r^2)
-                  a1(1:na, starti + iso, dir) = dslm_dxyz(dir, 1:na, iso)
-
-                  ! the purely angular part of r^l Y_lm * d/dx(exp-al*r^2)
-                  a2(1:na, starti + iso, dir) = harmonics%a(dir, 1:na)*slm(1:na, iso)
+      DO ispin = 1, nspins
+         DO dir = 1, 3
+            CALL dgemm('N', 'T', ngrid, nbas, nbas, 0.5_dp, tau_cache%grad(:, :, dir), &
+                       ngrid, rho_atom%cpc_h(ispin)%r_coef, nbas, 0.0_dp, work, ngrid)
+            DO ibas = 1, nbas
+               DO ir = 1, nr
+                  DO ia = 1, na
+                     igrid = ia + (ir - 1)*na
+                     tau_h(ia, ir, ispin) = tau_h(ia, ir, ispin) + &
+                                            tau_cache%grad(igrid, ibas, dir)*work(igrid, ibas)
+                  END DO
                END DO
+            END DO
 
-            END DO !iso
-         END DO !ipgf
-      END DO !iset
+            CALL dgemm('N', 'T', ngrid, nbas, nbas, 0.5_dp, tau_cache%grad(:, :, dir), &
+                       ngrid, rho_atom%cpc_s(ispin)%r_coef, nbas, 0.0_dp, work, ngrid)
+            DO ibas = 1, nbas
+               DO ir = 1, nr
+                  DO ia = 1, na
+                     igrid = ia + (ir - 1)*na
+                     tau_s(ia, ir, ispin) = tau_s(ia, ir, ispin) + &
+                                            tau_cache%grad(igrid, ibas, dir)*work(igrid, ibas)
+                  END DO
+               END DO
+            END DO
+         END DO
+      END DO
 
-      !Compute the matrix products
-      ALLOCATE (fga(na, 1))
-      ALLOCATE (fgr(nr, 1))
-      fga = 0.0_dp; fgr = 0.0_dp
-
-      DO iset = 1, nset
-         DO jset = 1, nset
-            DO ipgf = 1, npgf(iset)
-               starti = (iset - 1)*maxso + (ipgf - 1)*nsoset(lmax(iset))
-               DO jpgf = 1, npgf(jset)
-                  startj = (jset - 1)*maxso + (jpgf - 1)*nsoset(lmax(jset))
-
-                  DO iso = nsoset(lmin(iset) - 1) + 1, nsoset(lmax(iset))
-                     DO jso = nsoset(lmin(jset) - 1) + 1, nsoset(lmax(jset))
-
-                        ip = o2nindex(starti + iso)
-                        jp = o2nindex(startj + jso)
-
-                        !Two component per function => 4 terms in total
-
-                        ! take r1*a1(dir) *  r1*a1(dir)
-                        fgr(1:nr, 1) = r1(1:nr, starti + iso)*r1(1:nr, startj + jso)
-                        DO dir = 1, 3
-                           fga(1:na, 1) = a1(1:na, starti + iso, dir)*a1(1:na, startj + jso, dir)
-
-                           DO ispin = 1, nspins
-                              !get the projectors
-                              cpc_h = rho_atom%cpc_h(ispin)%r_coef(ip, jp)
-                              cpc_s = rho_atom%cpc_s(ispin)%r_coef(ip, jp)
-
-                              !compute contribution to tau
-                              DO ir = 1, nr
-                                 DO ia = 1, na
-                                    tau_h(ia, ir, ispin) = tau_h(ia, ir, ispin) + 0.5_dp*cpc_h* &
-                                                           fgr(ir, 1)*fga(ia, 1)
-
-                                    tau_s(ia, ir, ispin) = tau_s(ia, ir, ispin) + 0.5_dp*cpc_s* &
-                                                           fgr(ir, 1)*fga(ia, 1)
-                                 END DO
-                              END DO
-
-                           END DO !ispin
-                        END DO !dir
-
-                        ! add r1*a1(dir) * r2*a2(dir)
-                        fgr(1:nr, 1) = r1(1:nr, starti + iso)*r2(1:nr, startj + jso)
-                        DO dir = 1, 3
-                           fga(1:na, 1) = a1(1:na, starti + iso, dir)*a2(1:na, startj + jso, dir)
-
-                           DO ispin = 1, nspins
-                              !get the projectors
-                              cpc_h = rho_atom%cpc_h(ispin)%r_coef(ip, jp)
-                              cpc_s = rho_atom%cpc_s(ispin)%r_coef(ip, jp)
-
-                              !compute contribution to tau
-                              DO ir = 1, nr
-                                 DO ia = 1, na
-                                    tau_h(ia, ir, ispin) = tau_h(ia, ir, ispin) + 0.5_dp*cpc_h* &
-                                                           fgr(ir, 1)*fga(ia, 1)
-
-                                    tau_s(ia, ir, ispin) = tau_s(ia, ir, ispin) + 0.5_dp*cpc_s* &
-                                                           fgr(ir, 1)*fga(ia, 1)
-                                 END DO
-                              END DO
-
-                           END DO !ispin
-                        END DO !dir
-
-                        ! add r2*a2(dir) * V * r1*a1(dir)
-                        fgr(1:nr, 1) = r2(1:nr, starti + iso)*r1(1:nr, startj + jso)
-                        DO dir = 1, 3
-                           fga(1:na, 1) = a2(1:na, starti + iso, dir)*a1(1:na, startj + jso, dir)
-
-                           DO ispin = 1, nspins
-                              !get the projectors
-                              cpc_h = rho_atom%cpc_h(ispin)%r_coef(ip, jp)
-                              cpc_s = rho_atom%cpc_s(ispin)%r_coef(ip, jp)
-
-                              !compute contribution to tau
-                              DO ir = 1, nr
-                                 DO ia = 1, na
-                                    tau_h(ia, ir, ispin) = tau_h(ia, ir, ispin) + 0.5_dp*cpc_h* &
-                                                           fgr(ir, 1)*fga(ia, 1)
-
-                                    tau_s(ia, ir, ispin) = tau_s(ia, ir, ispin) + 0.5_dp*cpc_s* &
-                                                           fgr(ir, 1)*fga(ia, 1)
-                                 END DO
-                              END DO
-
-                           END DO !ispin
-                        END DO !dir
-
-                        ! add the last term: r2*a2(dir) * r2*a2(dir)
-                        fgr(1:nr, 1) = r2(1:nr, starti + iso)*r2(1:nr, startj + jso)
-                        DO dir = 1, 3
-                           fga(1:na, 1) = a2(1:na, starti + iso, dir)*a2(1:na, startj + jso, dir)
-
-                           DO ispin = 1, nspins
-                              !get the projectors
-                              cpc_h = rho_atom%cpc_h(ispin)%r_coef(ip, jp)
-                              cpc_s = rho_atom%cpc_s(ispin)%r_coef(ip, jp)
-
-                              !compute contribution to tau
-                              DO ir = 1, nr
-                                 DO ia = 1, na
-                                    tau_h(ia, ir, ispin) = tau_h(ia, ir, ispin) + 0.5_dp*cpc_h* &
-                                                           fgr(ir, 1)*fga(ia, 1)
-
-                                    tau_s(ia, ir, ispin) = tau_s(ia, ir, ispin) + 0.5_dp*cpc_s* &
-                                                           fgr(ir, 1)*fga(ia, 1)
-                                 END DO
-                              END DO
-
-                           END DO !ispin
-                        END DO !dir
-
-                     END DO !jso
-                  END DO !iso
-
-               END DO !jpgf
-            END DO !ipgf
-         END DO !jset
-      END DO !iset
-
-      DEALLOCATE (o2nindex)
+      DEALLOCATE (work)
 
       CALL timestop(handle)
 
@@ -2003,7 +2377,7 @@ CONTAINS
          DO iset2 = 1, nset
             CALL get_none0_cg_list(my_CG, lmin(iset1), lmax(iset1), lmin(iset2), lmax(iset2), &
                                    max_s_harm, lmax_expansion, cg_list, cg_n_list, max_iso_not0_local)
-            CPASSERT(max_iso_not0_local .LE. max_iso_not0)
+            CPASSERT(max_iso_not0_local <= max_iso_not0)
 
             n2 = nsoset(lmax(iset2))
             DO ipgf1 = 1, npgf(iset1)
@@ -2020,7 +2394,7 @@ CONTAINS
                   lmax12 = lmax(iset1) + lmax(iset2)
 
                   ! reduce expansion local densities
-                  IF (lmin12 .LE. lmax_expansion) THEN
+                  IF (lmin12 <= lmax_expansion) THEN
 
                      gg = 0.0_dp
                      IF (lmin12 == 0) THEN
@@ -2030,7 +2404,7 @@ CONTAINS
                      END IF
 
                      ! limit the expansion of the local densities to a max L
-                     IF (lmax12 .GT. lmax_expansion) lmax12 = lmax_expansion
+                     IF (lmax12 > lmax_expansion) lmax12 = lmax_expansion
 
                      DO l = lmin12 + 1, lmax12
                         gg(1:nr, l) = grid_atom%rad(1:nr)*gg(:, l - 1)
@@ -2178,7 +2552,7 @@ CONTAINS
             DO iset2 = 1, nset
                CALL get_none0_cg_list(my_CG, lmin(iset1), lmax(iset1), lmin(iset2), lmax(iset2), &
                                       max_s_harm, lmax_expansion, cg_list, cg_n_list, max_iso_not0_local)
-               CPASSERT(max_iso_not0_local .LE. max_iso_not0)
+               CPASSERT(max_iso_not0_local <= max_iso_not0)
                CALL get_none0_cg_list(my_CG_dxyz, lmin(iset1), lmax(iset1), lmin(iset2), lmax(iset2), &
                                       max_s_harm, lmax_expansion, dcg_list, dcg_n_list, dmax_iso_not0_local)
 
@@ -2197,7 +2571,7 @@ CONTAINS
                      lmax12 = lmax(iset1) + lmax(iset2)
 
                      !test reduce expansion local densities
-                     IF (lmin12 .LE. lmax_expansion) THEN
+                     IF (lmin12 <= lmax_expansion) THEN
 
                         gg = 0.0_dp
                         dgg = 0.0_dp
@@ -2209,7 +2583,7 @@ CONTAINS
                         END IF
 
                         !test reduce expansion local densities
-                        IF (lmax12 .GT. lmax_expansion) lmax12 = lmax_expansion
+                        IF (lmax12 > lmax_expansion) lmax12 = lmax_expansion
 
                         DO l = lmin12 + 1, lmax12
                            gg(1:nr, l) = grid_atom%rad(1:nr)*gg(:, l - 1)
@@ -2358,193 +2732,88 @@ CONTAINS
 
 ! **************************************************************************************************
 !> \brief Integrates 0.5 * grad_ga .dot. (V_tau * grad_gb) on the atomic grid for meta-GGA
-!> \param vtau_h the har tau potential
+!> \param vtau_h the hard tau potential
 !> \param vtau_s the soft tau potential
-!> \param int_hh ...
-!> \param int_ss ...
-!> \param grid_atom ...
-!> \param basis_1c ...
-!> \param harmonics ...
-!> \param nspins ...
+!> \param int_hh hard one-center matrix contribution
+!> \param int_ss soft one-center matrix contribution
+!> \param tau_cache precomputed compact one-center gradient basis
+!> \param nspins number of spin channels
 !> \note This is a rewrite to correct meta-GGA GAPW bug. This is more brute force than the original
 !>       but makes sure that no corner is cut in terms of accuracy (A. Bussy)
 ! **************************************************************************************************
    SUBROUTINE dgaVtaudgb(vtau_h, vtau_s, int_hh, int_ss, &
-                         grid_atom, basis_1c, harmonics, nspins)
+                         tau_cache, nspins)
 
       REAL(dp), DIMENSION(:, :, :), POINTER              :: vtau_h, vtau_s
       TYPE(rho_atom_coeff), DIMENSION(:), POINTER        :: int_hh, int_ss
-      TYPE(grid_atom_type), POINTER                      :: grid_atom
-      TYPE(gto_basis_set_type), POINTER                  :: basis_1c
-      TYPE(harmonics_atom_type), POINTER                 :: harmonics
+      TYPE(tau_basis_cache_type), INTENT(IN)             :: tau_cache
       INTEGER, INTENT(IN)                                :: nspins
 
       CHARACTER(len=*), PARAMETER                        :: routineN = 'dgaVtaudgb'
 
-      INTEGER                                            :: dir, handle, ipgf, iset, iso, ispin, &
-                                                            jpgf, jset, jso, l, maxso, na, nr, &
-                                                            nset, starti, startj
-      INTEGER, DIMENSION(:), POINTER                     :: lmax, lmin, npgf
-      REAL(dp), ALLOCATABLE, DIMENSION(:, :)             :: fga, fgr, r1, r2, work
-      REAL(dp), ALLOCATABLE, DIMENSION(:, :, :)          :: a1, a2, intso_h, intso_s
-      REAL(dp), DIMENSION(:, :), POINTER                 :: slm, zet
-      REAL(dp), DIMENSION(:, :, :), POINTER              :: dslm_dxyz
+      INTEGER                                            :: dir, handle, ia, ibas, igrid, iold, ir, &
+                                                            ispin, jbas, jold, max_old_basis, na, &
+                                                            nbas, ngrid, nr
+      REAL(dp), ALLOCATABLE, DIMENSION(:, :)             :: int_h, int_s, weighted_grad
 
       CALL timeset(routineN, handle)
 
-      NULLIFY (zet, slm, dslm_dxyz, lmax, lmin, npgf)
+      CPASSERT(ALLOCATED(tau_cache%grad))
+      CPASSERT(ASSOCIATED(tau_cache%n2oindex))
 
-      CALL get_gto_basis_set(gto_basis_set=basis_1c, lmax=lmax, lmin=lmin, &
-                             maxso=maxso, npgf=npgf, nset=nset, zet=zet)
+      nr = tau_cache%nr
+      na = tau_cache%na
+      nbas = tau_cache%nsatbas
+      ngrid = na*nr
+      max_old_basis = MAXVAL(tau_cache%n2oindex)
+      ALLOCATE (int_h(nbas, nbas), int_s(nbas, nbas), weighted_grad(ngrid, nbas))
 
-      na = grid_atom%ng_sphere
-      nr = grid_atom%nr
-
-      slm => harmonics%slm
-      dslm_dxyz => harmonics%dslm_dxyz
-
-      ! Separate the functions into purely r and purely angular parts and precompute them all
-      ! Not memory intensive since 1D arrays
-      ALLOCATE (a1(na, nset*maxso, 3), a2(na, nset*maxso, 3))
-      ALLOCATE (r1(nr, nset*maxso), r2(nr, nset*maxso))
-      a1 = 0.0_dp; a2 = 0.0_dp
-      r1 = 0.0_dp; r2 = 0.0_dp
-
-      DO iset = 1, nset
-         DO ipgf = 1, npgf(iset)
-            starti = (iset - 1)*maxso + (ipgf - 1)*nsoset(lmax(iset))
-            DO iso = nsoset(lmin(iset) - 1) + 1, nsoset(lmax(iset))
-               l = indso(1, iso)
-
-               ! The x derivative of the spherical orbital, divided in angular and radial parts
-               ! Two of each are needed because d/dx(r^l Y_lm) * exp(-al*r^2) + r^l Y_lm *  d/dx(exp-al*r^2)
-
-               ! the purely radial part of d/dx(r^l Y_lm) * exp(-al*r^2) (same for y,z)
-               r1(1:nr, starti + iso) = grid_atom%rad(1:nr)**(l - 1)*EXP(-zet(ipgf, iset)*grid_atom%rad2(1:nr))
-
-               ! the purely radial part of r^l Y_lm * d/dx(exp-al*r^2) (same for y,z)
-               r2(1:nr, starti + iso) = -2.0_dp*zet(ipgf, iset)*grid_atom%rad(1:nr)**(l + 1) &
-                                        *EXP(-zet(ipgf, iset)*grid_atom%rad2(1:nr))
-
-               DO dir = 1, 3
-                  ! the purely angular part of d/dx(r^l Y_lm) * exp(-al*r^2)
-                  a1(1:na, starti + iso, dir) = dslm_dxyz(dir, 1:na, iso)
-
-                  ! the purely angular part of r^l Y_lm * d/dx(exp-al*r^2)
-                  a2(1:na, starti + iso, dir) = harmonics%a(dir, 1:na)*slm(1:na, iso)
-               END DO
-
-            END DO !iso
-         END DO !ipgf
-      END DO !iset
-
-      !Do the integration in terms of matrix-matrix multiplications
-      ALLOCATE (intso_h(nset*maxso, nset*maxso, nspins))
-      ALLOCATE (intso_s(nset*maxso, nset*maxso, nspins))
-      intso_h = 0.0_dp; intso_s = 0.0_dp
-
-      ALLOCATE (fga(na, 1))
-      ALLOCATE (fgr(nr, 1))
-      ALLOCATE (work(na, 1))
-      fga = 0.0_dp; fgr = 0.0_dp; work = 0.0_dp
-
-      DO iset = 1, nset
-         DO jset = 1, nset
-            DO ipgf = 1, npgf(iset)
-               starti = (iset - 1)*maxso + (ipgf - 1)*nsoset(lmax(iset))
-               DO jpgf = 1, npgf(jset)
-                  startj = (jset - 1)*maxso + (jpgf - 1)*nsoset(lmax(jset))
-
-                  DO iso = nsoset(lmin(iset) - 1) + 1, nsoset(lmax(iset))
-                     DO jso = nsoset(lmin(jset) - 1) + 1, nsoset(lmax(jset))
-
-                        !Two component per function => 4 terms in total
-
-                        ! take 0.5*r1*a1(dir) * V * r1*a1(dir)
-                        fgr(1:nr, 1) = r1(1:nr, starti + iso)*r1(1:nr, startj + jso)
-                        DO dir = 1, 3
-                           fga(1:na, 1) = a1(1:na, starti + iso, dir)*a1(1:na, startj + jso, dir)
-
-                           DO ispin = 1, nspins
-                              CALL dgemm('N', 'N', na, 1, nr, 0.5_dp, vtau_h(:, :, ispin), na, fgr, &
-                                         nr, 0.0_dp, work, na)
-                              CALL dgemm('T', 'N', 1, 1, na, 1.0_dp, work, na, fga, na, 1.0_dp, &
-                                         intso_h(starti + iso:, startj + jso, ispin), 1)
-
-                              CALL dgemm('N', 'N', na, 1, nr, 0.5_dp, vtau_s(:, :, ispin), na, fgr, &
-                                         nr, 0.0_dp, work, na)
-                              CALL dgemm('T', 'N', 1, 1, na, 1.0_dp, work, na, fga, na, 1.0_dp, &
-                                         intso_s(starti + iso:, startj + jso, ispin), 1)
-                           END DO
-                        END DO !dir
-
-                        ! add 0.5*r1*a1(dir) * V * r2*a2(dir)
-                        fgr(1:nr, 1) = r1(1:nr, starti + iso)*r2(1:nr, startj + jso)
-                        DO dir = 1, 3
-                           fga(1:na, 1) = a1(1:na, starti + iso, dir)*a2(1:na, startj + jso, dir)
-
-                           DO ispin = 1, nspins
-                              CALL dgemm('N', 'N', na, 1, nr, 0.5_dp, vtau_h(:, :, ispin), na, fgr, &
-                                         nr, 0.0_dp, work, na)
-                              CALL dgemm('T', 'N', 1, 1, na, 1.0_dp, work, na, fga, na, 1.0_dp, &
-                                         intso_h(starti + iso:, startj + jso, ispin), 1)
-
-                              CALL dgemm('N', 'N', na, 1, nr, 0.5_dp, vtau_s(:, :, ispin), na, fgr, &
-                                         nr, 0.0_dp, work, na)
-                              CALL dgemm('T', 'N', 1, 1, na, 1.0_dp, work, na, fga, na, 1.0_dp, &
-                                         intso_s(starti + iso:, startj + jso, ispin), 1)
-                           END DO
-                        END DO !dir
-
-                        ! add 0.5*r2*a2(dir) * V * r1*a1(dir)
-                        fgr(1:nr, 1) = r2(1:nr, starti + iso)*r1(1:nr, startj + jso)
-                        DO dir = 1, 3
-                           fga(1:na, 1) = a2(1:na, starti + iso, dir)*a1(1:na, startj + jso, dir)
-
-                           DO ispin = 1, nspins
-                              CALL dgemm('N', 'N', na, 1, nr, 0.5_dp, vtau_h(:, :, ispin), na, fgr, &
-                                         nr, 0.0_dp, work, na)
-                              CALL dgemm('T', 'N', 1, 1, na, 1.0_dp, work, na, fga, na, 1.0_dp, &
-                                         intso_h(starti + iso:, startj + jso, ispin), 1)
-
-                              CALL dgemm('N', 'N', na, 1, nr, 0.5_dp, vtau_s(:, :, ispin), na, fgr, &
-                                         nr, 0.0_dp, work, na)
-                              CALL dgemm('T', 'N', 1, 1, na, 1.0_dp, work, na, fga, na, 1.0_dp, &
-                                         intso_s(starti + iso:, startj + jso, ispin), 1)
-                           END DO
-                        END DO !dir
-
-                        ! add the last term: 0.5*r2*a2(dir) * V * r2*a2(dir)
-                        fgr(1:nr, 1) = r2(1:nr, starti + iso)*r2(1:nr, startj + jso)
-                        DO dir = 1, 3
-                           fga(1:na, 1) = a2(1:na, starti + iso, dir)*a2(1:na, startj + jso, dir)
-
-                           DO ispin = 1, nspins
-                              CALL dgemm('N', 'N', na, 1, nr, 0.5_dp, vtau_h(:, :, ispin), na, fgr, &
-                                         nr, 0.0_dp, work, na)
-                              CALL dgemm('T', 'N', 1, 1, na, 1.0_dp, work, na, fga, na, 1.0_dp, &
-                                         intso_h(starti + iso:, startj + jso, ispin), 1)
-
-                              CALL dgemm('N', 'N', na, 1, nr, 0.5_dp, vtau_s(:, :, ispin), na, fgr, &
-                                         nr, 0.0_dp, work, na)
-                              CALL dgemm('T', 'N', 1, 1, na, 1.0_dp, work, na, fga, na, 1.0_dp, &
-                                         intso_s(starti + iso:, startj + jso, ispin), 1)
-                           END DO
-                        END DO !dir
-
-                     END DO !jso
-                  END DO !iso
-
-               END DO !jpgf
-            END DO !ipgf
-         END DO !jset
-      END DO !iset
-
-      ! Put the integrals in the rho_atom data structure
       DO ispin = 1, nspins
-         int_hh(ispin)%r_coef(:, :) = int_hh(ispin)%r_coef(:, :) + intso_h(:, :, ispin)
-         int_ss(ispin)%r_coef(:, :) = int_ss(ispin)%r_coef(:, :) + intso_s(:, :, ispin)
+         CPASSERT(SIZE(int_hh(ispin)%r_coef, 1) >= max_old_basis)
+         CPASSERT(SIZE(int_hh(ispin)%r_coef, 2) >= max_old_basis)
+         CPASSERT(SIZE(int_ss(ispin)%r_coef, 1) >= max_old_basis)
+         CPASSERT(SIZE(int_ss(ispin)%r_coef, 2) >= max_old_basis)
+         int_h = 0.0_dp
+         int_s = 0.0_dp
+         DO dir = 1, 3
+            DO ibas = 1, nbas
+               DO ir = 1, nr
+                  DO ia = 1, na
+                     igrid = ia + (ir - 1)*na
+                     weighted_grad(igrid, ibas) = vtau_h(ia, ir, ispin)* &
+                                                  tau_cache%grad(igrid, ibas, dir)
+                  END DO
+               END DO
+            END DO
+            CALL dgemm('T', 'N', nbas, nbas, ngrid, 0.5_dp, tau_cache%grad(:, :, dir), &
+                       ngrid, weighted_grad, ngrid, 1.0_dp, int_h, nbas)
+
+            DO ibas = 1, nbas
+               DO ir = 1, nr
+                  DO ia = 1, na
+                     igrid = ia + (ir - 1)*na
+                     weighted_grad(igrid, ibas) = vtau_s(ia, ir, ispin)* &
+                                                  tau_cache%grad(igrid, ibas, dir)
+                  END DO
+               END DO
+            END DO
+            CALL dgemm('T', 'N', nbas, nbas, ngrid, 0.5_dp, tau_cache%grad(:, :, dir), &
+                       ngrid, weighted_grad, ngrid, 1.0_dp, int_s, nbas)
+         END DO
+
+         DO jbas = 1, nbas
+            jold = tau_cache%n2oindex(jbas)
+            DO ibas = 1, nbas
+               iold = tau_cache%n2oindex(ibas)
+               int_hh(ispin)%r_coef(iold, jold) = int_hh(ispin)%r_coef(iold, jold) + &
+                                                  int_h(ibas, jbas)
+               int_ss(ispin)%r_coef(iold, jold) = int_ss(ispin)%r_coef(iold, jold) + &
+                                                  int_s(ibas, jbas)
+            END DO
+         END DO
       END DO
+
+      DEALLOCATE (int_h, int_s, weighted_grad)
 
       CALL timestop(handle)
 

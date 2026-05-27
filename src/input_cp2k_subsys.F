@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2025 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2026 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -25,35 +25,29 @@ MODULE input_cp2k_subsys
       cell_sym_rhombohedral, cell_sym_tetragonal_ab, cell_sym_tetragonal_ac, &
       cell_sym_tetragonal_bc, cell_sym_triclinic, use_perd_none, use_perd_x, use_perd_xy, &
       use_perd_xyz, use_perd_xz, use_perd_y, use_perd_yz, use_perd_z
-   USE cp_output_handling, ONLY: cp_print_key_section_create, &
-                                 debug_print_level, &
-                                 high_print_level, &
-                                 medium_print_level
+   USE cp_output_handling, ONLY: cp_print_key_section_create, debug_print_level, &
+                                 high_print_level, medium_print_level
    USE cp_units, ONLY: cp_unit_to_cp2k
-   USE input_constants, ONLY: &
-      do_add, do_bondparm_covalent, do_bondparm_vdw, do_cell_cif, do_cell_cp2k, do_cell_xsc, &
-      do_conn_amb7, do_conn_g87, do_conn_g96, do_conn_generate, do_conn_mol_set, do_conn_off, &
-      do_conn_psf, do_conn_psf_u, do_conn_user, do_coord_cif, do_coord_cp2k, do_coord_crd, &
-      do_coord_g96, do_coord_off, do_coord_pdb, do_coord_xtl, do_coord_xyz, do_remove, &
-      do_skip_11, do_skip_12, do_skip_13, do_skip_14, dump_pdb, gaussian
+   USE input_constants, ONLY: do_add, do_bondparm_covalent, do_bondparm_vdw, &
+                              do_cell_cif, do_cell_cp2k, do_cell_xsc, &
+                              do_cell_extxyz, do_cell_pdb, &
+                              do_conn_amb7, do_conn_g87, do_conn_g96, &
+                              do_conn_generate, do_conn_mol_set, do_conn_off, &
+                              do_conn_psf, do_conn_psf_u, do_conn_user, &
+                              do_coord_cif, do_coord_cp2k, do_coord_crd, &
+                              do_coord_g96, do_coord_off, do_coord_pdb, &
+                              do_coord_xtl, do_coord_xyz, do_remove, &
+                              do_skip_11, do_skip_12, do_skip_13, do_skip_14, &
+                              dump_pdb, gaussian
    USE input_cp2k_colvar, ONLY: create_colvar_section
    USE input_cp2k_mm, ONLY: create_neighbor_lists_section
-   USE input_keyword_types, ONLY: keyword_create, &
-                                  keyword_release, &
-                                  keyword_type
-   USE input_section_types, ONLY: section_add_keyword, &
-                                  section_add_subsection, &
-                                  section_create, &
-                                  section_release, &
-                                  section_type
-   USE input_val_types, ONLY: char_t, &
-                              integer_t, &
-                              lchar_t, &
-                              real_t
+   USE input_keyword_types, ONLY: keyword_create, keyword_release, keyword_type
+   USE input_section_types, ONLY: section_add_keyword, section_add_subsection, &
+                                  section_create, section_release, section_type
+   USE input_val_types, ONLY: char_t, integer_t, lchar_t, real_t
    USE kinds, ONLY: dp
    USE physcon, ONLY: bohr
-   USE string_utilities, ONLY: newline, &
-                               s2a
+   USE string_utilities, ONLY: newline, s2a
 #include "./base/base_uses.f90"
 
    IMPLICIT NONE
@@ -87,14 +81,21 @@ CONTAINS
                           description="Input parameters needed to set up the simulation cell. "// &
                           "Simple products and fractions combined with functions of a single "// &
                           "number can be used like 2/3, 0.3*COS(60) or -SQRT(3)/2. The functions "// &
-                          "COS, EXP, LOG, LOG10, SIN, SQRT, and TAN are available.")
+                          "COS, EXP, LOG, LOG10, SIN, SQRT, and TAN are available."//newline//newline// &
+                          "Cell settings are parsed in the following precedence order:"//newline// &
+                          "1. The external file set by CELL_FILE_NAME with a CELL_FILE_FORMAT;"//newline// &
+                          "2. The lengths and angles of cell vectors set by ABC and ALPHA_BETA_GAMMA;"//newline// &
+                          "3. The vectors set by A, B, C together;"//newline// &
+                          "4. If none above exist, the external file set by TOPOLOGY/COORD_FILE_NAME with "// &
+                          "suitable TOPOLOGY/COORD_FILE_FORMAT may also be parsed for FORCE_EVAL/SUBSYS/CELL "// &
+                          "but not for FORCE_EVAL/QMMM/CELL.")
       CALL create_cell_section_low(section, periodic)
 
       NULLIFY (subsection)
       CALL section_create(subsection, __LOCATION__, "CELL_REF", &
-                          description="Input parameters needed to set up the reference cell. "// &
-                          "This option can be used to keep the FFT grid fixed while "// &
-                          "running a cell optimization or NpT molecular dynamics. "// &
+                          description="Input parameters needed to set up the reference cell for "// &
+                          "FORCE_EVAL/SUBSYS/CELL. This option can be used to keep the FFT grid "// &
+                          "fixed while running a cell optimization or NpT molecular dynamics. "// &
                           "Check the &CELL section for further details.")
       CALL create_cell_section_low(subsection, periodic)
       CALL section_add_subsection(section, subsection)
@@ -121,7 +122,8 @@ CONTAINS
       NULLIFY (keyword)
       CALL keyword_create(keyword, __LOCATION__, name="A", &
                           description="Specify the Cartesian components for the cell vector A. "// &
-                          "This defines the first column of the h matrix.", &
+                          "This defines the first column of the h matrix. "// &
+                          "Ignored if the keywords ABC or CELL_FILE_NAME are used.", &
                           usage="A  10.000  0.000  0.000", unit_str="angstrom", &
                           n_var=3, type_of_var=real_t, repeats=.FALSE.)
       CALL section_add_keyword(section, keyword)
@@ -129,7 +131,8 @@ CONTAINS
 
       CALL keyword_create(keyword, __LOCATION__, name="B", &
                           description="Specify the Cartesian components for the cell vector B. "// &
-                          "This defines the second column of the h matrix.", &
+                          "This defines the second column of the h matrix. "// &
+                          "Ignored if the keywords ABC or CELL_FILE_NAME are used.", &
                           usage="B   0.000 10.000  0.000", unit_str="angstrom", &
                           n_var=3, type_of_var=real_t, repeats=.FALSE.)
       CALL section_add_keyword(section, keyword)
@@ -137,7 +140,8 @@ CONTAINS
 
       CALL keyword_create(keyword, __LOCATION__, name="C", &
                           description="Specify the Cartesian components for the cell vector C. "// &
-                          "This defines the third column of the h matrix.", &
+                          "This defines the third column of the h matrix. "// &
+                          "Ignored if the keywords ABC or CELL_FILE_NAME are used.", &
                           usage="C   0.000  0.000 10.000", unit_str="angstrom", &
                           n_var=3, type_of_var=real_t, repeats=.FALSE.)
       CALL section_add_keyword(section, keyword)
@@ -148,41 +152,51 @@ CONTAINS
                           " defines the diagonal elements of h matrix for an orthorhombic cell."// &
                           " For non-orthorhombic cells it is possible either to specify the angles "// &
                           "ALPHA, BETA, GAMMA via ALPHA_BETA_GAMMA keyword or alternatively use the keywords "// &
-                          "A, B, and C. The convention is that A lies along the X-axis, B is in the XY plane.", &
+                          "A, B, and C. The convention is that A lies along the X-axis, B is in the XY plane. "// &
+                          "Ignored if CELL_FILE_NAME is used.", &
                           usage="ABC 10.000 10.000 10.000", unit_str="angstrom", &
                           n_var=3, type_of_var=real_t, repeats=.FALSE.)
       CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
 
       CALL keyword_create(keyword, __LOCATION__, name="ALPHA_BETA_GAMMA", &
-                          variants=(/"ANGLES"/), &
+                          variants=["ANGLES"], &
                           description="Specify the angles between the vectors A, B and C when using the ABC keyword. "// &
                           "The convention is that A lies along the X-axis, B is in the XY plane. "// &
                           "ALPHA is the angle between B and C, BETA is the angle between A and C and "// &
-                          "GAMMA the angle between A and B.", &
+                          "GAMMA is the angle between A and B.", &
                           usage="ALPHA_BETA_GAMMA [deg] 90.0 90.0 120.0", unit_str="deg", &
-                          n_var=3, default_r_vals=(/cp_unit_to_cp2k(value=90.0_dp, unit_str="deg"), &
-                                                    cp_unit_to_cp2k(value=90.0_dp, unit_str="deg"), &
-                                                    cp_unit_to_cp2k(value=90.0_dp, unit_str="deg")/), &
+                          n_var=3, default_r_vals=[cp_unit_to_cp2k(value=90.0_dp, unit_str="deg"), &
+                                                   cp_unit_to_cp2k(value=90.0_dp, unit_str="deg"), &
+                                                   cp_unit_to_cp2k(value=90.0_dp, unit_str="deg")], &
                           repeats=.FALSE.)
       CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
 
       CALL keyword_create(keyword, __LOCATION__, name="CELL_FILE_NAME", &
-                          description="Possibility to read the cell from an external file ", &
+                          description="The external file from which cell is parsed ", &
                           repeats=.FALSE., usage="CELL_FILE_NAME <CHARACTER>", &
                           type_of_var=lchar_t)
       CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
 
       CALL keyword_create(keyword, __LOCATION__, name="CELL_FILE_FORMAT", &
-                          description="Specify the format of the cell file (if used)", &
-                          usage="CELL_FILE_FORMAT (CP2K|CIF|XSC)", &
-                          enum_c_vals=s2a("CP2K", "CIF", "XSC"), &
-                          enum_i_vals=(/do_cell_cp2k, do_cell_cif, do_cell_xsc/), &
-                          enum_desc=s2a("Cell info in the CP2K native format.", &
-                                        "Cell info from CIF file.", &
-                                        "Cell info in the XSC format (NAMD)"), &
+                          description="Format of the external file from which "// &
+                          "cell is parsed. If the format specifies a cell by "// &
+                          "lengths and angles of three vectors, then a cell "// &
+                          "matrix is constructed with the convention that A "// &
+                          "lies along the X-axis, B is in the XY plane. ALPHA "// &
+                          "is the angle between B and C, BETA is the angle "// &
+                          "between A and C, and GAMMA is the angle between A and B.", &
+                          usage="CELL_FILE_FORMAT (CP2K|CIF|XSC|EXTXYZ|XYZ|PDB)", &
+                          enum_c_vals=s2a("CP2K", "CIF", "XSC", "EXTXYZ", "XYZ", "PDB"), &
+                          enum_i_vals=[do_cell_cp2k, do_cell_cif, do_cell_xsc, do_cell_extxyz, do_cell_extxyz, do_cell_pdb], &
+                          enum_desc=s2a("Cell info in the CP2K native format", &
+                                        "Cell info from CIF file (from fields `_cell_length_a` or `_cell.length_a`, etc)", &
+                                        "Cell info in the XSC format (NAMD)", &
+                                        "Cell info as `lattice=...` field in the comment line of Extended XYZ format", &
+                                        "Alias for Extended XYZ", &
+                                        "Cell info in the `CRYST1` record of PDB format"), &
                           default_i_val=do_cell_cp2k)
       CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
@@ -195,9 +209,9 @@ CONTAINS
                           "Typically the settings should be the same.", &
                           usage="PERIODIC (x|y|z|xy|xz|yz|xyz|none)", &
                           enum_c_vals=s2a("x", "y", "z", "xy", "xz", "yz", "xyz", "none"), &
-                          enum_i_vals=(/use_perd_x, use_perd_y, use_perd_z, &
-                                        use_perd_xy, use_perd_xz, use_perd_yz, &
-                                        use_perd_xyz, use_perd_none/), &
+                          enum_i_vals=[use_perd_x, use_perd_y, use_perd_z, &
+                                       use_perd_xy, use_perd_xz, use_perd_yz, &
+                                       use_perd_xyz, use_perd_none], &
                           default_i_val=my_periodic)
       CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
@@ -207,13 +221,21 @@ CONTAINS
                           "assuming it as a unit cell. This keyword affects only the CELL specification. The same keyword "// &
                           "in SUBSYS%TOPOLOGY%MULTIPLE_UNIT_CELL should be modified in order to affect the coordinates "// &
                           "specification.", usage="MULTIPLE_UNIT_CELL 1 1 1", &
-                          n_var=3, default_i_vals=(/1, 1, 1/), repeats=.FALSE.)
+                          n_var=3, default_i_vals=[1, 1, 1], repeats=.FALSE.)
       CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
 
       CALL keyword_create( &
          keyword, __LOCATION__, name="SYMMETRY", &
-         description="Imposes an initial cell symmetry.", &
+         description="Imposes an initial cell symmetry, according to the convention "// &
+         "that A lies along the X-axis, B is in the XY plane. After the "// &
+         "input cell information is parsed, the symmetry is enforced by "// &
+         "reconstructing the cell matrix from lengths and angles of the "// &
+         "cell vectors, taking averages if necessary. This process does "// &
+         "not affect input atomic coordinates; in case a space group is "// &
+         "to be detected and preserved for an optimization task, atomic "// &
+         "coordinates should correspond to cell vectors already obeying "// &
+         "the convention mentioned above.", &
          usage="SYMMETRY monoclinic", &
          enum_desc=s2a("No cell symmetry", &
                        "Triclinic (a &ne; b &ne; c &ne; a, &alpha; &ne; &beta; &ne; &gamma; &ne; &alpha; &ne; 90&deg;)", &
@@ -232,10 +254,10 @@ CONTAINS
          enum_c_vals=s2a("NONE", "TRICLINIC", "MONOCLINIC", "MONOCLINIC_GAMMA_AB", "ORTHORHOMBIC", &
                          "TETRAGONAL_AB", "TETRAGONAL_AC", "TETRAGONAL_BC", "TETRAGONAL", "RHOMBOHEDRAL", &
                          "HEXAGONAL", "HEXAGONAL_GAMMA_60", "HEXAGONAL_GAMMA_120", "CUBIC"), &
-         enum_i_vals=(/cell_sym_none, cell_sym_triclinic, cell_sym_monoclinic, cell_sym_monoclinic_gamma_ab, &
-                       cell_sym_orthorhombic, cell_sym_tetragonal_ab, cell_sym_tetragonal_ac, cell_sym_tetragonal_bc, &
-                       cell_sym_tetragonal_ab, cell_sym_rhombohedral, cell_sym_hexagonal_gamma_60, &
-                       cell_sym_hexagonal_gamma_60, cell_sym_hexagonal_gamma_120, cell_sym_cubic/), &
+         enum_i_vals=[cell_sym_none, cell_sym_triclinic, cell_sym_monoclinic, cell_sym_monoclinic_gamma_ab, &
+                      cell_sym_orthorhombic, cell_sym_tetragonal_ab, cell_sym_tetragonal_ac, cell_sym_tetragonal_bc, &
+                      cell_sym_tetragonal_ab, cell_sym_rhombohedral, cell_sym_hexagonal_gamma_60, &
+                      cell_sym_hexagonal_gamma_60, cell_sym_hexagonal_gamma_120, cell_sym_cubic], &
          default_i_val=cell_sym_none)
       CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
@@ -292,7 +314,7 @@ CONTAINS
                           n_var=-1, &
                           type_of_var=integer_t, &
                           usage="SEED {INTEGER} .. {INTEGER}", &
-                          default_i_vals=(/12345/))
+                          default_i_vals=[12345])
       CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
 
@@ -664,7 +686,7 @@ CONTAINS
                                        "optimization (in MOTION%PRINT) or when setting up a subsys (in SUBSYS%PRINT).", &
                                        print_level=high_print_level, filename="__STD_OUT__", unit_str="angstrom")
 
-      CALL keyword_create(keyword, __LOCATION__, name="POSITION", variants=(/"POS"/), &
+      CALL keyword_create(keyword, __LOCATION__, name="POSITION", variants=["POS"], &
                           description="Print the position vectors in Cartesian coordinates of the atoms specified "// &
                           "by a list of their indices", &
                           usage="POSITION {integer} {integer} {integer}..{integer}", n_var=-1, repeats=.TRUE., &
@@ -672,7 +694,7 @@ CONTAINS
       CALL section_add_keyword(print_key, keyword)
       CALL keyword_release(keyword)
 
-      CALL keyword_create(keyword, __LOCATION__, name="POSITION_SCALED", variants=(/"POS_SCALED"/), &
+      CALL keyword_create(keyword, __LOCATION__, name="POSITION_SCALED", variants=["POS_SCALED"], &
                           description="Print the position vectors in scaled coordinates of the atoms specified "// &
                           "by a list of their indices", &
                           usage="POSITION_SCALED {integer} {integer} {integer}..{integer}", n_var=-1, repeats=.TRUE., &
@@ -680,14 +702,14 @@ CONTAINS
       CALL section_add_keyword(print_key, keyword)
       CALL keyword_release(keyword)
 
-      CALL keyword_create(keyword, __LOCATION__, name="DISTANCE", variants=(/"DIS"/), &
+      CALL keyword_create(keyword, __LOCATION__, name="DISTANCE", variants=["DIS"], &
                           description="Print the distance between the atoms a and b specified by their indices", &
                           usage="DISTANCE {integer} {integer}", n_var=2, repeats=.TRUE., &
                           type_of_var=integer_t)
       CALL section_add_keyword(print_key, keyword)
       CALL keyword_release(keyword)
 
-      CALL keyword_create(keyword, __LOCATION__, name="ANGLE", variants=(/"ANG"/), &
+      CALL keyword_create(keyword, __LOCATION__, name="ANGLE", variants=["ANG"], &
                           description="Print the angle formed by the atoms specified by their indices", &
                           usage="ANGLE {integer} {integer} {integer}", n_var=3, repeats=.TRUE., &
                           type_of_var=integer_t)
@@ -724,7 +746,7 @@ CONTAINS
                           description="Specify the units of measurement for the velocities "// &
                           "(currently works only for the path integral code). "// &
                           "All available CP2K units can be used.", &
-                          usage="UNIT angstrom*au_t^-1", &
+                          usage="PINT_UNIT angstrom*au_t^-1", &
                           default_c_val="bohr*au_t^-1")
       CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
@@ -1037,8 +1059,9 @@ CONTAINS
       CPASSERT(.NOT. ASSOCIATED(section))
 
       CALL section_create(section, __LOCATION__, name="KIND", &
-                          description="The description of the kind of the atoms (mostly for QM)", &
-                          n_keywords=19, n_subsections=1, repeats=.TRUE.)
+                          description="Defines settings shared by atoms of the same kind, such as basis sets, "// &
+                          "pseudopotentials, all-electron treatment, and atom-centered grids.", &
+                          n_keywords=20, n_subsections=1, repeats=.TRUE.)
 
       NULLIFY (keyword)
 
@@ -1049,13 +1072,13 @@ CONTAINS
       CALL keyword_release(keyword)
 
       CALL keyword_create(keyword, __LOCATION__, name="BASIS_SET", &
-                          description="The primary Gaussian basis set (NONE implies no basis used, meaningful with GHOST). "// &
-                          "Defaults are set for TYPE {ORB} and FORM {GTO}. Possible values for TYPE are "// &
+                          description="Selects a Gaussian basis set for this kind. The default type is ORB and the default "// &
+                          "form is GTO; NONE implies no basis and is meaningful for ghost atoms. Possible values for TYPE are "// &
                           "{ORB, AUX, MIN, RI_AUX, LRI, ...}. Possible values for "// &
                           "FORM are {GTO, STO}. Where STO results in a GTO expansion of a Slater type basis. "// &
                           "If a value for FORM is given, also TYPE has to be set explicitly.", &
-                          usage="BASIS_SET [type] [form] DZVP", type_of_var=char_t, default_c_vals=(/" ", " ", " "/), &
-                          citations=(/VandeVondele2005a, VandeVondele2007/), &
+                          usage="BASIS_SET [type] [form] DZVP", type_of_var=char_t, default_c_vals=[" ", " ", " "], &
+                          citations=[VandeVondele2005a, VandeVondele2007], &
                           repeats=.TRUE., n_var=-1)
       CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
@@ -1088,7 +1111,7 @@ CONTAINS
          keyword, __LOCATION__, name="LRI_BASIS_SET", &
          variants=s2a("LRI_BASIS"), &
          description="The local resolution of identity basis set (GTO type)", &
-         usage="", default_c_val=" ", &
+         usage="LRI_BASIS_SET", default_c_val=" ", &
          n_var=1, &
          deprecation_notice="Use 'BASIS_SET LRI ...' instead.", &
          removed=.TRUE.)
@@ -1100,7 +1123,7 @@ CONTAINS
          variants=s2a("AUXILIARY_FIT_BASIS_SET", "AUX_FIT_BASIS"), &
          description="The auxiliary basis set (GTO type) for auxiliary density matrix method", &
          usage="AUX_FIT_BASIS_SET DZVP", default_c_val=" ", &
-         citations=(/Guidon2010/), &
+         citations=[Guidon2010], &
          n_var=1, &
          deprecation_notice="Use 'BASIS_SET AUX_FIT ...' instead.", &
          removed=.TRUE.)
@@ -1111,7 +1134,7 @@ CONTAINS
       CALL keyword_create(keyword, __LOCATION__, name="ELEC_CONF", &
                           description="Specifies the electronic configuration used in construction the "// &
                           "atomic initial guess (see the pseudo potential file for the default values).", &
-                          usage="ELEC_COND n_elec(s)  n_elec(p)  n_elec(d)  ... ", &
+                          usage="ELEC_CONF n_elec(s)  n_elec(p)  n_elec(d)  ... ", &
                           n_var=-1, type_of_var=integer_t)
       CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
@@ -1132,7 +1155,7 @@ CONTAINS
       CALL keyword_release(keyword)
 
       CALL keyword_create(keyword, __LOCATION__, name="ELEMENT", &
-                          variants=(/"ELEMENT_SYMBOL"/), &
+                          variants=["ELEMENT_SYMBOL"], &
                           description="The element of the actual kind "// &
                           "(if not given it is inferred from the kind name)", &
                           usage="ELEMENT O", type_of_var=char_t, n_var=1)
@@ -1162,10 +1185,15 @@ CONTAINS
       CALL keyword_release(keyword)
 
       CALL keyword_create(keyword, __LOCATION__, name="POTENTIAL", &
-                          variants=(/"POT"/), &
-                          description="The type (ECP, ALL, GTH, UPS) and name of the pseudopotential for the defined kind.", &
-                          usage="POTENTIAL [type] <POTENTIAL-NAME>", type_of_var=char_t, default_c_vals=(/" ", " "/), &
-                          citations=(/Goedecker1996, Hartwigsen1998, Krack2005/), n_var=-1)
+                          variants=["POT"], &
+                          description= &
+                          "The type (ECP, ALL, GTH, UPS) and name of the "// &
+                          "pseudopotential for the defined kind. Use GTH potentials "// &
+                          "for most GPW calculations, ECP for Gaussian-integral effective core "// &
+                          "potentials, and ALL for all-electron calculations.", &
+                          usage="POTENTIAL [type] <POTENTIAL-NAME>", type_of_var=char_t, &
+                          default_c_vals=[" ", " "], &
+                          citations=[Goedecker1996, Hartwigsen1998, Krack2005], n_var=-1)
       CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
 
@@ -1177,7 +1205,7 @@ CONTAINS
       CALL keyword_release(keyword)
 
       CALL keyword_create(keyword, __LOCATION__, name="KG_POTENTIAL", &
-                          variants=(/"KG_POT"/), &
+                          variants=["KG_POT"], &
                           description="The name of the non-additive atomic kinetic energy potential.", &
                           usage="KG_POTENTIAL <TNADD-POTENTIAL-NAME>", default_c_val="NONE", n_var=1)
       CALL section_add_keyword(section, keyword)
@@ -1224,20 +1252,20 @@ CONTAINS
                           description="the radius which defines the atomic region where "// &
                           "the hard compensation density is confined. "// &
                           "should be less than HARD_EXP_RADIUS (GAPW) (Bohr, default equals HARD_EXP_RADIUS)", &
-                          usage="RHO_EXP_RADIUS 0.9", type_of_var=real_t, n_var=1)
+                          usage="RHO0_EXP_RADIUS 0.9", type_of_var=real_t, n_var=1)
       CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
 
       CALL keyword_create(keyword, __LOCATION__, name="LEBEDEV_GRID", &
-                          description="The number of points for the angular part of "// &
-                          "the local grid (GAPW)", &
+                          description="GAPW: size of the angular Lebedev grid used for "// &
+                          "atom-centered integrations for this kind.", &
                           usage="LEBEDEV_GRID 40", default_i_val=50)
       CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
 
       CALL keyword_create(keyword, __LOCATION__, name="RADIAL_GRID", &
-                          description="The number of points for the radial part of "// &
-                          "the local grid (GAPW)", &
+                          description="GAPW: number of radial grid points used for atom-centered "// &
+                          "integrations for this kind.", &
                           usage="RADIAL_GRID 70", default_i_val=50)
       CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
@@ -1299,6 +1327,17 @@ CONTAINS
                           "Useful to just have the basis set at that position (e.g. BSSE calculations), "// &
                           "or to have a non-interacting particle with BASIS_SET NONE", &
                           usage="GHOST", &
+                          default_l_val=.FALSE., &
+                          lone_keyword_l_val=.TRUE.)
+      CALL section_add_keyword(section, keyword)
+      CALL keyword_release(keyword)
+
+      CALL keyword_create(keyword, __LOCATION__, &
+                          name="MONOVALENT", &
+                          description="This keyword makes all atoms of this kind monovalent, i.e. with "// &
+                          "a single electron and nuclear charge set to 1.0. Used to saturate dangling bonds, "// &
+                          "ideally in conjunction with a monovalent pseudopotential. Currently GTH only.", &
+                          usage="MONOVALENT", &
                           default_l_val=.FALSE., &
                           lone_keyword_l_val=.TRUE.)
       CALL section_add_keyword(section, keyword)
@@ -1504,7 +1543,7 @@ CONTAINS
 
       CALL keyword_create(keyword, __LOCATION__, &
                           name="L", &
-                          variants=(/"L"/), &
+                          variants=["L"], &
                           description="Angular momentum quantum number of the "// &
                           "orbitals whose occupation is changed", &
                           repeats=.FALSE., &
@@ -1516,7 +1555,7 @@ CONTAINS
 
       CALL keyword_create(keyword, __LOCATION__, &
                           name="N", &
-                          variants=(/"N"/), &
+                          variants=["N"], &
                           description="Principal quantum number of the "// &
                           "orbitals whose occupation is changed. "// &
                           "Default is the first not occupied", &
@@ -1604,7 +1643,7 @@ CONTAINS
       CALL keyword_release(keyword)
 
       CALL keyword_create(keyword, __LOCATION__, name="CHARGE_OCCUP", &
-                          variants=(/"CHARGE_O"/), &
+                          variants=["CHARGE_O"], &
                           description="Read MM charges from the OCCUP field of PDB file.", &
                           usage="CHARGE_OCCUP logical", &
                           default_l_val=.FALSE., lone_keyword_l_val=.TRUE.)
@@ -1612,7 +1651,7 @@ CONTAINS
       CALL keyword_release(keyword)
 
       CALL keyword_create(keyword, __LOCATION__, name="CHARGE_BETA", &
-                          variants=(/"CHARGE_B"/), &
+                          variants=["CHARGE_B"], &
                           description="Read MM charges from the BETA field of PDB file.", &
                           usage="CHARGE_BETA logical", &
                           default_l_val=.FALSE., lone_keyword_l_val=.TRUE.)
@@ -1651,7 +1690,10 @@ CONTAINS
       ! Character
       CALL keyword_create(keyword, __LOCATION__, name="COORD_FILE_NAME", &
                           variants=s2a("COORD_FILE"), &
-                          description="Specifies the filename that contains coordinates.", &
+                          description="Specifies the filename that contains coordinates. "// &
+                          "In case the CELL section is not set explicitly but this file "// &
+                          "contains cell information, including CIF, PDB and (Extended) XYZ "// &
+                          "formats, this file is also parsed for setting up the simulation cell.", &
                           usage="COORD_FILE_NAME <FILENAME>", type_of_var=lchar_t)
       CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
@@ -1661,8 +1703,8 @@ CONTAINS
                           description="Set up the way in which coordinates will be read.", &
                           usage="COORD_FILE_FORMAT (OFF|PDB|XYZ|G96|CRD|CIF|XTL|CP2K)", &
                           enum_c_vals=s2a("OFF", "PDB", "XYZ", "G96", "CRD", "CIF", "XTL", "CP2K"), &
-                          enum_i_vals=(/do_coord_off, do_coord_pdb, do_coord_xyz, do_coord_g96, do_coord_crd, &
-                                        do_coord_cif, do_coord_xtl, do_coord_cp2k/), &
+                          enum_i_vals=[do_coord_off, do_coord_pdb, do_coord_xyz, do_coord_g96, do_coord_crd, &
+                                       do_coord_cif, do_coord_xtl, do_coord_cp2k], &
                           enum_desc=s2a( &
                           "Coordinates read in the &COORD section of the input file", &
                           "Coordinates provided through a PDB file format", &
@@ -1702,7 +1744,7 @@ CONTAINS
                           description="Specifies which kind of Van der Waals interaction to skip.", &
                           usage="EXCLUDE_VDW (1-1||1-2||1-3||1-4)", &
                           enum_c_vals=s2a("1-1", "1-2", "1-3", "1-4"), &
-                          enum_i_vals=(/do_skip_11, do_skip_12, do_skip_13, do_skip_14/), &
+                          enum_i_vals=[do_skip_11, do_skip_12, do_skip_13, do_skip_14], &
                           default_i_val=do_skip_13)
       CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
@@ -1711,7 +1753,7 @@ CONTAINS
                           description="Specifies which kind of Electrostatic interaction to skip.", &
                           usage="EXCLUDE_EI (1-1||1-2||1-3||1-4)", &
                           enum_c_vals=s2a("1-1", "1-2", "1-3", "1-4"), &
-                          enum_i_vals=(/do_skip_11, do_skip_12, do_skip_13, do_skip_14/), &
+                          enum_i_vals=[do_skip_11, do_skip_12, do_skip_13, do_skip_14], &
                           default_i_val=do_skip_13)
       CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
@@ -1740,7 +1782,7 @@ CONTAINS
          "assuming it as a unit cell. This keyword affects only the coordinates specification. The same keyword "// &
          "in SUBSYS%CELL%MULTIPLE_UNIT_CELL should be modified in order to affect the cell "// &
          "specification.", usage="MULTIPLE_UNIT_CELL 1 1 1", &
-         n_var=3, default_i_vals=(/1, 1, 1/), repeats=.FALSE.)
+         n_var=3, default_i_vals=[1, 1, 1], repeats=.FALSE.)
       CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
 
@@ -1758,7 +1800,7 @@ CONTAINS
       CALL section_add_subsection(section, print_key)
 
       CALL keyword_create(keyword, __LOCATION__, name="CHARGE_OCCUP", &
-                          variants=(/"CHARGE_O"/), &
+                          variants=["CHARGE_O"], &
                           description="Write the MM charges to the OCCUP field of the PDB file", &
                           usage="CHARGE_OCCUP logical", &
                           default_l_val=.FALSE., lone_keyword_l_val=.TRUE.)
@@ -1766,7 +1808,7 @@ CONTAINS
       CALL keyword_release(keyword)
 
       CALL keyword_create(keyword, __LOCATION__, name="CHARGE_BETA", &
-                          variants=(/"CHARGE_B"/), &
+                          variants=["CHARGE_B"], &
                           description="Write the MM charges to the BETA field of the PDB file", &
                           usage="CHARGE_BETA logical", &
                           default_l_val=.FALSE., lone_keyword_l_val=.TRUE.)
@@ -2006,7 +2048,7 @@ CONTAINS
                           "Can use covalent radii information or VDW radii information", &
                           usage="BONDPARM (COVALENT||VDW)", &
                           enum_c_vals=s2a("COVALENT", "VDW"), &
-                          enum_i_vals=(/do_bondparm_covalent, do_bondparm_vdw/), &
+                          enum_i_vals=[do_bondparm_covalent, do_bondparm_vdw], &
                           default_i_val=do_bondparm_covalent)
       CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
@@ -2045,7 +2087,7 @@ CONTAINS
                           description="controls the activation of the bond", &
                           usage="&BOND (ADD|REMOVE)", &
                           enum_c_vals=s2a("ADD", "REMOVE"), &
-                          enum_i_vals=(/do_add, do_remove/), &
+                          enum_i_vals=[do_add, do_remove], &
                           default_i_val=do_add)
       CALL section_add_keyword(subsection, keyword)
       CALL keyword_release(keyword)
@@ -2070,7 +2112,7 @@ CONTAINS
                           description="controls the activation of the bond", &
                           usage="&ANGLE (ADD|REMOVE)", &
                           enum_c_vals=s2a("ADD", "REMOVE"), &
-                          enum_i_vals=(/do_add, do_remove/), &
+                          enum_i_vals=[do_add, do_remove], &
                           default_i_val=do_add)
       CALL section_add_keyword(subsection, keyword)
       CALL keyword_release(keyword)
@@ -2095,7 +2137,7 @@ CONTAINS
                           description="controls the activation of the bond", &
                           usage="&TORSION (ADD|REMOVE)", &
                           enum_c_vals=s2a("ADD", "REMOVE"), &
-                          enum_i_vals=(/do_add, do_remove/), &
+                          enum_i_vals=[do_add, do_remove], &
                           default_i_val=do_add)
       CALL section_add_keyword(subsection, keyword)
       CALL keyword_release(keyword)
@@ -2120,7 +2162,7 @@ CONTAINS
                           description="controls the activation of the bond", &
                           usage="&IMPROPER (ADD|REMOVE)", &
                           enum_c_vals=s2a("ADD", "REMOVE"), &
-                          enum_i_vals=(/do_add, do_remove/), &
+                          enum_i_vals=[do_add, do_remove], &
                           default_i_val=do_add)
       CALL section_add_keyword(subsection, keyword)
       CALL keyword_release(keyword)
@@ -2207,27 +2249,27 @@ CONTAINS
       CPASSERT(ASSOCIATED(section))
       NULLIFY (keyword)
       CALL keyword_create(keyword, __LOCATION__, name="CONN_FILE_NAME", &
-                          variants=(/"CONN_FILE"/), &
+                          variants=["CONN_FILE"], &
                           description="Specifies the filename that contains the molecular connectivity.", &
                           usage="CONN_FILE_NAME <FILENAME>", type_of_var=lchar_t)
       CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
 
       CALL keyword_create(keyword, __LOCATION__, name="CONN_FILE_FORMAT", &
-                          variants=(/"CONNECTIVITY"/), &
+                          variants=["CONNECTIVITY"], &
                           description="Ways to determine and generate a molecules. "// &
                           "Default is to use GENERATE", &
                           usage="CONN_FILE_FORMAT (PSF|UPSF|MOL_SET|GENERATE|OFF|G87|G96|AMBER|USER)", &
                           enum_c_vals=s2a("PSF", "UPSF", "MOL_SET", "GENERATE", "OFF", "G87", "G96", "AMBER", "USER"), &
-                          enum_i_vals=(/do_conn_psf, &
-                                        do_conn_psf_u, &
-                                        do_conn_mol_set, &
-                                        do_conn_generate, &
-                                        do_conn_off, &
-                                        do_conn_g87, &
-                                        do_conn_g96, &
-                                        do_conn_amb7, &
-                                        do_conn_user/), &
+                          enum_i_vals=[do_conn_psf, &
+                                       do_conn_psf_u, &
+                                       do_conn_mol_set, &
+                                       do_conn_generate, &
+                                       do_conn_off, &
+                                       do_conn_g87, &
+                                       do_conn_g96, &
+                                       do_conn_amb7, &
+                                       do_conn_user], &
                           enum_desc=s2a("Use  a PSF file to determine the connectivity."// &
                                         " (support standard CHARMM/XPLOR and EXT CHARMM)", &
                                         "Read a PSF file in an unformatted way (useful for not so standard PSF).", &
@@ -2292,7 +2334,7 @@ CONTAINS
 
       CALL keyword_create(keyword, __LOCATION__, &
                           name="U_MINUS_J", &
-                          variants=(/"U_EFF"/), &
+                          variants=["U_EFF"], &
                           description="Effective parameter U(eff) = U - J", &
                           repeats=.FALSE., &
                           n_var=1, &
@@ -2444,7 +2486,7 @@ CONTAINS
       CALL keyword_release(keyword)
 
       CALL keyword_create(keyword, __LOCATION__, name="NELEC", &
-                          variants=(/"N_ELECTRONS"/), &
+                          variants=["N_ELECTRONS"], &
                           description="Number of alpha and beta electrons. An occupation (per spin) smaller than 0.5 is ignored.", &
                           repeats=.FALSE., &
                           n_var=-1, &
@@ -2456,7 +2498,7 @@ CONTAINS
 
       CALL keyword_create(keyword, __LOCATION__, &
                           name="ORBITALS", &
-                          variants=(/"M"/), &
+                          variants=["M"], &
                           description="Select orbitals and occupation order. An input of 1 to 2*L+1 integer values in "// &
                           "the range -L to L defining the M values of the spherical orbitals is expected.", &
                           repeats=.FALSE., &

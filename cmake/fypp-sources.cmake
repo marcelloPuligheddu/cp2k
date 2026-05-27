@@ -1,6 +1,6 @@
 #!-------------------------------------------------------------------------------------------------!
 #!   CP2K: A general program to perform molecular dynamics simulations                             !
-#!   Copyright 2000-2025 CP2K developers group <https://cp2k.org>                                  !
+#!   Copyright 2000-2026 CP2K developers group <https://cp2k.org>                                  !
 #!                                                                                                 !
 #!   SPDX-License-Identifier: GPL-2.0-or-later                                                     !
 #!-------------------------------------------------------------------------------------------------!
@@ -20,25 +20,10 @@ else()
   message(STATUS "FYPP preprocessor found.")
 endif()
 
-if((CMAKE_Fortran_COMPILER_ID STREQUAL "GNU")
-   AND (CMAKE_GENERATOR STREQUAL "Ninja")
-   AND (CMAKE_VERSION VERSION_GREATER_EQUAL 3.16))
+# https://gitlab.kitware.com/cmake/cmake/issues/18188
+if((CMAKE_Fortran_COMPILER_ID STREQUAL "GNU") AND (CMAKE_VERSION
+                                                   VERSION_GREATER_EQUAL 3.16))
   set(fypp_flags --line-numbering --line-marker-format=gfortran5)
-elseif(CMAKE_BUILD_TYPE MATCHES COVERAGE)
-  message(
-    WARNING
-      "Coverage build requested but your environment does not support Line Control directives in Fypp"
-  )
-  message(
-    WARNING
-      "You need CMake 3.16+, Ninja (CMake-patched) and gfortran 5+ for this to work!"
-  )
-  # otherwise the referenced lines in the Coverage report point to either the
-  # original (unexpanded files) or to the Fypped sources which may then not be
-  # picked up by the postprocessing tools. CMake 3.16+ and Ninja are needed
-  # since older CMake (or CMake with make) are unable to parse Line Control
-  # directives within line-continued USE stmts, see
-  # https://gitlab.kitware.com/cmake/cmake/issues/18188
 endif()
 
 function(ADD_FYPP_SOURCES OUTVAR)

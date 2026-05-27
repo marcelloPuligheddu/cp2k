@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2025 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2026 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -15,16 +15,20 @@ MODULE ec_environment
    USE atomic_kind_types,               ONLY: atomic_kind_type
    USE basis_set_container_types,       ONLY: add_basis_set_to_container,&
                                               remove_basis_from_container
-   USE basis_set_types,                 ONLY: copy_gto_basis_set,&
+   USE basis_set_types,                 ONLY: allocate_gto_basis_set,&
+                                              copy_gto_basis_set,&
                                               create_primitive_basis_set,&
                                               gto_basis_set_type
    USE bibliography,                    ONLY: Niklasson2003,&
                                               Niklasson2014,&
                                               cite_reference
+   USE cell_types,                      ONLY: cell_type
+   USE cp_blacs_env,                    ONLY: cp_blacs_env_type
    USE cp_control_types,                ONLY: dft_control_type
-   USE cp_log_handling,                 ONLY: cp_get_default_logger,&
-                                              cp_logger_get_default_unit_nr,&
-                                              cp_logger_type
+   USE cp_fm_struct,                    ONLY: cp_fm_struct_create,&
+                                              cp_fm_struct_release,&
+                                              cp_fm_struct_type
+   USE cp_log_handling,                 ONLY: cp_logger_get_default_unit_nr
    USE dm_ls_scf_types,                 ONLY: ls_scf_env_type
    USE ec_env_types,                    ONLY: energy_correction_type
    USE input_constants,                 ONLY: &
@@ -33,7 +37,7 @@ MODULE ec_environment
         kg_cholesky, ls_cluster_atomic, ls_cluster_molecular, ls_s_inversion_hotelling, &
         ls_s_inversion_none, ls_s_inversion_sign_sqrt, ls_s_preconditioner_atomic, &
         ls_s_preconditioner_molecular, ls_s_preconditioner_none, ls_s_sqrt_ns, ls_s_sqrt_proot, &
-        xc_vdw_fun_nonloc, xc_vdw_fun_pairpot
+        smear_fermi_dirac, xc_vdw_fun_nonloc, xc_vdw_fun_pairpot
    USE input_cp2k_check,                ONLY: xc_functionals_expand
    USE input_section_types,             ONLY: section_get_ival,&
                                               section_vals_get,&
@@ -41,11 +45,19 @@ MODULE ec_environment
                                               section_vals_type,&
                                               section_vals_val_get
    USE kinds,                           ONLY: dp
+   USE kpoint_methods,                  ONLY: kpoint_env_initialize,&
+                                              kpoint_initialize,&
+                                              kpoint_initialize_mo_set,&
+                                              kpoint_initialize_mos
+   USE kpoint_types,                    ONLY: kpoint_create,&
+                                              read_kpoint_section,&
+                                              write_kpoint_info
    USE message_passing,                 ONLY: mp_para_env_type
    USE molecule_types,                  ONLY: molecule_of_atom,&
                                               molecule_type
    USE orbital_pointers,                ONLY: init_orbital_pointers
    USE particle_types,                  ONLY: particle_type
+   USE qs_basis_rotation_methods,       ONLY: qs_basis_rotation
    USE qs_dispersion_nonloc,            ONLY: qs_dispersion_nonloc_init
    USE qs_dispersion_pairpot,           ONLY: qs_dispersion_pairpot_init
    USE qs_dispersion_types,             ONLY: qs_dispersion_type
@@ -56,7 +68,12 @@ MODULE ec_environment
    USE qs_kind_types,                   ONLY: get_qs_kind,&
                                               get_qs_kind_set,&
                                               qs_kind_type
+   USE qs_mo_types,                     ONLY: allocate_mo_set,&
+                                              deallocate_mo_set,&
+                                              init_mo_set,&
+                                              mo_set_type
    USE qs_rho_types,                    ONLY: qs_rho_type
+   USE soft_basis_set,                  ONLY: create_soft_basis
    USE string_utilities,                ONLY: uppercase
    USE xc,                              ONLY: xc_uses_kinetic_energy_density,&
                                               xc_uses_norm_drho
@@ -114,26 +131,34 @@ CONTAINS
 
       CHARACTER(LEN=*), PARAMETER                        :: routineN = 'init_ec_env'
 
-      INTEGER                                            :: handle, ikind, maxlgto, nkind, unit_nr
-      LOGICAL                                            :: explicit
-      REAL(KIND=dp)                                      :: eps_pgf_orb
+      INTEGER                                            :: handle, ikind, ispin, maxlgto, nel(2), &
+                                                            nkind, nsgf, nspins, unit_nr
+      LOGICAL                                            :: explicit, gpw, gs_kpoints, paw_atom
+      REAL(KIND=dp)                                      :: eps_pgf_orb, etemp, &
+                                                            flexible_electron_count, focc, n_el_f, &
+                                                            rc
       TYPE(atomic_kind_type), DIMENSION(:), POINTER      :: atomic_kind_set
-      TYPE(cp_logger_type), POINTER                      :: logger
+      TYPE(cell_type), POINTER                           :: cell
+      TYPE(cp_blacs_env_type), POINTER                   :: blacs_env
+      TYPE(cp_fm_struct_type), POINTER                   :: fm_struct
       TYPE(dft_control_type), POINTER                    :: dft_control
-      TYPE(gto_basis_set_type), POINTER                  :: basis_set, harris_basis
+      TYPE(gto_basis_set_type), POINTER                  :: basis_set, harris_basis, &
+                                                            harris_soft_basis
+      TYPE(mo_set_type), DIMENSION(:), POINTER           :: mo_set
       TYPE(mp_para_env_type), POINTER                    :: para_env
+      TYPE(particle_type), DIMENSION(:), POINTER         :: particle_set
       TYPE(qs_dispersion_type), POINTER                  :: dispersion_env
       TYPE(qs_kind_type), DIMENSION(:), POINTER          :: qs_kind_set
       TYPE(qs_kind_type), POINTER                        :: qs_kind
       TYPE(qs_rho_type), POINTER                         :: rho
-      TYPE(section_vals_type), POINTER                   :: ec_hfx_section, nl_section, pp_section, &
-                                                            section1, section2, xc_fun_section, &
-                                                            xc_section
+      TYPE(section_vals_type), POINTER                   :: ec_hfx_section, kp_section, nl_section, &
+                                                            pp_section, section1, section2, &
+                                                            xc_fun_section, xc_section
 
       CALL timeset(routineN, handle)
 
       NULLIFY (atomic_kind_set, dispersion_env, ec_env%ls_env, para_env)
-      NULLIFY (ec_env%sab_orb, ec_env%sac_ppl, ec_env%sap_ppnl)
+      NULLIFY (ec_env%sab_orb, ec_env%sac_ae, ec_env%sac_ppl, ec_env%sap_ppnl)
       NULLIFY (ec_env%matrix_ks, ec_env%matrix_h, ec_env%matrix_s)
       NULLIFY (ec_env%matrix_t, ec_env%matrix_p, ec_env%matrix_w)
       NULLIFY (ec_env%task_list)
@@ -149,24 +174,22 @@ CONTAINS
       NULLIFY (ec_env%vxc_rspace)
       NULLIFY (ec_env%vtau_rspace)
       NULLIFY (ec_env%vadmm_rspace)
+      NULLIFY (ec_env%vadmm_tau_rspace)
       NULLIFY (ec_env%rhoout_r, ec_env%rhoz_r)
       NULLIFY (ec_env%x_data)
       ec_env%should_update = .TRUE.
       ec_env%mao = .FALSE.
       ec_env%do_ec_admm = .FALSE.
+      ec_env%do_kpoints = .FALSE.
       ec_env%do_ec_hfx = .FALSE.
       ec_env%reuse_hfx = .FALSE.
 
       IF (qs_env%energy_correction) THEN
 
          CPASSERT(PRESENT(ec_section))
+
          ! get a useful output_unit
-         logger => cp_get_default_logger()
-         IF (logger%para_env%is_source()) THEN
-            unit_nr = cp_logger_get_default_unit_nr(logger, local=.TRUE.)
-         ELSE
-            unit_nr = -1
-         END IF
+         unit_nr = cp_logger_get_default_unit_nr(local=.FALSE.)
 
          CALL section_vals_val_get(ec_section, "ALGORITHM", &
                                    i_val=ec_env%ks_solver)
@@ -180,6 +203,8 @@ CONTAINS
                                    r_val=ec_env%eps_default)
          CALL section_vals_val_get(ec_section, "HARRIS_BASIS", &
                                    c_val=ec_env%basis)
+         CALL section_vals_val_get(ec_section, "ELECTRONIC_TEMPERATURE", &
+                                   r_val=etemp)
          CALL section_vals_val_get(ec_section, "MAO", &
                                    l_val=ec_env%mao)
          CALL section_vals_val_get(ec_section, "MAO_MAX_ITER", &
@@ -200,10 +225,65 @@ CONTAINS
                                    l_val=ec_env%debug_stress)
          CALL section_vals_val_get(ec_section, "DEBUG_EXTERNAL_METHOD", &
                                    l_val=ec_env%debug_external)
+         ! WFN output
+         section1 => section_vals_get_subs_vals(ec_section, "PRINT%HARRIS_OUTPUT_WFN")
+         CALL section_vals_get(section1, explicit=ec_env%write_harris_wfn)
          ! ADMM
          CALL section_vals_val_get(ec_section, "ADMM", l_val=ec_env%do_ec_admm)
+         ! EXTERNAL
+         CALL section_vals_val_get(ec_section, "EXTERNAL_RESPONSE_FILENAME", &
+                                   c_val=ec_env%exresp_fn)
+         CALL section_vals_val_get(ec_section, "EXTERNAL_RESPONSE_ERROR_FILENAME", &
+                                   c_val=ec_env%exresperr_fn)
+         CALL section_vals_val_get(ec_section, "EXTERNAL_RESULT_FILENAME", &
+                                   c_val=ec_env%exresult_fn)
+         CALL section_vals_val_get(ec_section, "ERROR_ESTIMATION", &
+                                   l_val=ec_env%do_error)
+         CALL section_vals_val_get(ec_section, "ERROR_ESTIMATION_METHOD", &
+                                   c_val=ec_env%error_method)
+         CALL uppercase(ec_env%error_method)
+         CALL section_vals_val_get(ec_section, "ERROR_CUTOFF", &
+                                   r_val=ec_env%error_cutoff)
+         CALL section_vals_val_get(ec_section, "ERROR_SUBSPACE_SIZE", &
+                                   i_val=ec_env%error_subspace)
 
          ec_env%do_skip = .FALSE.
+
+         ! smearing
+         IF (etemp > 0.0_dp) THEN
+            ec_env%smear%do_smear = .TRUE.
+            ec_env%smear%method = smear_fermi_dirac
+            ec_env%smear%electronic_temperature = etemp
+            ec_env%smear%eps_fermi_dirac = 1.0E-5_dp
+            ec_env%smear%fixed_mag_mom = -100.0_dp
+         ELSE
+            ec_env%smear%do_smear = .FALSE.
+            ec_env%smear%electronic_temperature = 0.0_dp
+         END IF
+
+         ! kpoints
+         ! Options:    gs       ec
+         !            gamma    gamma
+         !            gamma     KPec
+         !             KPgs     KPgs
+         !             KPgs     KPec
+         CALL get_qs_env(qs_env, do_kpoints=gs_kpoints)
+         kp_section => section_vals_get_subs_vals(ec_section, "KPOINTS")
+         CALL section_vals_get(kp_section, explicit=explicit)
+         ec_env%do_kpoints = gs_kpoints .OR. explicit
+         IF (ec_env%do_kpoints) THEN
+            IF (.NOT. explicit) THEN
+               kp_section => section_vals_get_subs_vals(dft_section, "KPOINTS")
+            END IF
+            CALL get_qs_env(qs_env, particle_set=particle_set, cell=cell)
+            CALL kpoint_create(ec_env%kpoints)
+            CALL read_kpoint_section(ec_env%kpoints, kp_section, cell%hmat)
+            CALL kpoint_initialize(ec_env%kpoints, particle_set, cell)
+            CALL get_qs_env(qs_env, para_env=para_env, blacs_env=blacs_env)
+            CALL kpoint_env_initialize(ec_env%kpoints, para_env, blacs_env)
+         ELSE
+            NULLIFY (ec_env%kpoints)
+         END IF
 
          ! set basis
          CALL get_qs_env(qs_env, qs_kind_set=qs_kind_set, nkind=nkind)
@@ -258,6 +338,25 @@ CONTAINS
          !
          CALL get_qs_kind_set(qs_kind_set, maxlgto=maxlgto, basis_type="HARRIS")
          CALL init_orbital_pointers(maxlgto + 1)
+         ! GAPW: Generate soft version of Harris basis
+         CALL get_qs_env(qs_env, dft_control=dft_control)
+         IF (dft_control%qs_control%gapw .OR. dft_control%qs_control%gapw_xc) THEN
+            eps_pgf_orb = dft_control%qs_control%eps_pgf_orb
+            DO ikind = 1, nkind
+               qs_kind => qs_kind_set(ikind)
+               NULLIFY (harris_basis)
+               CALL get_qs_kind(qs_kind, basis_set=harris_basis, basis_type="HARRIS")
+               CALL get_qs_kind(qs_kind, hard_radius=rc, gpw_type_forced=gpw)
+               NULLIFY (harris_soft_basis)
+               CALL allocate_gto_basis_set(harris_soft_basis)
+               CALL create_soft_basis(harris_basis, harris_soft_basis, &
+                                      dft_control%qs_control%gapw_control%eps_fit, &
+                                      rc, paw_atom, &
+                                      dft_control%qs_control%gapw_control%force_paw, gpw)
+               CALL init_interaction_radii_orb_basis(harris_soft_basis, eps_pgf_orb)
+               CALL add_basis_set_to_container(qs_kind%basis_sets, harris_soft_basis, "HARRIS_SOFT")
+            END DO
+         END IF
          !
          CALL uppercase(ec_env%basis)
 
@@ -271,7 +370,7 @@ CONTAINS
                ! Basis sets of energy correction
                CALL get_qs_kind(qs_kind=qs_kind, basis_set=harris_basis, basis_type="HARRIS")
 
-               IF (basis_set%name .NE. harris_basis%name) THEN
+               IF (basis_set%name /= harris_basis%name) THEN
                   ec_env%basis_inconsistent = .TRUE.
                END IF
             END DO
@@ -345,12 +444,50 @@ CONTAINS
 
          ! Initialize Harris LS solver environment
          ec_env%use_ls_solver = .FALSE.
-         ec_env%use_ls_solver = (ec_env%ks_solver .EQ. ec_matrix_sign) &
-                                .OR. (ec_env%ks_solver .EQ. ec_matrix_trs4) &
-                                .OR. (ec_env%ks_solver .EQ. ec_matrix_tc2)
+         ec_env%use_ls_solver = (ec_env%ks_solver == ec_matrix_sign) &
+                                .OR. (ec_env%ks_solver == ec_matrix_trs4) &
+                                .OR. (ec_env%ks_solver == ec_matrix_tc2)
 
          IF (ec_env%use_ls_solver) THEN
             CALL ec_ls_create(qs_env, ec_env)
+         END IF
+
+         ! check that Harris functional with electronic temperature uses diagonalization
+         IF (ec_env%energy_functional == ec_functional_harris) THEN
+            IF (ec_env%smear%do_smear .AND. ec_env%ks_solver /= ec_diagonalization) THEN
+               CPABORT("Harris functional with Fermi-Dirac smearing needs diagonalization solver.")
+            END IF
+            IF (ec_env%do_kpoints .AND. ec_env%ks_solver /= ec_diagonalization) THEN
+               CPABORT("Harris functional with K-points needs diagonalization solver.")
+            END IF
+         END IF
+
+         ! initialize Kpoint MOs
+         IF (ec_env%do_kpoints) THEN
+            CALL get_qs_env(qs_env, dft_control=dft_control)
+            nspins = dft_control%nspins
+            CALL get_qs_kind_set(qs_kind_set, nsgf=nsgf, basis_type="HARRIS")
+            focc = 2.0_dp + REAL(1 - nspins, dp)
+            flexible_electron_count = dft_control%relax_multiplicity
+            CALL get_qs_env(qs_env, para_env=para_env, blacs_env=blacs_env)
+            CALL cp_fm_struct_create(fm_struct, para_env=para_env, context=blacs_env, &
+                                     nrow_global=nsgf, ncol_global=nsgf)
+            CALL get_qs_env(qs_env, nelectron_spin=nel)
+            ALLOCATE (mo_set(nspins))
+            DO ispin = 1, nspins
+               n_el_f = nel(ispin)
+               CALL allocate_mo_set(mo_set(ispin), nsgf, nsgf, nel(ispin), n_el_f, &
+                                    focc, flexible_electron_count)
+               CALL init_mo_set(mo_set(ispin), fm_struct=fm_struct, name="MO")
+            END DO
+            CALL kpoint_initialize_mos(ec_env%kpoints, mo_set)
+            CALL kpoint_initialize_mo_set(ec_env%kpoints)
+            CALL qs_basis_rotation(qs_env, ec_env%kpoints, basis_type="HARRIS")
+            DO ispin = 1, nspins
+               CALL deallocate_mo_set(mo_set(ispin))
+            END DO
+            DEALLOCATE (mo_set)
+            CALL cp_fm_struct_release(fm_struct)
          END IF
 
       END IF
@@ -488,17 +625,11 @@ CONTAINS
       CHARACTER(LEN=*), PARAMETER                        :: routineN = 'ec_write_input'
 
       INTEGER                                            :: handle, unit_nr
-      TYPE(cp_logger_type), POINTER                      :: logger
       TYPE(ls_scf_env_type), POINTER                     :: ls_env
 
       CALL timeset(routineN, handle)
 
-      logger => cp_get_default_logger()
-      IF (logger%para_env%is_source()) THEN
-         unit_nr = cp_logger_get_default_unit_nr(logger, local=.TRUE.)
-      ELSE
-         unit_nr = -1
-      END IF
+      unit_nr = cp_logger_get_default_unit_nr(local=.FALSE.)
 
       IF (unit_nr > 0) THEN
 
@@ -537,6 +668,10 @@ CONTAINS
             WRITE (unit_nr, '(T2,A,T61,L20)') "DC-DFT HFX with ADMM", ec_env%do_ec_admm
 
          END IF ! ec_env%do_ec_hfx
+
+         IF (ec_env%do_kpoints) THEN
+            CALL write_kpoint_info(ec_env%kpoints, iounit=unit_nr)
+         END IF
 
          ! Parameters for Harris functional solver
          IF (ec_env%energy_functional == ec_functional_harris) THEN

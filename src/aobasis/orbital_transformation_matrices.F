@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2025 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2026 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -353,7 +353,7 @@ CONTAINS
          r2(0, 0) = (3.0_dp*r1(0, 0)**2 - 1.0_dp)*0.5_dp
          r2(0, 1) = s3*r1(0, 1)*r1(0, 0)
          r2(0, -1) = s3*r1(0, -1)*r1(0, 0)
-         r2(0, -2) = s3*(r1(0, 1)**2 - r1(0, -1)**2)*0.5_dp
+         r2(0, 2) = s3*(r1(0, 1)**2 - r1(0, -1)**2)*0.5_dp
          r2(0, -2) = s3*r1(0, 1)*r1(0, -1)
          !
          r2(1, 0) = s3*r1(1, 0)*r1(0, 0)
@@ -375,10 +375,10 @@ CONTAINS
          r2(2, -2) = r1(1, 1)*r1(1, -1) - r1(-1, 1)*r1(-1, -1)
          !
          r2(-2, 0) = s3*r1(1, 0)*r1(-1, 0)
-         r2(2, 1) = r1(1, 1)*r1(-1, 0) + r1(1, 0)*r1(-1, 1)
-         r2(2, -1) = r1(1, -1)*r1(-1, 0) + r1(1, 0)*r1(-1, -1)
-         r2(2, 2) = r1(1, 1)*r1(-1, 1) - r1(1, -1)*r1(-1, -1)
-         r2(2, -2) = r1(1, 1)*r1(-1, -1) + r1(1, -1)*r1(-1, 1)
+         r2(-2, 1) = r1(1, 1)*r1(-1, 0) + r1(1, 0)*r1(-1, 1)
+         r2(-2, -1) = r1(1, -1)*r1(-1, 0) + r1(1, 0)*r1(-1, -1)
+         r2(-2, 2) = r1(1, 1)*r1(-1, 1) - r1(1, -1)*r1(-1, -1)
+         r2(-2, -2) = r1(1, 1)*r1(-1, -1) + r1(1, -1)*r1(-1, 1)
          !
          orbrotmat(2)%mat(1:5, 1:5) = r2(-2:2, -2:2)
       END IF
@@ -552,7 +552,7 @@ CONTAINS
          v = p_func(1, l, ma + 1, mb, r1, r, lr)*(1.0_dp - dd) + p_func(-1, l, -ma - 1, mb, r1, r, lr)*SQRT(1.0_dp + dd)
          w = p_func(1, l, ma - 1, mb, r1, r, lr) - p_func(-1, l, -ma + 1, mb, r1, r, lr)
       END IF
-   END SUBROUTINE
+   END SUBROUTINE r_recursion
 
 ! **************************************************************************************************
 !> \brief   Release rotation matrices
@@ -615,7 +615,7 @@ CONTAINS
                lz = l - lx - ly
                jc = co(lx, ly, lz)
                IF ((jc >= from) .AND. (jc <= to)) THEN
-                  symbol = cgf_symbol(1, (/lx, ly, lz/))
+                  symbol = cgf_symbol(1, [lx, ly, lz])
                   WRITE (UNIT=string(i:), FMT="(A18)") TRIM(symbol(3:12))
                   i = i + 18
                END IF

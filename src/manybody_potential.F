@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2025 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2026 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -26,10 +26,8 @@ MODULE manybody_potential
                                               pos_type
    USE input_section_types,             ONLY: section_vals_type
    USE kinds,                           ONLY: dp
-   USE manybody_allegro,                ONLY: allegro_add_force_virial,&
-                                              allegro_energy_store_force_virial,&
-                                              destroy_allegro_arrays,&
-                                              setup_allegro_arrays
+   USE manybody_ace,                    ONLY: ace_add_force_virial,&
+                                              ace_energy_store_force_virial
    USE manybody_deepmd,                 ONLY: deepmd_add_force_virial,&
                                               deepmd_energy_store_force_virial
    USE manybody_eam,                    ONLY: get_force_eam
@@ -41,12 +39,8 @@ MODULE manybody_potential
                                               gal21_energy,&
                                               gal21_forces,&
                                               setup_gal21_arrays
-   USE manybody_nequip,                 ONLY: destroy_nequip_arrays,&
-                                              nequip_add_force_virial,&
-                                              nequip_energy_store_force_virial,&
-                                              setup_nequip_arrays
-   USE manybody_quip,                   ONLY: quip_add_force_virial,&
-                                              quip_energy_store_force_virial
+   USE manybody_nequip,                 ONLY: nequip_add_force_virial,&
+                                              nequip_energy_store_force_virial
    USE manybody_siepmann,               ONLY: destroy_siepmann_arrays,&
                                               print_nr_ions_siepmann,&
                                               setup_siepmann_arrays,&
@@ -59,10 +53,9 @@ MODULE manybody_potential
                                               tersoff_forces
    USE message_passing,                 ONLY: mp_para_env_type
    USE pair_potential_types,            ONLY: &
-        allegro_pot_type, allegro_type, deepmd_type, ea_type, eam_pot_type, gal21_pot_type, &
-        gal21_type, gal_pot_type, gal_type, nequip_pot_type, nequip_type, pair_potential_pp_type, &
-        pair_potential_single_type, quip_type, siepmann_pot_type, siepmann_type, tersoff_pot_type, &
-        tersoff_type
+        ace_type, allegro_type, deepmd_type, ea_type, eam_pot_type, gal21_pot_type, gal21_type, &
+        gal_pot_type, gal_type, nequip_type, pair_potential_pp_type, pair_potential_single_type, &
+        siepmann_pot_type, siepmann_type, tersoff_pot_type, tersoff_type
    USE particle_types,                  ONLY: particle_type
    USE util,                            ONLY: sort
 #include "./base/base_uses.f90"
@@ -109,25 +102,23 @@ CONTAINS
       INTEGER :: atom_a, atom_b, handle, i, iend, ifirst, igrp, ikind, ilast, ilist, indexa, &
          ipair, iparticle, iparticle_local, istart, iunique, jkind, junique, mpair, nkinds, &
          nloc_size, npairs, nparticle, nparticle_local, nr_h3O, nr_o, nr_oh, nunique
-      INTEGER, DIMENSION(:), POINTER                     :: glob_loc_list_a, unique_list_a, work_list
+      INTEGER, DIMENSION(:), POINTER                     :: glob_loc_list_a, work_list
       INTEGER, DIMENSION(:, :), POINTER                  :: glob_loc_list, list, sort_list
-      LOGICAL                                            :: any_allegro, any_deepmd, any_gal, &
-                                                            any_gal21, any_nequip, any_quip, &
+      LOGICAL                                            :: any_ace, any_allegro, any_deepmd, &
+                                                            any_gal, any_gal21, any_nequip, &
                                                             any_siepmann, any_tersoff
-      REAL(KIND=dp)                                      :: drij, embed, pot_allegro, pot_deepmd, &
-                                                            pot_loc, pot_nequip, pot_quip, qr, &
+      REAL(KIND=dp)                                      :: drij, embed, pot_ace, pot_allegro, &
+                                                            pot_deepmd, pot_loc, pot_nequip, qr, &
                                                             rab2_max, rij(3)
       REAL(KIND=dp), DIMENSION(3)                        :: cell_v, cvi
       REAL(KIND=dp), DIMENSION(:, :), POINTER            :: glob_cell_v
       REAL(KIND=dp), POINTER                             :: fembed(:)
-      TYPE(allegro_pot_type), POINTER                    :: allegro
       TYPE(eam_pot_type), POINTER                        :: eam
       TYPE(eam_type), DIMENSION(:), POINTER              :: eam_data
       TYPE(fist_neighbor_type), POINTER                  :: nonbonded
       TYPE(gal21_pot_type), POINTER                      :: gal21
       TYPE(gal_pot_type), POINTER                        :: gal
       TYPE(neighbor_kind_pairs_type), POINTER            :: neighbor_kind_pair
-      TYPE(nequip_pot_type), POINTER                     :: nequip
       TYPE(pair_potential_pp_type), POINTER              :: potparm
       TYPE(pair_potential_single_type), POINTER          :: pot
       TYPE(pos_type), DIMENSION(:), POINTER              :: r_last_update_pbc
@@ -139,9 +130,9 @@ CONTAINS
       any_siepmann = .FALSE.
       any_gal = .FALSE.
       any_gal21 = .FALSE.
-      any_quip = .FALSE.
-      any_nequip = .FALSE.
       any_allegro = .FALSE.
+      any_nequip = .FALSE.
+      any_ace = .FALSE.
       any_deepmd = .FALSE.
       CALL timeset(routineN, handle)
       CALL fist_nonbond_env_get(fist_nonbond_env, r_last_update_pbc=r_last_update_pbc, &
@@ -185,8 +176,8 @@ CONTAINS
          DO jkind = ikind, SIZE(atomic_kind_set)
             pot => potparm%pot(ikind, jkind)%pot
             any_tersoff = any_tersoff .OR. ANY(pot%type == tersoff_type)
-            any_quip = any_quip .OR. ANY(pot%type == quip_type)
             any_nequip = any_nequip .OR. ANY(pot%type == nequip_type)
+            any_ace = any_ace .OR. ANY(pot%type == ace_type)
             any_allegro = any_allegro .OR. ANY(pot%type == allegro_type)
             any_deepmd = any_deepmd .OR. ANY(pot%type == deepmd_type)
             any_siepmann = any_siepmann .OR. ANY(pot%type == siepmann_type)
@@ -195,32 +186,29 @@ CONTAINS
          END DO
       END DO
       CALL fist_nonbond_env_get(fist_nonbond_env, nonbonded=nonbonded, natom_types=nkinds)
-      ! QUIP
-      IF (any_quip) THEN
-         CALL quip_energy_store_force_virial(particle_set, cell, atomic_kind_set, potparm, &
-                                             fist_nonbond_env, pot_quip, para_env)
-         pot_manybody = pot_manybody + pot_quip
-      END IF
       ! NEQUIP
       IF (any_nequip) THEN
          NULLIFY (glob_loc_list, glob_cell_v, glob_loc_list_a)
-         CALL setup_nequip_arrays(nonbonded, potparm, glob_loc_list, glob_cell_v, glob_loc_list_a, cell)
-         CALL nequip_energy_store_force_virial(nonbonded, particle_set, cell, atomic_kind_set, potparm, &
-                                               nequip, glob_loc_list_a, r_last_update_pbc, pot_nequip, &
-                                               fist_nonbond_env, para_env, use_virial)
+         CALL nequip_energy_store_force_virial(nonbonded, particle_set, local_particles, cell, &
+                                               atomic_kind_set, potparm, r_last_update_pbc, &
+                                               pot_nequip, fist_nonbond_env, &
+                                               para_env, use_virial, nequip_type)
          pot_manybody = pot_manybody + pot_nequip
-         CALL destroy_nequip_arrays(glob_loc_list, glob_cell_v, glob_loc_list_a)
       END IF
       ! ALLEGRO
       IF (any_allegro) THEN
-         NULLIFY (glob_loc_list, glob_cell_v, glob_loc_list_a, unique_list_a)
-         CALL setup_allegro_arrays(nonbonded, potparm, glob_loc_list, glob_cell_v, glob_loc_list_a, &
-                                   unique_list_a, cell)
-         CALL allegro_energy_store_force_virial(nonbonded, particle_set, cell, atomic_kind_set, potparm, &
-                                                allegro, glob_loc_list_a, r_last_update_pbc, pot_allegro, &
-                                                fist_nonbond_env, unique_list_a, para_env, use_virial)
+         NULLIFY (glob_loc_list, glob_cell_v, glob_loc_list_a)
+         CALL nequip_energy_store_force_virial(nonbonded, particle_set, local_particles, cell, &
+                                               atomic_kind_set, potparm, r_last_update_pbc, &
+                                               pot_allegro, fist_nonbond_env, &
+                                               para_env, use_virial, allegro_type)
          pot_manybody = pot_manybody + pot_allegro
-         CALL destroy_allegro_arrays(glob_loc_list, glob_cell_v, glob_loc_list_a, unique_list_a)
+      END IF
+      ! ACE
+      IF (any_ace) THEN
+         CALL ace_energy_store_force_virial(particle_set, cell, atomic_kind_set, potparm, &
+                                            fist_nonbond_env, pot_ace)
+         pot_manybody = pot_manybody + pot_ace
       END IF
       ! DEEPMD
       IF (any_deepmd) THEN
@@ -589,8 +577,8 @@ CONTAINS
       INTEGER, ALLOCATABLE, DIMENSION(:, :)              :: eam_kinds_index
       INTEGER, DIMENSION(:), POINTER                     :: glob_loc_list_a, work_list
       INTEGER, DIMENSION(:, :), POINTER                  :: glob_loc_list, list, sort_list
-      LOGICAL                                            :: any_allegro, any_deepmd, any_gal, &
-                                                            any_gal21, any_nequip, any_quip, &
+      LOGICAL                                            :: any_ace, any_allegro, any_deepmd, &
+                                                            any_gal, any_gal21, any_nequip, &
                                                             any_siepmann, any_tersoff
       REAL(KIND=dp) :: f_eam, fac, fr(3), ptens11, ptens12, ptens13, ptens21, ptens22, ptens23, &
          ptens31, ptens32, ptens33, rab(3), rab2, rab2_max, rtmp(3)
@@ -609,10 +597,10 @@ CONTAINS
       TYPE(tersoff_pot_type), POINTER                    :: tersoff
 
       any_tersoff = .FALSE.
-      any_quip = .FALSE.
-      any_nequip = .FALSE.
       any_allegro = .FALSE.
+      any_nequip = .FALSE.
       any_siepmann = .FALSE.
+      any_ace = .FALSE.
       any_deepmd = .FALSE.
       any_gal = .FALSE.
       any_gal21 = .FALSE.
@@ -647,6 +635,15 @@ CONTAINS
       END DO
       DO ikind = 1, nkinds
          DO jkind = ikind, nkinds
+            any_ace = any_ace .OR. ANY(potparm%pot(ikind, jkind)%pot%type == ace_type)
+         END DO
+      END DO
+      ! ACE
+      IF (any_ace) &
+         CALL ace_add_force_virial(fist_nonbond_env, f_nonbond, pv_nonbond, use_virial)
+
+      DO ikind = 1, nkinds
+         DO jkind = ikind, nkinds
             any_deepmd = any_deepmd .OR. ANY(potparm%pot(ikind, jkind)%pot%type == deepmd_type)
          END DO
       END DO
@@ -654,9 +651,25 @@ CONTAINS
       IF (any_deepmd) &
          CALL deepmd_add_force_virial(fist_nonbond_env, f_nonbond, pv_nonbond, use_virial)
 
-      ! QUIP
-      IF (use_virial) &
-         CALL quip_add_force_virial(fist_nonbond_env, f_nonbond, pv_nonbond)
+      ! NEQUIP
+      DO ikind = 1, nkinds
+         DO jkind = ikind, nkinds
+            any_nequip = any_nequip .OR. ANY(potparm%pot(ikind, jkind)%pot%type == nequip_type)
+         END DO
+      END DO
+      IF (any_nequip) THEN
+         CALL nequip_add_force_virial(fist_nonbond_env, f_nonbond, pv_nonbond, use_virial)
+      END IF
+
+      ! ALLEGRO
+      DO ikind = 1, nkinds
+         DO jkind = ikind, nkinds
+            any_allegro = any_allegro .OR. ANY(potparm%pot(ikind, jkind)%pot%type == allegro_type)
+         END DO
+      END DO
+      IF (any_allegro) THEN
+         CALL nequip_add_force_virial(fist_nonbond_env, f_nonbond, pv_nonbond, use_virial)
+      END IF
 
       ! starting the force loop
       DO ilist = 1, nonbonded%nlists
@@ -671,18 +684,19 @@ CONTAINS
             list => neighbor_kind_pair%list
             cvi = neighbor_kind_pair%cell_vector
             pot => potparm%pot(ikind, jkind)%pot
-            IF (pot%no_mb) CYCLE
+            IF (pot%no_mb) CYCLE Kind_Group_Loop1
             rab2_max = pot%rcutsq
             cell_v = MATMUL(cell%hmat, cvi)
             any_tersoff = any_tersoff .OR. ANY(pot%type == tersoff_type)
             any_siepmann = any_siepmann .OR. ANY(pot%type == siepmann_type)
+            any_ace = any_ace .OR. ANY(pot%type == ace_type)
             any_deepmd = any_deepmd .OR. ANY(pot%type == deepmd_type)
             any_gal = any_gal .OR. ANY(pot%type == gal_type)
             any_gal21 = any_gal21 .OR. ANY(pot%type == gal21_type)
             any_nequip = any_nequip .OR. ANY(pot%type == nequip_type)
             any_allegro = any_allegro .OR. ANY(pot%type == allegro_type)
             i = eam_kinds_index(ikind, jkind)
-            IF (i == -1) CYCLE
+            IF (i == -1) CYCLE Kind_Group_Loop1
             ! EAM
             CPASSERT(ASSOCIATED(eam_data))
             DO ipair = istart, iend
@@ -750,7 +764,7 @@ CONTAINS
                cvi = neighbor_kind_pair%cell_vector
                pot => potparm%pot(ikind, jkind)%pot
 
-               IF (pot%no_mb) CYCLE
+               IF (pot%no_mb) CYCLE Kind_Group_Loop2
                rab2_max = pot%rcutsq
                cell_v = MATMUL(cell%hmat, cvi)
                DO i = 1, SIZE(pot%type)
@@ -827,7 +841,7 @@ CONTAINS
                cvi = neighbor_kind_pair%cell_vector
                pot => potparm%pot(ikind, jkind)%pot
 
-               IF (pot%no_mb) CYCLE
+               IF (pot%no_mb) CYCLE Kind_Group_Loop3
                rab2_max = pot%rcutsq
                cell_v = MATMUL(cell%hmat, cvi)
                DO i = 1, SIZE(pot%type)
@@ -909,7 +923,7 @@ CONTAINS
                cvi = neighbor_kind_pair%cell_vector
                pot => potparm%pot(ikind, jkind)%pot
 
-               IF (pot%no_mb) CYCLE
+               IF (pot%no_mb) CYCLE Kind_Group_Loop4
                rab2_max = pot%rcutsq
                cell_v = MATMUL(cell%hmat, cvi)
                DO i = 1, SIZE(pot%type)
@@ -987,7 +1001,7 @@ CONTAINS
                cvi = neighbor_kind_pair%cell_vector
                pot => potparm%pot(ikind, jkind)%pot
 
-               IF (pot%no_mb) CYCLE
+               IF (pot%no_mb) CYCLE Kind_Group_Loop6
                rab2_max = pot%rcutsq
                cell_v = MATMUL(cell%hmat, cvi)
                DO i = 1, SIZE(pot%type)
@@ -1046,16 +1060,6 @@ CONTAINS
             END DO Kind_Group_Loop6
          END DO
          CALL destroy_gal_arrays(glob_loc_list, glob_cell_v, glob_loc_list_a)
-      END IF
-
-      ! NEQUIP
-      IF (any_nequip) THEN
-         CALL nequip_add_force_virial(fist_nonbond_env, f_nonbond, pv_nonbond, use_virial)
-      END IF
-
-      ! ALLEGRO
-      IF (any_allegro) THEN
-         CALL allegro_add_force_virial(fist_nonbond_env, f_nonbond, pv_nonbond, use_virial)
       END IF
 
       IF (use_virial) THEN

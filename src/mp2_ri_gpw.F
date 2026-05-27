@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2025 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2026 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -1331,6 +1331,7 @@ CONTAINS
          CALL m_memory(mem)
          mem_real = (mem + 1024*1024 - 1)/(1024*1024)
          CALL para_env%min(mem_real)
+         mem_real = MIN(mem_real, mp2_env%mp2_memory)
 
          mem_base = 0.0_dp
          mem_per_blk = 0.0_dp

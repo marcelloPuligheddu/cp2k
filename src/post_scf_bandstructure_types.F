@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2025 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2026 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -15,7 +15,8 @@ MODULE post_scf_bandstructure_types
    USE cp_cfm_types,                    ONLY: cp_cfm_release,&
                                               cp_cfm_type
    USE cp_dbcsr_api,                    ONLY: dbcsr_p_type,&
-                                              dbcsr_release
+                                              dbcsr_release,&
+                                              dbcsr_type
    USE cp_dbcsr_operations,             ONLY: dbcsr_deallocate_matrix_set
    USE cp_fm_types,                     ONLY: cp_fm_release,&
                                               cp_fm_type
@@ -23,7 +24,7 @@ MODULE post_scf_bandstructure_types
                                               dbt_type
    USE input_constants,                 ONLY: rtp_method_bse,&
                                               small_cell_full_kp
-   USE kinds,                           ONLY: default_string_length,&
+   USE kinds,                           ONLY: default_path_length,&
                                               dp
    USE kpoint_types,                    ONLY: kpoint_release,&
                                               kpoint_type
@@ -55,12 +56,38 @@ MODULE post_scf_bandstructure_types
       REAL(KIND=dp), DIMENSION(:, :, :), ALLOCATABLE :: data_3
    END TYPE data_3_type
 
+   ! data types for GW RI-RS code
+   TYPE rirs_grid_type
+      INTEGER                    :: npts = 0
+      REAL(KIND=dp), ALLOCATABLE :: raw_points(:, :)
+   END TYPE rirs_grid_type
+
+   TYPE ri_rs_env
+
+      ! Input parameters for RI-RS
+      INTEGER                                          :: grid_select = 1
+      INTEGER                                          :: chunk_size_dbcsr = 256
+      REAL(KIND=dp)                                    :: tikhonov = 1.0E-08_dp
+      REAL(KIND=dp)                                    :: cutoff_radius_ri_rs = 30.0_dp
+
+      ! Data types for building grid points
+      TYPE(rirs_grid_type), ALLOCATABLE                :: grid_cache(:)
+
+      ! Data types for storing RI-RS matrices
+      TYPE(dbcsr_type)                                 :: mat_phi_mu_l
+      TYPE(dbcsr_type)                                 :: mat_Z_lP
+      REAL(KIND=dp), ALLOCATABLE                       :: grid_points(:, :)
+      LOGICAL                                          :: Z_lP_exists = .FALSE.
+
+   END TYPE ri_rs_env
+
    TYPE post_scf_bandstructure_type
 
       ! decide which calculations will be done
       LOGICAL                                         :: do_gw = .FALSE., &
                                                          do_soc = .FALSE., &
-                                                         do_ldos = .FALSE.
+                                                         do_ldos = .FALSE., &
+                                                         do_gw_ri_rs = .FALSE.
 
       ! various eigenvalues computed in GW code, some depend on k-points
       ! and have therefore three dimensions (band index, k-point, spin)
@@ -79,6 +106,9 @@ MODULE post_scf_bandstructure_types
       ! parameters that influence the GW flavor
       LOGICAL                                         :: do_hedin_shift = .FALSE.
 
+      ! parameters for RI-RS implementation of GW
+      TYPE(ri_rs_env)                                 :: ri_rs
+
       ! general parameters on molecular orbitals and basis sets
       INTEGER                                      :: n_ao = -1, &
                                                       n_RI = -1, &
@@ -89,6 +119,10 @@ MODULE post_scf_bandstructure_types
                                                       i_ao_end_from_atom, &
                                                       i_RI_start_from_atom, &
                                                       i_RI_end_from_atom
+      INTEGER, DIMENSION(:, :), ALLOCATABLE         :: min_RI_idx_from_AO_AO_atom, &
+                                                       max_RI_idx_from_AO_AO_atom, &
+                                                       min_AO_idx_from_RI_AO_atom, &
+                                                       max_AO_idx_from_RI_AO_atom
       INTEGER, DIMENSION(2)                        :: n_occ = -1, &
                                                       n_vir = -1
       REAL(KIND=dp)                                :: spin_degeneracy = -1.0_dp
@@ -139,6 +173,7 @@ MODULE post_scf_bandstructure_types
       INTEGER                                         :: nparam_pade = -1, &
                                                          num_points_per_magnitude = -1
       REAL(KIND=dp)                                   :: freq_max_fit = -1.0_dp, &
+                                                         input_regularization_minimax = -1.0_dp, &
                                                          regularization_minimax = -1.0_dp, &
                                                          stabilize_exp = -1.0_dp
 
@@ -214,15 +249,18 @@ MODULE post_scf_bandstructure_types
                                                       n_intervals_j = -1, &
                                                       n_atom_per_interval_ij = -1, &
                                                       n_intervals_inner_loop_atoms = -1, &
-                                                      n_atom_per_IL_interval = -1
+                                                      n_atom_per_IL_interval = -1, &
+                                                      n_skip_sigma = -1, &
+                                                      n_skip_chi = -1
       INTEGER, DIMENSION(:, :), ALLOCATABLE        :: i_atom_intervals, &
                                                       j_atom_intervals, &
                                                       inner_loop_atom_intervals, &
                                                       atoms_i_t_group, &
                                                       atoms_j_t_group
       LOGICAL, DIMENSION(:, :), ALLOCATABLE        :: skip_Sigma_occ, &
-                                                      skip_Sigma_vir
-      ! Marek : rtp_method
+                                                      skip_Sigma_vir, &
+                                                      skip_chi
+      ! Marek : rtbse_method
       INTEGER                                      :: rtp_method = rtp_method_bse
 
       ! check-arrays and names for restarting
@@ -236,8 +274,9 @@ MODULE post_scf_bandstructure_types
       CHARACTER(LEN=7)                             :: Sigma_x_name = "Sigma_x"
       CHARACTER(LEN=13)                            :: Sigma_p_name = "Sigma_pos_tau", &
                                                       Sigma_n_name = "Sigma_neg_tau"
-      CHARACTER(LEN=default_string_length)         :: prefix = ""
-      INTEGER                                      :: unit_nr = -1
+      CHARACTER(LEN=default_path_length)           :: prefix = ""
+      INTEGER                                      :: unit_nr = -1, &
+                                                      unit_nr_contract = -1
 
       ! parameters and data for basis sets
       TYPE(gto_basis_set_p_type), &
@@ -288,6 +327,13 @@ MODULE post_scf_bandstructure_types
       INTEGER                                      :: n_tasks_Delta_R_local = -1
       INTEGER, DIMENSION(:), ALLOCATABLE           :: task_Delta_R
       INTEGER, DIMENSION(:, :), ALLOCATABLE        :: nblocks_3c
+      LOGICAL, DIMENSION(:), ALLOCATABLE           :: skip_DR_chi, &
+                                                      skip_DR_Sigma
+      LOGICAL, DIMENSION(:, :, :), ALLOCATABLE     :: skip_DR_R_R2_MxM_chi, &
+                                                      skip_DR_R1_R_MxM_Sigma, &
+                                                      skip_DR_R12_S_Goccx3c_chi, &
+                                                      skip_DR_R12_S_Gvirx3c_chi, &
+                                                      skip_DR_R1_S2_Gx3c_Sigma
 
       ! cfm for k-dep overl mat S_µν(k), KS mat h_µν(k,spin) and mo coeff C_μn(k,spin) from SCF
       TYPE(cp_cfm_type), DIMENSION(:), ALLOCATABLE      :: cfm_s_kp
@@ -302,6 +348,10 @@ MODULE post_scf_bandstructure_types
                                                            fm_Sigma_c_R_pos_tau
       REAL(KIND=dp), DIMENSION(:, :, :), ALLOCATABLE    :: v_xc_n
       TYPE(dbt_type), ALLOCATABLE, DIMENSION(:, :)      :: t_3c_int
+
+      !MG: Print options
+      LOGICAL                                           :: print_contract = .FALSE., &
+                                                           print_contract_verbose = .FALSE.
 
    END TYPE post_scf_bandstructure_type
 
@@ -345,12 +395,17 @@ CONTAINS
       IF (ALLOCATED(bs_env%i_ao_end_from_atom)) DEALLOCATE (bs_env%i_ao_end_from_atom)
       IF (ALLOCATED(bs_env%i_RI_start_from_atom)) DEALLOCATE (bs_env%i_RI_start_from_atom)
       IF (ALLOCATED(bs_env%i_RI_end_from_atom)) DEALLOCATE (bs_env%i_RI_end_from_atom)
+      IF (ALLOCATED(bs_env%min_RI_idx_from_AO_AO_atom)) DEALLOCATE (bs_env%min_RI_idx_from_AO_AO_atom)
+      IF (ALLOCATED(bs_env%max_RI_idx_from_AO_AO_atom)) DEALLOCATE (bs_env%max_RI_idx_from_AO_AO_atom)
+      IF (ALLOCATED(bs_env%min_AO_idx_from_RI_AO_atom)) DEALLOCATE (bs_env%min_AO_idx_from_RI_AO_atom)
+      IF (ALLOCATED(bs_env%max_AO_idx_from_RI_AO_atom)) DEALLOCATE (bs_env%max_AO_idx_from_RI_AO_atom)
       IF (ALLOCATED(bs_env%i_atom_intervals)) DEALLOCATE (bs_env%i_atom_intervals)
       IF (ALLOCATED(bs_env%j_atom_intervals)) DEALLOCATE (bs_env%j_atom_intervals)
       IF (ALLOCATED(bs_env%atoms_i_t_group)) DEALLOCATE (bs_env%atoms_i_t_group)
       IF (ALLOCATED(bs_env%atoms_j_t_group)) DEALLOCATE (bs_env%atoms_j_t_group)
       IF (ALLOCATED(bs_env%skip_Sigma_occ)) DEALLOCATE (bs_env%skip_Sigma_occ)
       IF (ALLOCATED(bs_env%skip_Sigma_vir)) DEALLOCATE (bs_env%skip_Sigma_vir)
+      IF (ALLOCATED(bs_env%skip_chi)) DEALLOCATE (bs_env%skip_chi)
       IF (ALLOCATED(bs_env%read_chi)) DEALLOCATE (bs_env%read_chi)
       IF (ALLOCATED(bs_env%calc_chi)) DEALLOCATE (bs_env%calc_chi)
       IF (ALLOCATED(bs_env%Sigma_c_exists)) DEALLOCATE (bs_env%Sigma_c_exists)
@@ -362,6 +417,13 @@ CONTAINS
       IF (ASSOCIATED(bs_env%cell_to_index_Delta_R)) DEALLOCATE (bs_env%cell_to_index_Delta_R)
       IF (ALLOCATED(bs_env%task_Delta_R)) DEALLOCATE (bs_env%task_Delta_R)
       IF (ALLOCATED(bs_env%nblocks_3c)) DEALLOCATE (bs_env%nblocks_3c)
+      IF (ALLOCATED(bs_env%skip_DR_chi)) DEALLOCATE (bs_env%skip_DR_chi)
+      IF (ALLOCATED(bs_env%skip_DR_Sigma)) DEALLOCATE (bs_env%skip_DR_Sigma)
+      IF (ALLOCATED(bs_env%skip_DR_R_R2_MxM_chi)) DEALLOCATE (bs_env%skip_DR_R_R2_MxM_chi)
+      IF (ALLOCATED(bs_env%skip_DR_R1_R_MxM_Sigma)) DEALLOCATE (bs_env%skip_DR_R1_R_MxM_Sigma)
+      IF (ALLOCATED(bs_env%skip_DR_R12_S_Goccx3c_chi)) DEALLOCATE (bs_env%skip_DR_R12_S_Goccx3c_chi)
+      IF (ALLOCATED(bs_env%skip_DR_R12_S_Gvirx3c_chi)) DEALLOCATE (bs_env%skip_DR_R12_S_Gvirx3c_chi)
+      IF (ALLOCATED(bs_env%skip_DR_R1_S2_Gx3c_Sigma)) DEALLOCATE (bs_env%skip_DR_R1_S2_Gx3c_Sigma)
 
       CALL cp_fm_release(bs_env%fm_s_Gamma)
       CALL cp_fm_release(bs_env%fm_ks_Gamma(1))
@@ -379,8 +441,7 @@ CONTAINS
       CALL cp_fm_release(bs_env%fm_RI_RI)
       CALL cp_fm_release(bs_env%fm_chi_Gamma_freq)
       CALL cp_fm_release(bs_env%fm_W_MIC_freq)
-      ! TODO : Test whether IF (rtp_method == rtp_method_gw) is needed
-      CALL cp_fm_release(bs_env%fm_W_MIC_freq_zero)
+      IF (bs_env%rtp_method == rtp_method_bse) CALL cp_fm_release(bs_env%fm_W_MIC_freq_zero)
       CALL cp_fm_release(bs_env%fm_W_MIC_freq_1_extra)
       CALL cp_fm_release(bs_env%fm_W_MIC_freq_1_no_extra)
       CALL cp_cfm_release(bs_env%cfm_work_mo)
@@ -425,6 +486,12 @@ CONTAINS
       CALL cp_fm_release(bs_env%fm_V_SOC_xyz_mo(2))
       CALL cp_fm_release(bs_env%fm_V_SOC_xyz_mo(3))
       CALL safe_cfm_destroy_1d(bs_env%cfm_SOC_spinor_ao)
+
+      ! Deallocate RI-RS matrices
+      IF (bs_env%do_gw_ri_rs) CALL dbcsr_release(bs_env%ri_rs%mat_phi_mu_l)
+      IF (bs_env%do_gw_ri_rs) CALL dbcsr_release(bs_env%ri_rs%mat_Z_lP)
+      IF (ALLOCATED(bs_env%ri_rs%grid_points)) DEALLOCATE (bs_env%ri_rs%grid_points)
+      IF (ALLOCATED(bs_env%ri_rs%grid_cache)) DEALLOCATE (bs_env%ri_rs%grid_cache)
 
       DEALLOCATE (bs_env)
 

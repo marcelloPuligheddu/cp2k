@@ -4,10 +4,10 @@
 # shellcheck disable=all
 
 [ "${BASH_SOURCE[0]}" ] && SCRIPT_NAME="${BASH_SOURCE[0]}" || SCRIPT_NAME=$0
-SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_NAME")" && pwd -P)"
+SCRIPT_DIR="$(cd "$(dirname "${SCRIPT_NAME}")/.." && pwd -P)"
 
-DBCSR_ver="2.7.0"
-DBCSR_sha256="25c367b49fb108c5230bcfb127f05fc16deff2bb467f437023dfa6045aff66f6"
+dbcsr_ver="2.9.1"
+dbcsr_sha256="fa5a4aeba0a07761511af2c26c779bd811b5ea0ef06a5d94535b6dd7b2e0ce59"
 source "${SCRIPT_DIR}"/common_vars.sh
 source "${SCRIPT_DIR}"/tool_kit.sh
 source "${SCRIPT_DIR}"/signal_trap.sh
@@ -16,66 +16,83 @@ source "${INSTALLDIR}"/toolchain.env
 
 [ -f "${BUILDDIR}/setup_dbcsr" ] && rm "${BUILDDIR}/setup_dbcsr"
 
-DBCSR_CFLAGS=''
-DBCSR_LDFLAGS=''
-DBCSR_LIBS=''
 ! [ -d "${BUILDDIR}" ] && mkdir -p "${BUILDDIR}"
 cd "${BUILDDIR}"
 
-case "$with_dbcsr" in
+case "${with_dbcsr}" in
   __INSTALL__)
     echo "==================== Installing DBCSR ===================="
-    #
-    # to be restored to the right value when this script is included in the toolchain
-    pkg_install_dir="${INSTALLDIR}/DBCSR"
-    install_lock_file="$pkg_install_dirnstall_dir/install_successful"
+    pkg_install_dir="${INSTALLDIR}/dbcsr-${dbcsr_ver}"
+    install_lock_file="${pkg_install_dir}/install_successful"
     if verify_checksums "${install_lock_file}"; then
-      echo "DBCSR-${DBCSR_ver} is already install_dbcsr.sh installed, skipping it."
+      echo "dbcsr-${dbcsr_ver} is already installed, skipping it."
     else
-      if [ -f dbcsr-${DBCSR_ver}.tar.gz ]; then
-        echo "dbcsr-${DBCSR_ver}.tar.gz is found"
-      else
-        download_pkg_from_urlpath "${DBCSR_sha256}" "v${DBCSR_ver}.tar.gz" \
-          https://github.com/cp2k/dbcsr/archive/refs/tags \
-          "dbcsr-${DBCSR_ver}.tar.gz"
-      fi
+      retrieve_package "${dbcsr_sha256}" "dbcsr-${dbcsr_ver}.tar.gz"
       echo "Installing from scratch into ${pkg_install_dir}"
-      [ -d dbcsr-${DBCSR_ver} ] && rm -rf dbcsr-${DBCSR_ver}
-      tar xzf dbcsr-${DBCSR_ver}.tar.gz
-      cd dbcsr-${DBCSR_ver}
-      COMPILATION_OPTIONS="-DUSE_OPENMP=ON -DBUILD_TESTING=NO -DWITH_EXAMPLES=NO"
-      [ -d build-cpu ] && rm -rf "build-cpu"
+      [ -d dbcsr-${dbcsr_ver} ] && rm -rf dbcsr-${dbcsr_ver}
+      tar -xzf dbcsr-${dbcsr_ver}.tar.gz
+      cd dbcsr-${dbcsr_ver}
+      if [ "${ENABLE_CUDA}" == "__TRUE__" ] && [ "${GPUVER}" == "GB10" ]; then
+        # DBCSR 2.9.1 predates GB10. Build native sm_121 code while
+        # reusing the closest available libsmm_acc parameters.
+        sed -i "s/    H100)/    H100\\n    GB10)/" CMakeLists.txt
+        sed -i "/  set(GPU_ARCH_NUMBER_H100 90)/a\\  set(GPU_ARCH_NUMBER_GB10 121)" CMakeLists.txt
+        cp src/acc/libsmm_acc/parameters/parameters_H100.json \
+          src/acc/libsmm_acc/parameters/parameters_GB10.json
+      fi
       mkdir build-cpu
       cd build-cpu
-      # build compilation option list
-      if [ "$MPI_MODE" == "no" ]; then
-        COMPILATION_OPTIONS="${COMPILATION_OPTIONS} -DUSE_MPI=no"
+      CMAKE_OPTIONS="-DBUILD_TESTING=NO -DCMAKE_INSTALL_LIBDIR=lib -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_VERBOSE_MAKEFILE=ON"
+      CMAKE_OPTIONS="${CMAKE_OPTIONS} -DCMAKE_POSITION_INDEPENDENT_CODE=ON -DUSE_OPENMP=ON -DWITH_EXAMPLES=NO"
+      if [ "${with_libxsmm}" == "__DONTUSE__" ]; then
+        CMAKE_OPTIONS="${CMAKE_OPTIONS} -DUSE_SMM=blas"
+      else
+        CMAKE_OPTIONS="${CMAKE_OPTIONS} -DUSE_SMM=libxsmm"
       fi
-      cmake $COMPILATION_OPTIONS -DCMAKE_INSTALL_PREFIX=${pkg_install_dir} ..
-      make -j $(get_nprocs) > make.log 2>&1
-      make install > install.log 2>&1
+      if [ "${MPI_MODE}" == "no" ]; then
+        CMAKE_OPTIONS="${CMAKE_OPTIONS} -DUSE_MPI=OFF"
+      else
+        CMAKE_OPTIONS="${CMAKE_OPTIONS} -DUSE_MPI=ON -DUSE_MPI_F08=ON"
+      fi
+      cmake \
+        -DCMAKE_INSTALL_PREFIX=${pkg_install_dir} \
+        ${CMAKE_OPTIONS} .. \
+        > cmake.log 2>&1 || tail_excerpt cmake.log
+      make -j $(get_nprocs) > make.log 2>&1 || tail_excerpt make.log
+      make -j $(get_nprocs) install > install.log 2>&1 || tail_excerpt install.log
       cd ..
-
-      if [ "$ENABLE_CUDA" == "__TRUE__" ]; then
-        [ -d build-cuda ] && rm -rf "build-cuda"
+      if [ "${ENABLE_CUDA}" == "__TRUE__" ]; then
         mkdir build-cuda
-        COMPILATION_OPTIONS="${COMPILATION_OPTIONS} -DCMAKE_INSTALL_PREFIX=${pkg_install_dir}-cuda -DUSE_ACCEL=cuda -DWITH_GPU=P100"
-        cmake $COMPILATION_OPTIONS ..
-        make -j $(get_nprocs) > make.log 2>&1
-        make install > install.log 2>&1
+        cd build-cuda
+        CMAKE_OPTIONS="${CMAKE_OPTIONS} -DUSE_ACCEL=cuda"
+        # CUDA 13 deprecates APIs still used by DBCSR 2.9.1 under -Werror.
+        CMAKE_OPTIONS="${CMAKE_OPTIONS} -DCMAKE_CXX_FLAGS=-Wno-error=deprecated-declarations"
+        if [ "${GPUVER}" == "GB10" ]; then
+          CMAKE_OPTIONS="${CMAKE_OPTIONS} -DWITH_GPU=GB10 -DWITH_GPU_PARAMS=GB10"
+        else
+          CMAKE_OPTIONS="${CMAKE_OPTIONS} -DWITH_GPU=P100"
+        fi
+        cmake \
+          -DCMAKE_INSTALL_PREFIX=${pkg_install_dir}-cuda \
+          ${CMAKE_OPTIONS} .. \
+          > cmake.log 2>&1 || tail_excerpt cmake.log
+        make -j $(get_nprocs) > make.log 2>&1 || tail_excerpt make.log
+        make -j $(get_nprocs) install > install.log 2>&1 || tail_excerpt install.log
         cd ..
       fi
-
-      if [ "$ENABLE_HIP" == "__TRUE__" ]; then
-        [ -d build-hip ] && rm -rf "build-hip"
+      if [ "${ENABLE_HIP}" == "__TRUE__" ]; then
         mkdir build-hip
-        COMPILATION_OPTIONS="${COMPILATION_OPTIONS}  -DCMAKE_INSTALL_PREFIX=${pkg_install_dir}-hip -DUSE_ACCEL=hip -DWITH_GPU=Mi250"
-        cmake $COMPILATION_OPTIONS ..
-        make -j $(get_nprocs) > make.log 2>&1
-        make install > install.log 2>&1
+        cd build-hip
+        CMAKE_OPTIONS="${CMAKE_OPTIONS} -DUSE_ACCEL=hip -DWITH_GPU=Mi250"
+        cmake \
+          -DCMAKE_INSTALL_PREFIX=${pkg_install_dir}-hip \
+          ${CMAKE_OPTIONS} .. \
+          > cmake.log 2>&1 || tail_excerpt cmake.log
+        make -j $(get_nprocs) > make.log 2>&1 || tail_excerpt make.log
+        make -j $(get_nprocs) install > install.log 2>&1 || tail_excerpt install.log
         cd ..
       fi
-      write_checksums "${install_lock_file}" "${SCRIPT_DIR}/$(basename ${SCRIPT_NAME})"
+      write_checksums "${install_lock_file}" "${SCRIPT_DIR}/stage9/$(basename ${SCRIPT_NAME})"
       DBCSR_CFLAGS="-I'${pkg_install_dir}/include'"
       DBCSR_LDFLAGS="-L'${pkg_install_dir}/lib' -Wl,-rpath='${pkg_install_dir}/lib'"
       DBCSR_CUDA_CFLAGS="-I'${pkg_install_dir}-cuda/include'"
@@ -91,49 +108,43 @@ case "$with_dbcsr" in
     add_lib_from_paths DBCSR_LDFLAGS "dbcsr.*" $LIB_PATHS
     ;;
   __DONTUSE__)
-    report_error ${LINENO} "It is not possible to compile cp2k without dbcsr"
+    # Nothing to do
     ;;
   *)
-    echo "==================== Linking spfft to user paths ===================="
-    pkg_install_dir="$with_dbcsr"
-
-    # use the lib64 directory if present (multi-abi distros may link lib/ to lib32/ instead)
+    echo "==================== Linking DBCSR to user paths ===================="
+    pkg_install_dir="${with_dbcsr}"
     DBCSR_LIBDIR="${pkg_install_dir}/lib"
-    [ -d "${pkg_install_dir}/lib64" ] && DBCSR_LIBDIR="${pkg_install_dir}/lib64"
-
     check_dir "${DBCSR_LIBDIR}"
     check_dir "${pkg_install_dir}/include"
     DBCSR_CFLAGS="-I'${pkg_install_dir}/include'"
     DBCSR_LDFLAGS="-L'${DBCSR_LIBDIR}' -Wl,-rpath,'${DBCSR_LIBDIR}'"
     ;;
 esac
-if [ "$with_dbcsr" != "__DONTUSE__" ]; then
+
+if [ "${with_dbcsr}" != "__DONTUSE__" ]; then
   DBCSR_LIBS="-ldbcsr"
-  if [ "$with_dbcsr" != "__SYSTEM__" ]; then
-    if [ "$ENABLE_CUDA" == "__TRUE__" ]; then
-      pkg_install_dir1="${pkg-install-dir}-cuda"
+  if [ "${with_dbcsr}" != "__SYSTEM__" ]; then
+    if [ "${ENABLE_CUDA}" == "__TRUE__" ]; then
+      pkg_install_dir1="${pkg_install_dir}-cuda"
     else
-      if [ "$ENABLE_HIP" == "__TRUE__" ]; then
-        pkg_install_dir1="${pkg-install-dir}-hip"
+      if [ "${ENABLE_HIP}" == "__TRUE__" ]; then
+        pkg_install_dir1="${pkg_install_dir}-hip"
       else
-        pkg_install_dir1="${pkg-install-dir}"
+        pkg_install_dir1="${pkg_install_dir}"
       fi
     fi
   fi
   cat << EOF > "${BUILDDIR}/setup_dbcsr"
-prepend_path LD_LIBRARY_PATH "$pkg_install_dir1/lib"
-prepend_path LD_RUN_PATH "$pkg_install_dir1/lib"
-prepend_path LIBRARY_PATH "$pkg_install_dir1/lib"
-prepend_path CPATH "$pkg_install_dir1/include"
-prepend_path CMAKE_INSTALL_PREFIX "${pkg_install_dir1}"
+prepend_path LD_LIBRARY_PATH "${pkg_install_dir1}/lib"
+prepend_path LD_RUN_PATH "${pkg_install_dir1}/lib"
+prepend_path LIBRARY_PATH "${pkg_install_dir1}/lib"
+prepend_path CPATH "${pkg_install_dir1}/include"
+prepend_path CMAKE_PREFIX_PATH "${pkg_install_dir1}"
 export DBCSR_ROOT="${pkg_install_dir}"
 export DBCSR_HIP_ROOT="${pkg_install_dir}-hip"
 export DBCSR_CUDA_ROOT="${pkg_install_dir}-cuda"
-EOF
-  cat "${BUILDDIR}/setup_dbcsr" >> $SETUPFILE
-fi
-cat << EOF >> "${BUILDDIR}/setup_dbcsr"
-export DBCSR_VER="${DBCSR_ver}"
+export DBCSR_VER="${dbcsr_ver}"
+export DBCSR_DIR="${pkg_install_dir1}/lib/cmake/dbcsr"
 export DBCSR_CFLAGS="${DBCSR_CFLAGS}"
 export DBCSR_LDFLAGS="IF_CUDA(${DBCSR_CUDA_LDFLAGS}|IF_HIP(${DBCSR_HIP_LDFLAGS}|${DBCSR_LDFLAGS}))"
 export DBCSR_LIBS="${DBCSR_LIBS}"
@@ -142,8 +153,11 @@ export CP_CFLAGS="\${CP_CFLAGS} ${DBCSR_CFLAGS}"
 export CP_LDFLAGS="\${CP_LDFLAGS} ${DBCSR_LDFLAGS}"
 export CP_LIBS="${DBCSR_LIBS} \${CP_LIBS}"
 EOF
+else
+  touch "${BUILDDIR}/setup_dbcsr"
+fi
 
-cat "${BUILDDIR}/setup_dbcsr" >> $SETUPFILE
+filter_setup "${BUILDDIR}/setup_dbcsr" "${SETUPFILE}"
 
 load "${BUILDDIR}/setup_dbcsr"
 write_toolchain_env "${INSTALLDIR}"

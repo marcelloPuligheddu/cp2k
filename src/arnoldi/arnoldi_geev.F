@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2025 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2026 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -142,13 +142,13 @@ CONTAINS
       ! if eval is complex, then the complex conj pair of evec can be constructed from the i and i+1st evec
       ! Unfortunately dtrevc computes the ev such that the largest is set to one and not normalized
       i = 1
-      DO WHILE (i .LE. ndim)
-         IF (ABS(eval2(i)) .LT. EPSILON(REAL(0.0, dp))) THEN
+      DO WHILE (i <= ndim)
+         IF (ABS(eval2(i)) < EPSILON(REAL(0.0, dp))) THEN
             evec_r(:, i) = evec_r(:, i)/SQRT(DOT_PRODUCT(evec_r(:, i), evec_r(:, i)))
             revec(:, i) = CMPLX(evec_r(:, i), REAL(0.0, dp), dp)
             levec(:, i) = CMPLX(evec_l(:, i), REAL(0.0, dp), dp)
             i = i + 1
-         ELSE IF (eval2(i) .GT. EPSILON(REAL(0.0, dp))) THEN
+         ELSE IF (eval2(i) > EPSILON(REAL(0.0, dp))) THEN
             norm = SQRT(SUM(evec_r(:, i)**2.0_dp) + SUM(evec_r(:, i + 1)**2.0_dp))
             revec(:, i) = CMPLX(evec_r(:, i), evec_r(:, i + 1), dp)/norm
             revec(:, i + 1) = CMPLX(evec_r(:, i), -evec_r(:, i + 1), dp)/norm

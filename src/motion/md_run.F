@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2025 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2026 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -19,6 +19,7 @@ MODULE md_run
    USE cell_types,                      ONLY: cell_type
    USE cp_external_control,             ONLY: external_control
    USE cp_log_handling,                 ONLY: cp_get_default_logger,&
+                                              cp_logger_get_default_unit_nr,&
                                               cp_logger_type
    USE cp_output_handling,              ONLY: cp_add_iter_level,&
                                               cp_iterate,&
@@ -37,6 +38,7 @@ MODULE md_run
    USE free_energy_types,               ONLY: fe_env_create,&
                                               free_energy_type
    USE global_types,                    ONLY: global_environment_type
+   USE hfx_ace_methods,                 ONLY: hfx_ace_set_dynamic_mode
    USE input_constants,                 ONLY: &
         ehrenfest, langevin_ensemble, npe_f_ensemble, npe_i_ensemble, &
         nph_uniaxial_damped_ensemble, nph_uniaxial_ensemble, npt_f_ensemble, npt_i_ensemble, &
@@ -61,7 +63,8 @@ MODULE md_run
                                               md_environment_type,&
                                               need_per_atom_wiener_process,&
                                               set_md_env
-   USE md_util,                         ONLY: md_output
+   USE md_util,                         ONLY: md_output,&
+                                              update_expected_temperature
    USE md_vel_utils,                    ONLY: angvel_control,&
                                               comvel_control,&
                                               setup_velocities,&
@@ -134,6 +137,12 @@ CONTAINS
       my_rm_restart_info = .TRUE.
       IF (PRESENT(rm_restart_info)) my_rm_restart_info = rm_restart_info
       NULLIFY (md_env, para_env)
+
+      ! Tell ACE that this is a dynamic run: Bypass C will use full HFX
+      ! for the entire first MD step so wavefunction propagation delivers
+      ! a near-converged C_occ to step 1, making the ACE BUILD accurate.
+      CALL hfx_ace_set_dynamic_mode(.TRUE.)
+
       para_env => force_env%para_env
       motion_section => section_vals_get_subs_vals(force_env%root_section, "MOTION")
       md_section => section_vals_get_subs_vals(motion_section, "MD")
@@ -182,7 +191,8 @@ CONTAINS
       CHARACTER(LEN=*), PARAMETER                        :: routineN = 'qs_mol_dyn_low'
 
       CHARACTER(LEN=default_string_length)               :: my_act, my_pos
-      INTEGER                                            :: handle, i, istep, md_stride, run_type_id
+      INTEGER                                            :: handle, i, istep, md_stride, &
+                                                            output_unit, run_type_id
       INTEGER, POINTER                                   :: itimes
       LOGICAL                                            :: check, ehrenfest_md, save_mem, &
                                                             should_stop, write_binary_restart_file
@@ -217,6 +227,7 @@ CONTAINS
                constraint_section, thermal_regions, virial, subsys_i)
       logger => cp_get_default_logger()
       para_env => force_env%para_env
+      output_unit = cp_logger_get_default_unit_nr()
 
       global_section => section_vals_get_subs_vals(force_env%root_section, "GLOBAL")
       free_energy_section => section_vals_get_subs_vals(motion_section, "FREE_ENERGY")
@@ -373,8 +384,6 @@ CONTAINS
 
          IF (ASSOCIATED(force_env%qs_env)) THEN
             CALL qs_env_time_update(force_env%qs_env, time, itimes)
-!deb        force_env%qs_env%sim_time = time
-!deb        force_env%qs_env%sim_step = itimes
          END IF
          ! Warm-up engines for metadynamics
          IF (ASSOCIATED(force_env%meta_env)) THEN
@@ -450,14 +459,15 @@ CONTAINS
 
       ! Real MD Loop
       DO istep = 1, simpar%nsteps, md_stride
+         IF (output_unit > 0) THEN
+            WRITE (output_unit, "(T3,A,I7,A,I7)") "MD step: ", istep, "/", simpar%nsteps
+         END IF
          ! Increase counters
          itimes = itimes + 1
          time = time + simpar%dt
          !needed when electric field fields are applied
          IF (ASSOCIATED(force_env%qs_env)) THEN
             CALL qs_env_time_update(force_env%qs_env, time, itimes)
-!deb        force_env%qs_env%sim_time = time
-!deb        force_env%qs_env%sim_step = itimes
          END IF
          IF (ehrenfest_md) force_env%qs_env%rtp%istep = istep
 
@@ -475,6 +485,9 @@ CONTAINS
                                        "LAGRANGE_MULTIPLIERS", extension=".LagrangeMultLog", log_filename=.FALSE.)
          simpar%dump_lm = BTEST(cp_print_key_should_output(logger%iter_info, constraint_section, &
                                                            "LAGRANGE_MULTIPLIERS"), cp_p_file)
+
+         ! Update temperature for thermal regions and thermostat regions
+         CALL update_expected_temperature(md_env)
 
          ! Velocity Verlet Integrator
          CALL velocity_verlet(md_env, globenv)

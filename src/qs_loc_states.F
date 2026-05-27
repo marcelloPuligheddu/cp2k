@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2025 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2026 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -18,10 +18,12 @@ MODULE qs_loc_states
                                               cp_logger_type
    USE cp_output_handling,              ONLY: cp_p_file,&
                                               cp_print_key_should_output
-   USE input_section_types,             ONLY: section_get_lval,&
+   USE input_section_types,             ONLY: section_get_ival,&
+                                              section_get_lval,&
                                               section_vals_get_subs_vals,&
                                               section_vals_type
    USE kinds,                           ONLY: dp
+   USE localized_moments,               ONLY: calculate_localized_moments
    USE molecular_dipoles,               ONLY: calculate_molecular_dipole
    USE molecular_moments,               ONLY: calculate_molecular_moments
    USE molecular_states,                ONLY: construct_molecular_states
@@ -82,10 +84,11 @@ CONTAINS
 
       CHARACTER(len=*), PARAMETER :: routineN = 'get_localization_info'
 
-      INTEGER                                            :: handle, ispin, mystate, ns, nspins, &
-                                                            output_unit
+      INTEGER                                            :: handle, ispin, max_moment, mystate, ns, &
+                                                            nspins, output_unit
       INTEGER, DIMENSION(:), POINTER                     :: lstates, marked_states_spin
-      LOGICAL                                            :: do_homo, do_mixed
+      LOGICAL                                            :: com_nl, do_homo, do_mixed, magnetic, &
+                                                            vel_reprs
       REAL(KIND=dp), DIMENSION(:, :), POINTER            :: scenter
       TYPE(cp_logger_type), POINTER                      :: logger
       TYPE(dbcsr_p_type), DIMENSION(:), POINTER          :: ks_rmpv, matrix_s
@@ -152,13 +155,17 @@ CONTAINS
                  BTEST(cp_print_key_should_output(logger%iter_info, loc_print_section, &
                                                   "MOLECULAR_MOMENTS"), cp_p_file) .OR. &
                  BTEST(cp_print_key_should_output(logger%iter_info, loc_print_section, &
-                                                  "MOLECULAR_STATES"), cp_p_file))) THEN
+                                                  "MOLECULAR_STATES"), cp_p_file) .OR. &
+                 BTEST(cp_print_key_should_output(logger%iter_info, loc_print_section, &
+                                                  "LOCALIZED_MOMENTS"), cp_p_file))) THEN
                CALL wfc_to_molecule(qs_loc_env, scenter, molecule_set, ispin, dft_control%nspins)
             END IF
 
             ! Compute the wannier states
             IF (BTEST(cp_print_key_should_output(logger%iter_info, loc_print_section, &
-                                                 "WANNIER_STATES"), cp_p_file)) THEN
+                                                 "WANNIER_STATES"), cp_p_file) .OR. &
+                (BTEST(cp_print_key_should_output(logger%iter_info, loc_print_section, &
+                                                  "LOCALIZED_MOMENTS"), cp_p_file))) THEN
                ns = SIZE(qs_loc_env%localized_wfn_control%loc_states, 1)
                IF (.NOT. ASSOCIATED(wc(ispin)%centres)) THEN
                   ALLOCATE (wc(ispin)%WannierHamDiag(ns))
@@ -194,7 +201,7 @@ CONTAINS
          ! Compute all the second moments of the Wannier states
          IF (section_get_lval(loc_print_section, "WANNIER_SPREADS%SECOND_MOMENTS")) THEN
             IF (section_get_lval(loc_print_section, "WANNIER_SPREADS%PERIODIC")) THEN
-               IF (dft_control%qs_control%gapw_control%lmax_sphere .LT. 6) THEN
+               IF (dft_control%qs_control%gapw_control%lmax_sphere < 6) THEN
                   CPABORT("Periodic second moments require LMAXN1>=6 In QS section")
                END IF
                CALL centers_second_moments_berry(qs_env, qs_loc_env, loc_print_section, ispin)
@@ -219,6 +226,16 @@ CONTAINS
       IF (BTEST(cp_print_key_should_output(logger%iter_info, loc_print_section, &
                                            "WANNIER_STATES"), cp_p_file)) THEN
          CALL set_qs_env(qs_env=qs_env, WannierCentres=wc)
+      END IF
+      !
+      IF (BTEST(cp_print_key_should_output(logger%iter_info, loc_print_section, &
+                                           "LOCALIZED_MOMENTS"), cp_p_file)) THEN
+         max_moment = section_get_ival(loc_print_section, "LOCALIZED_MOMENTS%MAX_MOMENT")
+         magnetic = section_get_lval(loc_print_section, "LOCALIZED_MOMENTS%MAGNETIC")
+         vel_reprs = section_get_lval(loc_print_section, "LOCALIZED_MOMENTS%VEL_REPRS")
+         com_nl = section_get_lval(loc_print_section, "LOCALIZED_MOMENTS%COM_NL")
+         CALL calculate_localized_moments(qs_env, qs_loc_env, mo_local, max_moment, magnetic, &
+                                          vel_reprs, com_nl, loc_print_section)
       END IF
 
       CALL timestop(handle)

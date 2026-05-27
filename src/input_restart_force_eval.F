@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2025 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2026 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -376,6 +376,9 @@ CONTAINS
                CALL close_file(unit_number=output_unit)
             END IF
          ELSE
+            ! Remove COORD_FILE_NAME and COORD_FILE_FORMAT keywords from restart
+            CALL section_vals_val_unset(subsys_section, "TOPOLOGY%COORD_FILE_NAME")
+            CALL section_vals_val_unset(subsys_section, "TOPOLOGY%COORD_FILE_FORMAT")
             CALL section_coord_val_set(work_section, particles, molecules, conv_factor, scale, &
                                        cell)
          END IF

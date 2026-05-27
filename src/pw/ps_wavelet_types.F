@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2025 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2026 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -38,6 +38,7 @@ MODULE ps_wavelet_types
       CHARACTER(LEN=1)                                  :: datacode = " "
       INTEGER                                           :: itype_scf = 0
       INTEGER                                           :: method = WAVELET3D, special_dimension = 0
+      INTEGER, DIMENSION(3)                             :: axis = [1, 2, 3]
       REAL(kind=dp), POINTER, DIMENSION(:)             :: karray => NULL()
       REAL(KIND=dp), DIMENSION(:, :, :), POINTER    :: rho_z_sliced => NULL()
       INTEGER, DIMENSION(3)                              :: PS_grid = 0

@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2025 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2026 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -13,9 +13,9 @@ MODULE input_cp2k_loc
                                               low_print_level
    USE input_constants,                 ONLY: &
         do_loc_both, do_loc_cpo_atomic, do_loc_cpo_random, do_loc_cpo_restart, &
-        do_loc_cpo_space_nmo, do_loc_cpo_space_wan, do_loc_crazy, do_loc_direct, do_loc_gapo, &
-        do_loc_homo, do_loc_jacobi, do_loc_l1_norm_sd, do_loc_lumo, do_loc_max, do_loc_min, &
-        do_loc_mixed, do_loc_none, do_loc_scdm, op_loc_berry, op_loc_boys, op_loc_pipek
+        do_loc_cpo_space_nmo, do_loc_cpo_space_wan, do_loc_crazy, do_loc_cs, do_loc_direct, &
+        do_loc_gapo, do_loc_homo, do_loc_jacobi, do_loc_l1_norm_sd, do_loc_lumo, do_loc_max, &
+        do_loc_min, do_loc_mixed, do_loc_none, do_loc_scdm, op_loc_berry, op_loc_boys, op_loc_pipek
    USE input_cp2k_mm,                   ONLY: create_dipoles_section
    USE input_cp2k_motion_print,         ONLY: add_format_keyword
    USE input_keyword_types,             ONLY: keyword_create,&
@@ -103,6 +103,12 @@ CONTAINS
       CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
 
+      CALL keyword_create(keyword, __LOCATION__, name="EACH", &
+                          description="localize each n steps", &
+                          default_i_val=1)
+      CALL section_add_keyword(section, keyword)
+      CALL keyword_release(keyword)
+
       CALL keyword_create( &
          keyword, __LOCATION__, name="EPS_OCCUPATION", &
          description="Tolerance in the occupation number to select only fully occupied orbitals for the rotation", &
@@ -126,8 +132,8 @@ CONTAINS
       CALL keyword_create(keyword, __LOCATION__, name="MIN_OR_MAX", &
                           description="Requires the maximization of the spread of the wfn", &
                           usage="MIN_OR_MAX (SPREADMIN|SPREADMAX)", &
-                          enum_c_vals=(/"SPREADMIN", "SPREADMAX"/), &
-                          enum_i_vals=(/do_loc_min, do_loc_max/), &
+                          enum_c_vals=["SPREADMIN", "SPREADMAX"], &
+                          enum_i_vals=[do_loc_min, do_loc_max], &
                           default_i_val=do_loc_min)
       CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
@@ -135,20 +141,24 @@ CONTAINS
       CALL keyword_create( &
          keyword, __LOCATION__, name="METHOD", &
          description="Method of optimization if any", &
-         usage="METHOD (JACOBI|CRAZY|DIRECT|GAPO|L1SD|SCDM|NONE)", &
-         enum_c_vals=s2a("NONE", "JACOBI", "CRAZY", "GAPO", "L1SD", "DIRECT", "SCDM"), &
-         enum_i_vals=(/do_loc_none, &
-                       do_loc_jacobi, &
-                       do_loc_crazy, &
-                       do_loc_gapo, &
-                       do_loc_l1_norm_sd, &
-                       do_loc_direct, do_loc_scdm/), &
+         usage="METHOD (JACOBI|CRAZY|DIRECT|GAPO|L1SD|SCDM|CS|NONE)", &
+         enum_c_vals=s2a("NONE", "JACOBI", "CRAZY", "GAPO", "L1SD", "DIRECT", "SCDM", "CS"), &
+         enum_i_vals=[do_loc_none, &
+                      do_loc_jacobi, &
+                      do_loc_crazy, &
+                      do_loc_gapo, &
+                      do_loc_l1_norm_sd, &
+                      do_loc_direct, &
+                      do_loc_scdm, &
+                      do_loc_cs], &
          enum_desc=s2a("No localization is applied", &
                        "Using 2 x 2 rotations of the orbitals, slow but robust", &
                        "A new fast method is applied, might be slightly less robust than jacobi, but usually much faster", &
                        "Gradient ascent for partially occupied wannier functions", &
                        "Steepest descent minimization of an approximate l1 norm", &
-                       "Using a direct minimisation approacha", "Use QR factorization"), &
+                       "Using a direct minimisation approacha", &
+                       "Use QR factorization", &
+                       "Using the Cardoso-Souloumiac algorithm for complex matrices"), &
          default_i_val=do_loc_jacobi)
       CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
@@ -157,7 +167,7 @@ CONTAINS
                           description="Initial guess for coefficients if METHOD GAPO is used", &
                           usage="CPO_GUESS (ATOMIC|RESTART|RANDOM)", &
                           enum_c_vals=s2a("ATOMIC", "RESTART", "RANDOM"), &
-                          enum_i_vals=(/do_loc_cpo_atomic, do_loc_cpo_restart, do_loc_cpo_random/), &
+                          enum_i_vals=[do_loc_cpo_atomic, do_loc_cpo_restart, do_loc_cpo_random], &
                           default_i_val=do_loc_cpo_atomic)
       CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
@@ -167,7 +177,7 @@ CONTAINS
                           "if METHOD GAPO and CPO_GUESS ATOMIC are employed", &
                           usage="CPO_GUESS_SPACE (WAN|ALL)", &
                           enum_c_vals=s2a("WAN", "ALL"), &
-                          enum_i_vals=(/do_loc_cpo_space_wan, do_loc_cpo_space_nmo/), &
+                          enum_i_vals=[do_loc_cpo_space_wan, do_loc_cpo_space_nmo], &
                           default_i_val=do_loc_cpo_space_wan)
       CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
@@ -231,7 +241,7 @@ CONTAINS
                           description="Type of opertator which defines the spread functional", &
                           usage="OPERATOR (BERRY|BOYS|PIPEK)", &
                           enum_c_vals=s2a("BERRY", "BOYS", "PIPEK"), &
-                          enum_i_vals=(/op_loc_berry, op_loc_boys, op_loc_pipek/), &
+                          enum_i_vals=[op_loc_berry, op_loc_boys, op_loc_pipek], &
                           default_i_val=op_loc_berry)
       CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
@@ -251,7 +261,7 @@ CONTAINS
                           "This keyword has to be present if unoccupied states should be localized. "// &
                           "This keyword can be repeated several times "// &
                           "(useful if you have to specify many indexes).", &
-                          usage="LIST 1 2", &
+                          usage="LIST_UNOCCUPIED 1 2", &
                           n_var=-1, type_of_var=integer_t, repeats=.TRUE.)
       CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
@@ -269,7 +279,7 @@ CONTAINS
                           description="Which states to localize, LUMO up to now only available in GPW", &
                           usage="STATES (HOMO|LUMO|MIXED|ALL)", &
                           enum_c_vals=s2a("OCCUPIED", "UNOCCUPIED", "MIXED", "ALL"), &
-                          enum_i_vals=(/do_loc_homo, do_loc_lumo, do_loc_mixed, do_loc_both/), &
+                          enum_i_vals=[do_loc_homo, do_loc_lumo, do_loc_mixed, do_loc_both], &
                           default_i_val=do_loc_homo)
       CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
@@ -280,9 +290,9 @@ CONTAINS
          description="Select the orbitals to be localized within the given energy range."// &
          " This type of selection cannot be added on top of the selection through a LIST. It reads to reals that are"// &
          " lower and higher boundaries of the energy range.", &
-         usage=" ENERGY_RANGE lower_bound {real}, higher_bound {real}", &
+         usage="ENERGY_RANGE lower_bound {real}, higher_bound {real}", &
          repeats=.FALSE., &
-         n_var=2, default_r_vals=(/0._dp, 0._dp/), unit_str='eV', &
+         n_var=2, default_r_vals=[0._dp, 0._dp], unit_str='eV', &
          type_of_var=real_t)
       CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
@@ -315,7 +325,62 @@ CONTAINS
                                        print_level=debug_print_level + 1, filename="__STD_OUT__")
       CALL keyword_create(keyword, __LOCATION__, name="ORDER", &
                           description="Maximum order of mulitpoles to be calculated.", &
-                          usage=" ORDER {integer}", default_i_val=2, type_of_var=integer_t)
+                          usage="ORDER {integer}", default_i_val=2, type_of_var=integer_t)
+      CALL section_add_keyword(subsection, keyword)
+      CALL keyword_release(keyword)
+      !
+      CALL section_add_subsection(print_section, subsection)
+      CALL section_release(subsection)
+      !
+      CALL cp_print_key_section_create(subsection, __LOCATION__, name="LOCALIZED_MOMENTS", &
+                                       description="Section controlling the calculation of "// &
+                                       "localized moments", &
+                                       print_level=debug_print_level + 1, filename="__STD_OUT__")
+      !
+      CALL keyword_create(keyword, __LOCATION__, &
+                          name="MAX_MOMENT", &
+                          description="Maximum moment to be calculated.", &
+                          usage="MAX_MOMENT {integer}", &
+                          repeats=.FALSE., &
+                          n_var=1, &
+                          type_of_var=integer_t, &
+                          default_i_val=1)
+      CALL section_add_keyword(subsection, keyword)
+      CALL keyword_release(keyword)
+      !
+      CALL keyword_create(keyword, __LOCATION__, &
+                          name="MAGNETIC", &
+                          description="Calculate also magnetic moments.", &
+                          usage="MAGNETIC .TRUE.", &
+                          repeats=.FALSE., &
+                          n_var=1, &
+                          default_l_val=.FALSE., &
+                          lone_keyword_l_val=.TRUE.)
+      CALL section_add_keyword(subsection, keyword)
+      CALL keyword_release(keyword)
+      !
+      CALL keyword_create(keyword, __LOCATION__, &
+                          name="VEL_REPRS", &
+                          description="Calculate expectation values of the el. multipole "// &
+                          "moments in their velocity representation during RTP. Implemented up "// &
+                          "to el. quadrupole moment.", &
+                          usage="VEL_REPRS .TRUE.", &
+                          repeats=.FALSE., &
+                          n_var=1, &
+                          default_l_val=.FALSE., &
+                          lone_keyword_l_val=.TRUE.)
+      CALL section_add_keyword(subsection, keyword)
+      CALL keyword_release(keyword)
+      !
+      CALL keyword_create(keyword, __LOCATION__, &
+                          name="COM_NL", &
+                          description="Include non local commutator for velocity "// &
+                          "representations. Necessary for origin independent results.", &
+                          usage="COM_NL .TRUE.", &
+                          repeats=.FALSE., &
+                          n_var=1, &
+                          default_l_val=.FALSE., &
+                          lone_keyword_l_val=.TRUE.)
       CALL section_add_keyword(subsection, keyword)
       CALL keyword_release(keyword)
       !
@@ -329,6 +394,7 @@ CONTAINS
       CALL create_wannier_states_section(subsection)
       CALL section_add_subsection(print_section, subsection)
       CALL section_release(subsection)
+      !
       CALL section_add_subsection(section, print_section)
       CALL section_release(print_section)
 
@@ -355,15 +421,22 @@ CONTAINS
                           description="The stride (X,Y,Z) used to write the cube file "// &
                           "(larger values result in smaller cube files). You can provide 3 numbers (for X,Y,Z) or"// &
                           " 1 number valid for all components.", &
-                          usage="STRIDE 2 2 2", n_var=-1, default_i_vals=(/2, 2, 2/), type_of_var=integer_t)
+                          usage="STRIDE 2 2 2", n_var=-1, default_i_vals=[2, 2, 2], type_of_var=integer_t)
+      CALL section_add_keyword(print_key, keyword)
+      CALL keyword_release(keyword)
+
+      CALL keyword_create(keyword, __LOCATION__, name="DENSITY", &
+                          description="Controls the printing of the Wannier function "// &
+                          "electronic densities", &
+                          default_l_val=.FALSE., lone_keyword_l_val=.TRUE.)
       CALL section_add_keyword(print_key, keyword)
       CALL keyword_release(keyword)
 
       CALL keyword_create(keyword, __LOCATION__, name="CUBES_LU_BOUNDS", &
-                          variants=(/"CUBES_LU"/), &
+                          variants=["CUBES_LU"], &
                           description="The lower and upper index of the states to be printed as cube", &
                           usage="CUBES_LU_BOUNDS integer integer", &
-                          n_var=2, default_i_vals=(/0, -2/), type_of_var=integer_t)
+                          n_var=2, default_i_vals=[0, -2], type_of_var=integer_t)
       CALL section_add_keyword(print_key, keyword)
       CALL keyword_release(keyword)
 
@@ -450,7 +523,7 @@ CONTAINS
       NULLIFY (print_key2, keyword)
       CALL cp_print_key_section_create(print_key, __LOCATION__, "MOLECULAR_STATES", &
                                        description="Controls printing of molecular states ", &
-                                       print_level=high_print_level, filename=" ", citations=(/Hunt2003/))
+                                       print_level=high_print_level, filename=" ", citations=[Hunt2003])
 
       CALL keyword_create( &
          keyword, __LOCATION__, name="CUBE_EVAL_RANGE", &
@@ -468,7 +541,7 @@ CONTAINS
                           "This is only meaningful in combination with WFN_MIX. "// &
                           "First integer specifies the molecule, second integer specifies the state.", &
                           usage="MARK_STATES integer integer", &
-                          n_var=2, default_i_vals=(/-1, -1/), type_of_var=integer_t, repeats=.TRUE.)
+                          n_var=2, default_i_vals=[-1, -1], type_of_var=integer_t, repeats=.TRUE.)
       CALL section_add_keyword(print_key, keyword)
       CALL keyword_release(keyword)
 
@@ -479,7 +552,7 @@ CONTAINS
                           description="The stride (X,Y,Z) used to write the cube file "// &
                           "(larger values result in smaller cube files). You can provide 3 numbers (for X,Y,Z) or"// &
                           " 1 number valid for all components.", &
-                          usage="STRIDE 2 2 2", n_var=-1, default_i_vals=(/2, 2, 2/), type_of_var=integer_t)
+                          usage="STRIDE 2 2 2", n_var=-1, default_i_vals=[2, 2, 2], type_of_var=integer_t)
       CALL section_add_keyword(print_key2, keyword)
       CALL keyword_release(keyword)
       CALL section_add_subsection(print_key, print_key2)
@@ -518,7 +591,7 @@ CONTAINS
                           "This is only meaningful in combination with WFN_MIX. "// &
                           "First integer specifies the molecule, second integer specifies the state.", &
                           usage="MARK_STATES integer integer", &
-                          n_var=2, default_i_vals=(/-1, -1/), type_of_var=integer_t, repeats=.TRUE.)
+                          n_var=2, default_i_vals=[-1, -1], type_of_var=integer_t, repeats=.TRUE.)
       CALL section_add_keyword(print_key, keyword)
       CALL keyword_release(keyword)
 
@@ -535,11 +608,11 @@ CONTAINS
                           description="The stride (X,Y,Z) used to write the cube file "// &
                           "(larger values result in smaller cube files). You can provide 3 numbers (for X,Y,Z) or"// &
                           " 1 number valid for all components.", &
-                          usage="STRIDE 2 2 2", n_var=-1, default_i_vals=(/2, 2, 2/), type_of_var=integer_t)
+                          usage="STRIDE 2 2 2", n_var=-1, default_i_vals=[2, 2, 2], type_of_var=integer_t)
       CALL section_add_keyword(print_key2, keyword)
       CALL keyword_release(keyword)
       CALL section_add_subsection(print_key, print_key2)
       CALL section_release(print_key2)
    END SUBROUTINE create_wannier_states_section
 
-END MODULE
+END MODULE input_cp2k_loc

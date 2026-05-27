@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2025 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2026 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -31,9 +31,9 @@ MODULE input_cp2k_qs
         do_pwgrid_ns_halfspace, do_pwgrid_spherical, do_s2_constraint, do_s2_restraint, &
         do_spin_density, gapw_1c_large, gapw_1c_medium, gapw_1c_orb, gapw_1c_small, &
         gapw_1c_very_large, gaussian, numerical, slater, wfi_aspc_nr, wfi_frozen_method_nr, &
-        wfi_linear_p_method_nr, wfi_linear_ps_method_nr, wfi_linear_wf_method_nr, &
-        wfi_ps_method_nr, wfi_use_guess_method_nr, wfi_use_prev_p_method_nr, &
-        wfi_use_prev_rho_r_method_nr, wfi_use_prev_wf_method_nr
+        wfi_gext_proj_nr, wfi_gext_proj_qtr_nr, wfi_linear_p_method_nr, wfi_linear_ps_method_nr, &
+        wfi_linear_wf_method_nr, wfi_ps_method_nr, wfi_use_guess_method_nr, &
+        wfi_use_prev_p_method_nr, wfi_use_prev_rho_r_method_nr, wfi_use_prev_wf_method_nr
    USE input_cp2k_distribution,         ONLY: create_distribution_section
    USE input_cp2k_opt,                  ONLY: create_optimize_dmfet,&
                                               create_optimize_embed,&
@@ -102,7 +102,7 @@ CONTAINS
 
       CALL keyword_create( &
          keyword, __LOCATION__, name="EPS_GVG_RSPACE", &
-         variants=(/"EPS_GVG"/), &
+         variants=["EPS_GVG"], &
          description="Sets precision of the realspace KS matrix element integration. Overrides SQRT(EPS_DEFAULT) value", &
          usage="EPS_GVG_RSPACE real", type_of_var=real_t)
       CALL section_add_keyword(section, keyword)
@@ -168,29 +168,33 @@ CONTAINS
       CALL keyword_release(keyword)
 
       CALL keyword_create(keyword, __LOCATION__, name="EPSFIT", &
-                          variants=(/"EPS_FIT"/), &
-                          description="GAPW: precision to give the extension of a hard gaussian ", &
+                          variants=["EPS_FIT"], &
+                          description="GAPW: tolerance controlling the split of Gaussian basis functions "// &
+                          "into hard atom-centered and soft grid-expanded parts. Smaller values include "// &
+                          "harder Gaussians in the soft density and can require a larger MGRID cutoff.", &
                           usage="EPSFIT real", default_r_val=1.0E-4_dp)
       CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
 
       CALL keyword_create(keyword, __LOCATION__, name="EPSISO", &
-                          variants=(/"EPS_ISO"/), &
+                          variants=["EPS_ISO"], &
                           description="GAPW: precision to determine an isolated projector", &
                           usage="EPSISO real", default_r_val=1.0E-12_dp)
       CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
 
       CALL keyword_create(keyword, __LOCATION__, name="EPSSVD", &
-                          variants=(/"EPS_SVD"/), &
-                          description="GAPW: tolerance used in the singular value decomposition of the projector matrix", &
+                          variants=["EPS_SVD"], &
+                          description="GAPW: tolerance used in the singular value decomposition of the "// &
+                          "projector matrix. Smaller values can improve numerical accuracy at increased cost.", &
                           usage="EPS_SVD real", default_r_val=1.0E-8_dp)
       CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
 
       CALL keyword_create(keyword, __LOCATION__, name="EPSRHO0", &
                           variants=s2a("EPSVRHO0", "EPS_VRHO0"), &
-                          description="GAPW : precision to determine the range of V(rho0-rho0soft)", &
+                          description="GAPW: tolerance used to determine the range of the "// &
+                          "V(rho0-rho0_soft) compensation contribution.", &
                           usage="EPSRHO0 real", default_r_val=1.0E-6_dp)
       CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
@@ -231,9 +235,32 @@ CONTAINS
                                         "Extension using Medium number of primitive Gaussians.", &
                                         "Extension using Large number of primitive Gaussians.", &
                                         "Extension using Very Large number of primitive Gaussians."), &
-                          enum_i_vals=(/gapw_1c_orb, gapw_1c_small, gapw_1c_medium, &
-                                        gapw_1c_large, gapw_1c_very_large/), &
+                          enum_i_vals=[gapw_1c_orb, gapw_1c_small, gapw_1c_medium, &
+                                       gapw_1c_large, gapw_1c_very_large], &
                           default_i_val=gapw_1c_orb)
+      CALL section_add_keyword(section, keyword)
+      CALL keyword_release(keyword)
+
+      CALL keyword_create( &
+         keyword, __LOCATION__, name="GAPW_ACCURATE_XCINT", &
+         description="Use the accurate GAPW/GAPW_XC XC integration scheme for one-center hard/soft "// &
+         "density differences. This opt-in path covers regular GAPW/GAPW_XC XC energy, potential, "// &
+         "forces, mGGA/tau terms, NLCC, Fine-XC grids, local XC energy-density transfer, analytical "// &
+         "stress, TDDFPT/response forces, ADMM-GAPW force paths, an ADMM-GAPW diagonal stress "// &
+         "debug path, nonlocal vdW smoke coverage, representative k-point, XAS_TDP, and RTBSE "// &
+         "smoke cases, and KG GAPW/GAPW_XC EMBED, EMBED_RI, ATOMIC, and NONE cases. Regular-grid "// &
+         "local energy and stress cube print keys keep their existing soft-grid semantics and are "// &
+         "not changed by this keyword. The default remains off while this coverage is being prepared "// &
+         "for a future default change.", &
+         usage="GAPW_ACCURATE_XCINT", &
+         default_l_val=.FALSE., lone_keyword_l_val=.TRUE.)
+      CALL section_add_keyword(section, keyword)
+      CALL keyword_release(keyword)
+
+      CALL keyword_create( &
+         keyword, __LOCATION__, name="ALPHA_WEIGHTS", &
+         description="Gaussian exponent reference (rc=1.2 Bohr) for accurate integration in GAPW.", &
+         usage="ALPHA_WEIGHTS 10.0", default_r_val=6.0_dp)
       CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
 
@@ -270,7 +297,7 @@ CONTAINS
       CALL keyword_create(keyword, __LOCATION__, name="KG_METHOD", &
                           description="Use a Kim-Gordon-like scheme.", &
                           usage="KG_METHOD", lone_keyword_l_val=.TRUE., &
-                          default_l_val=.FALSE., citations=(/Iannuzzi2006, Brelaz1979, Andermatt2016/))
+                          default_l_val=.FALSE., citations=[Iannuzzi2006, Brelaz1979, Andermatt2016])
       CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
 
@@ -317,7 +344,7 @@ CONTAINS
       CALL keyword_release(keyword)
 
       CALL keyword_create(keyword, __LOCATION__, name="LMAXN1", &
-                          variants=(/"LMAXRHO1"/), &
+                          variants=["LMAXRHO1"], &
                           description="GAPW : max L number for expansion of the atomic densities in spherical gaussians", &
                           usage="LMAXN1 integer", &
                           default_i_val=-1)
@@ -325,7 +352,7 @@ CONTAINS
       CALL keyword_release(keyword)
 
       CALL keyword_create(keyword, __LOCATION__, name="LMAXN0", &
-                          variants=(/"LMAXRHO0"/), &
+                          variants=["LMAXRHO0"], &
                           description="GAPW : max L number for the expansion compensation densities in spherical gaussians", &
                           usage="LMAXN0 integer", &
                           default_i_val=2)
@@ -345,7 +372,7 @@ CONTAINS
                           description="GAPW: algorithm to construct the atomic radial grids", &
                           usage="QUADRATURE GC_SIMPLE", &
                           enum_c_vals=s2a("GC_SIMPLE", "GC_TRANSFORMED", "GC_LOG"), &
-                          enum_i_vals=(/do_gapw_gcs, do_gapw_gct, do_gapw_log/), &
+                          enum_i_vals=[do_gapw_gcs, do_gapw_gct, do_gapw_log], &
                           enum_desc=s2a("Gauss-Chebyshev quadrature", &
                                         "Transformed Gauss-Chebyshev quadrature", &
                                         "Logarithmic transformed Gauss-Chebyshev quadrature"), &
@@ -358,7 +385,7 @@ CONTAINS
                           usage="PW_GRID NS-FULLSPACE", &
                           enum_c_vals=s2a("SPHERICAL", "NS-FULLSPACE", "NS-HALFSPACE"), &
                           enum_desc=s2a("- not tested", " tested", " - not tested"), &
-                          enum_i_vals=(/do_pwgrid_spherical, do_pwgrid_ns_fullspace, do_pwgrid_ns_halfspace/), &
+                          enum_i_vals=[do_pwgrid_spherical, do_pwgrid_ns_fullspace, do_pwgrid_ns_halfspace], &
                           default_i_val=do_pwgrid_ns_fullspace)
       CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
@@ -370,7 +397,7 @@ CONTAINS
                           "i.e. plane distributed for large grids, more general distribution for small grids.", &
                           usage="PW_GRID_LAYOUT 4 16", &
                           repeats=.FALSE., n_var=2, &
-                          default_i_vals=(/-1, -1/))
+                          default_i_vals=[-1, -1])
       CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
 
@@ -379,7 +406,7 @@ CONTAINS
                           usage="PW_GRID_BLOCKED FREE", &
                           enum_c_vals=s2a("FREE", "TRUE", "FALSE"), &
                           enum_desc=s2a("CP2K will select an appropriate value", "blocked", "not blocked"), &
-                          enum_i_vals=(/do_pw_grid_blocked_free, do_pw_grid_blocked_true, do_pw_grid_blocked_false/), &
+                          enum_i_vals=[do_pw_grid_blocked_free, do_pw_grid_blocked_true, do_pw_grid_blocked_false], &
                           default_i_val=do_pw_grid_blocked_free)
       CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
@@ -390,23 +417,25 @@ CONTAINS
          description="Extrapolation strategy for the wavefunction during e.g. MD. "// &
          "Not all options are available for all simulation methods. "// &
          "PS and ASPC are recommended, see also EXTRAPOLATION_ORDER.", &
-         citations=(/Kolafa2004, VandeVondele2005a, Kuhne2007/), &
+         citations=[Kolafa2004, VandeVondele2005a, Kuhne2007], &
          usage="EXTRAPOLATION PS", &
          enum_c_vals=s2a("USE_GUESS", "USE_PREV_P", "USE_PREV_RHO_R", "LINEAR_WF", &
-                         "LINEAR_P", "LINEAR_PS", "USE_PREV_WF", "PS", "FROZEN", "ASPC"), &
+                         "LINEAR_P", "LINEAR_PS", "USE_PREV_WF", "PS", "FROZEN", "ASPC", &
+                         "GEXT_PROJ", "GEXT_PROJ_QTR"), &
          enum_desc=s2a( &
          "Use the method specified with SCF_GUESS, i.e. no extrapolation", &
          "Use the previous density matrix", &
          "Use the previous density in real space", &
-         "Linear extrapolation of the wavefunction (not available for K-points)", &
+         "Linear extrapolation of the wavefunction (not available for k-points)", &
          "Linear extrapolation of the density matrix", &
-         "Linear extrapolation of the density matrix times the overlap matrix (not available for K-points)", &
-         "Use the previous wavefunction (not available for K-points)", &
-         "Higher order extrapolation of the density matrix times the overlap matrix (not available for K-points)", &
-         "Frozen ...", &
-         "Always stable predictor corrector, similar to PS, but going for MD stability instead of initial guess accuracy. "// &
-         "(not available for K-points)"), &
-         enum_i_vals=(/ &
+         "Linear extrapolation of the density matrix times the overlap matrix (not available for k-points)", &
+         "Use the previous wavefunction", &
+         "Higher order extrapolation of the density matrix times the overlap matrix", &
+         "Frozen ... (not available for k-points)", &
+         "Always stable predictor corrector, similar to PS, but going for MD stability instead of initial guess accuracy.", &
+         "GExt extrapolation for the density matrix times the overlap matrix.", &
+         "Quasi time reversible GExt extrapolation for the density matrix times the overlap matrix."), &
+         enum_i_vals=[ &
          wfi_use_guess_method_nr, &
          wfi_use_prev_p_method_nr, &
          wfi_use_prev_rho_r_method_nr, &
@@ -416,13 +445,16 @@ CONTAINS
          wfi_use_prev_wf_method_nr, &
          wfi_ps_method_nr, &
          wfi_frozen_method_nr, &
-         wfi_aspc_nr/), &
+         wfi_aspc_nr, &
+         wfi_gext_proj_nr, &
+         wfi_gext_proj_qtr_nr], &
          default_i_val=wfi_aspc_nr)
       CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
 
       CALL keyword_create(keyword, __LOCATION__, name="EXTRAPOLATION_ORDER", &
-                          description="Order for the PS or ASPC extrapolation (typically 2-4). "// &
+                          description="Order for the PS, ASPC extrapolation (typically 2-4) or "// &
+                          "order for the GEXT_PROJ, GEXT_PROJ_QTR extrapolation (typically 4-10). "// &
                           "Higher order might bring more accuracy, but comes, "// &
                           "for large systems, also at some cost. "// &
                           "In some cases, a high order extrapolation is not stable,"// &
@@ -448,13 +480,13 @@ CONTAINS
                                         "DFTB Density Functional based Tight-Binding", &
                                         "GFN-xTB Extended Tight-Binding", &
                                         "OFGPW Orbital-free GPW method"), &
-                          enum_i_vals=(/do_method_gapw, do_method_gapw_xc, do_method_gpw, do_method_lrigpw, do_method_rigpw, &
-                                        do_method_mndo, do_method_mndod, do_method_am1, do_method_pm3, &
-                                        do_method_pm6, do_method_pm6fm, do_method_pdg, do_method_rm1, &
-                                        do_method_pnnl, do_method_dftb, do_method_xtb, do_method_ofgpw/), &
-                          citations=(/Lippert1997, Lippert1999, Krack2000, VandeVondele2005a, &
-                                      VandeVondele2006, Dewar1977, Dewar1985, Rocha2006, Stewart1989, Thiel1992, &
-                                      Repasky2002, Stewart2007, VanVoorhis2015, Schenter2008/), &
+                          enum_i_vals=[do_method_gapw, do_method_gapw_xc, do_method_gpw, do_method_lrigpw, do_method_rigpw, &
+                                       do_method_mndo, do_method_mndod, do_method_am1, do_method_pm3, &
+                                       do_method_pm6, do_method_pm6fm, do_method_pdg, do_method_rm1, &
+                                       do_method_pnnl, do_method_dftb, do_method_xtb, do_method_ofgpw], &
+                          citations=[Lippert1997, Lippert1999, Krack2000, VandeVondele2005a, &
+                                     VandeVondele2006, Dewar1977, Dewar1985, Rocha2006, Stewart1989, Thiel1992, &
+                                     Repasky2002, Stewart2007, VanVoorhis2015, Schenter2008], &
                           default_i_val=do_method_gpw)
       CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
@@ -465,7 +497,7 @@ CONTAINS
                           enum_c_vals=s2a("ANALYTIC", "GRID"), &
                           enum_desc=s2a("Analytic integration of integrals", &
                                         "Numerical integration on real space grid. Lumped together with core charge"), &
-                          enum_i_vals=(/do_ppl_analytic, do_ppl_grid/), &
+                          enum_i_vals=[do_ppl_analytic, do_ppl_grid], &
                           default_i_val=do_ppl_analytic)
       CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
@@ -480,7 +512,9 @@ CONTAINS
 
       CALL keyword_create(keyword, __LOCATION__, name="EMBED_CUBE_FILE_NAME", &
                           description="Root of the file name where to read the embedding "// &
-                          "potential (guess) as a cube.", &
+                          "potential (guess) as a cube. Whitespace-separated cube values are accepted. If "// &
+                          "adjacent values are written without whitespace, each value must occupy a "// &
+                          "13-character E13.5 field, as in CP2K-generated cube files.", &
                           usage="EMBED_CUBE_FILE_NAME <FILENAME>", &
                           type_of_var=lchar_t)
       CALL section_add_keyword(section, keyword)
@@ -488,7 +522,9 @@ CONTAINS
 
       CALL keyword_create(keyword, __LOCATION__, name="EMBED_SPIN_CUBE_FILE_NAME", &
                           description="Root of the file name where to read the spin part "// &
-                          "of the embedding potential (guess) as a cube.", &
+                          "of the embedding potential (guess) as a cube. Whitespace-separated cube values are "// &
+                          "accepted. If adjacent values are written without whitespace, each value must occupy "// &
+                          "a 13-character E13.5 field, as in CP2K-generated cube files.", &
                           usage="EMBED_SPIN_CUBE_FILE_NAME <FILENAME>", &
                           type_of_var=lchar_t)
       CALL section_add_keyword(section, keyword)
@@ -603,7 +639,7 @@ CONTAINS
                           description="Specifies the type of density used for the fitting", &
                           usage="TYPE_OF_DENSITY (FULL|SPIN)", &
                           enum_c_vals=s2a("FULL", "SPIN"), &
-                          enum_i_vals=(/do_full_density, do_spin_density/), &
+                          enum_i_vals=[do_full_density, do_spin_density], &
                           enum_desc=s2a("Full density", "Spin density"), &
                           default_i_val=do_full_density)
       CALL section_add_keyword(section, keyword)
@@ -639,7 +675,7 @@ CONTAINS
                           description="Specifies the functional form of the term added", &
                           usage="FUNCTIONAL_FORM RESTRAINT", &
                           enum_c_vals=s2a("RESTRAINT", "CONSTRAINT"), &
-                          enum_i_vals=(/do_ddapc_restraint, do_ddapc_constraint/), &
+                          enum_i_vals=[do_ddapc_restraint, do_ddapc_constraint], &
                           enum_desc=s2a("Harmonic potential: s*(q-t)**2", "Constraint form: s*(q-t)"), &
                           default_i_val=do_ddapc_restraint)
       CALL section_add_keyword(section, keyword)
@@ -685,7 +721,7 @@ CONTAINS
                           description="Specifies the functional form of the term added", &
                           usage="FUNCTIONAL_FORM RESTRAINT", &
                           enum_c_vals=s2a("RESTRAINT", "CONSTRAINT"), &
-                          enum_i_vals=(/do_s2_restraint, do_s2_constraint/), &
+                          enum_i_vals=[do_s2_restraint, do_s2_constraint], &
                           enum_desc=s2a("Harmonic potential: s*(q-t)**2", "Constraint form: s*(q-t)"), &
                           default_i_val=do_s2_restraint)
       CALL section_add_keyword(section, keyword)
@@ -707,7 +743,7 @@ CONTAINS
       CPASSERT(.NOT. ASSOCIATED(section))
       CALL section_create(section, __LOCATION__, name="LRIGPW", &
                           description="This section specifies optional parameters for LRIGPW.", &
-                          n_keywords=3, n_subsections=0, repeats=.FALSE., citations=(/Golze2017b/))
+                          n_keywords=3, n_subsections=0, repeats=.FALSE., citations=[Golze2017b])
 
       NULLIFY (keyword)
 
@@ -730,8 +766,8 @@ CONTAINS
                                         "calculate the inverse or pseudoinverse based on the "// &
                                         "condition number of the overlap matrix for each pair. "// &
                                         "Calculating the pseudoinverse is much more expensive."), &
-                          enum_i_vals=(/do_lri_inv, do_lri_pseudoinv_svd, &
-                                        do_lri_pseudoinv_diag, do_lri_inv_auto/), &
+                          enum_i_vals=[do_lri_inv, do_lri_pseudoinv_svd, &
+                                       do_lri_pseudoinv_diag, do_lri_inv_auto], &
                           default_i_val=do_lri_inv)
       CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
@@ -802,7 +838,7 @@ CONTAINS
                           "pair separation. Smooth interpolation between inner and outer "// &
                           "radius is used.", &
                           usage="DISTANT_PAIR_RADII r_inner {real} r_outer {real} ", &
-                          n_var=2, default_r_vals=(/8._dp, 12._dp/), unit_str='bohr', &
+                          n_var=2, default_r_vals=[8._dp, 12._dp], unit_str='bohr', &
                           type_of_var=real_t)
       CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
@@ -812,7 +848,7 @@ CONTAINS
                           "scheme instead of Obara-Saika", &
                           usage="SHG_LRI_INTEGRALS TRUE", &
                           default_l_val=.TRUE., lone_keyword_l_val=.TRUE., &
-                          citations=(/Golze2017a/))
+                          citations=[Golze2017a])
       CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
 

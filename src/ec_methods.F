@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2025 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2026 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -84,7 +84,8 @@ CONTAINS
 !> \date    11.2019
 !> \author  fbelle
 ! **************************************************************************************************
-   SUBROUTINE create_kernel(qs_env, vxc, vxc_tau, rho, rho1_r, rho1_g, tau1_r, xc_section, compute_virial, virial_xc)
+   SUBROUTINE create_kernel(qs_env, vxc, vxc_tau, rho, rho1_r, rho1_g, tau1_r, xc_section, &
+                            compute_virial, virial_xc)
 
       TYPE(qs_environment_type), POINTER                 :: qs_env
       TYPE(pw_r3d_rs_type), DIMENSION(:), POINTER        :: vxc, vxc_tau
@@ -106,6 +107,7 @@ CONTAINS
       TYPE(pw_env_type), POINTER                         :: pw_env
       TYPE(pw_pool_type), POINTER                        :: auxbas_pw_pool
       TYPE(pw_r3d_rs_type), DIMENSION(:), POINTER        :: rho_r, tau_r
+      TYPE(pw_r3d_rs_type), POINTER                      :: weights
       TYPE(xc_derivative_set_type)                       :: deriv_set
       TYPE(xc_rho_set_type)                              :: rho_set
 
@@ -113,7 +115,7 @@ CONTAINS
 
       NULLIFY (auxbas_pw_pool, pw_env, rho_r, vxc, vxc_tau)
 
-      CALL get_qs_env(qs_env, pw_env=pw_env)
+      CALL get_qs_env(qs_env, pw_env=pw_env, xcint_weights=weights)
       CALL pw_env_get(pw_env=pw_env, auxbas_pw_pool=auxbas_pw_pool)
       ! Get density
       CALL qs_rho_get(rho, rho_r=rho_r, tau_r=tau_r)
@@ -123,6 +125,7 @@ CONTAINS
                              rho_r=rho_r, &            ! place where derivative is evaluated
                              tau_r=tau_r, &
                              pw_pool=auxbas_pw_pool, & ! pool for grids
+                             weights=weights, &
                              xc_section=xc_section)
 
       ! folding of second deriv with density in rho1_set
@@ -134,6 +137,7 @@ CONTAINS
                              rho1_g=rho1_g, &          ! density with which to fold
                              tau1_r=tau1_r, &
                              pw_pool=auxbas_pw_pool, & ! pool for grids
+                             weights=weights, &
                              xc_section=xc_section, &
                              gapw=.FALSE., &
                              compute_virial=compute_virial, &
@@ -145,7 +149,7 @@ CONTAINS
 
       CALL timestop(handle)
 
-   END SUBROUTINE
+   END SUBROUTINE create_kernel
 
 ! **************************************************************************************************
 !> \brief Allocate and initiate molecular orbitals environment
