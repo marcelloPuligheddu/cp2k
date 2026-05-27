@@ -333,6 +333,7 @@ list(
   libgrpp_integrals.F
   libint_2c_3c.F
   libint_wrapper.F
+  libgint_wrapper.F
   library_tests.F
   linesearch.F
   localization_tb.F
