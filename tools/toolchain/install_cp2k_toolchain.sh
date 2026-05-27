@@ -881,6 +881,7 @@ Otherwise use option no."
       ;;
     --with-libGint*)
       with_libGint=$(read_with "${1}")
+      ;;
     --with-fmt*)
       with_fmt=$(read_with "${1}")
       ;;
