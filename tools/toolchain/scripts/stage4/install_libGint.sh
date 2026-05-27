@@ -38,11 +38,11 @@ case "$with_libGint" in
     #      tar -xzf spglib-${spglib_ver}.tar.gz
     #     OR
 
-#    rm -rf libGint-${libGint_ver}
+    rm -rf libGint-${libGint_ver}
     #      cp -r /work4/scd/scarf1152/libGint libGint-${libGint_ver}
     #     OR
     # TODO change to main / cuda / hip from config flags
-#    git clone --depth=1 --single-branch --branch main  https://github.com/marcelloPuligheddu/libGint.git libGint-${libGint_ver}
+    git clone --depth=1 --single-branch --branch main  https://github.com/marcelloPuligheddu/libGint.git libGint-${libGint_ver}
     cd libGint-${libGint_ver}
 
     make -j $(get_nprocs) > make.log 2>&1 || tail -n ${LOG_LINES} make.log
@@ -103,7 +103,7 @@ export CP_CFLAGS="\${CP_CFLAGS} ${LIBGINT_CFLAGS}"
 export CP_LDFLAGS="\${CP_LDFLAGS} ${LIBGINT_LDFLAGS}"
 export CP_LIBS=" ${LIBGINT_LIBS} \${CP_LIBS}"
 EOF
-  cat "${BUILDDIR}/setup_libGint" >> $SETUPFILE
+  filter_setup "${BUILDDIR}/setup_libGint" "${SETUPFILE}"
 fi
 
 load "${BUILDDIR}/setup_libGint"
