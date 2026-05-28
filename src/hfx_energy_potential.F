@@ -503,7 +503,9 @@ CONTAINS
          if ( general_parameter%hfx_library == hfx_library_is_libint .and. &
               cp2k_was_compiled_with_cuda_offload .and.                    &
               cp2k_was_compiled_with_libgint                       ) then
-            if ( iw > 0 ) then
+              iw = cp_print_key_unit_nr(logger, hfx_section, "HF_INFO", &
+                                   extension=".scfLog")
+              if ( iw > 0 ) then
                WRITE(iw,*) " HFX | You are computing the HFX on CPU on cp2k compiled with cuda support"
                WRITE(iw,*) " HFX | Consider switching to HFX on GPU using the command"
                WRITE(iw,*) " HFX | 'HFX_LIBRARY libGint' in the HF section of the input file"
