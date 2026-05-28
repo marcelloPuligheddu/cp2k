@@ -431,3 +431,4 @@ QS/regtest-cneo
 QS/regtest-tddfpt-bse                                       libint libxc
 QS/regtest-tdwf
 QS/regtest-hybrid-ace-gs                                    libint
+QS/regtest-libgint                                          libGint offload_cuda
