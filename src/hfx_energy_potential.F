@@ -503,6 +503,7 @@ CONTAINS
          if ( general_parameter%hfx_library == hfx_library_is_libint .and. &
               cp2k_was_compiled_with_cuda_offload .and.                    &
               cp2k_was_compiled_with_libgint                       ) then
+              logger => cp_get_default_logger()
               iw = cp_print_key_unit_nr(logger, hfx_section, "HF_INFO", &
                                    extension=".scfLog")
               if ( iw > 0 ) then
