@@ -17,7 +17,7 @@ cp2k_include_dirs(LIBGINT "libgint.mod")
 
 if(CP2K_LIBGINT_INCLUDE_DIRS)
   find_package_handle_standard_args(
-    lLibGint DEFAULT_MSG CP2K_LIBGINT_LINK_LIBRARIES
+    LibGint DEFAULT_MSG CP2K_LIBGINT_LINK_LIBRARIES
     CP2K_LIBGINT_INCLUDE_DIRS)
 else()
   find_package_handle_standard_args(LibGint DEFAULT_MSG
