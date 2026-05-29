@@ -42,7 +42,7 @@ case "$with_libGint" in
     #      cp -r /work4/scd/scarf1152/libGint libGint-${libGint_ver}
     #     OR
     # TODO change to main / cuda / hip from config flags
-    git clone --depth=1 --single-branch --branch main  https://github.com/marcelloPuligheddu/libGint.git libGint-${libGint_ver}
+    git clone --depth=1 --single-branch --branch release_v1  https://github.com/marcelloPuligheddu/libGint.git libGint-${libGint_ver}
     cd libGint-${libGint_ver}
 
     make -j $(get_nprocs) > make.log 2>&1 || tail -n ${LOG_LINES} make.log
