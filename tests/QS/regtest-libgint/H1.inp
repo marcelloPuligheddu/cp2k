@@ -25,7 +25,7 @@
       &OT ON
         MINIMIZER DIIS
       &END OT
-      EPS_SCF      1.0E-9
+      EPS_SCF      1.0E-12
       &PRINT
         &RESTART OFF
         &END RESTART
@@ -41,7 +41,7 @@
         &END INTERACTION_POTENTIAL
         &MEMORY
           EPS_STORAGE_SCALING 0.1
-          MAX_MEMORY 7000
+          MAX_MEMORY 1000
         &END MEMORY
         &SCREENING
           EPS_SCHWARZ 1.0E-12
