@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2026 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -38,7 +38,7 @@ MODULE libGint_wrapper
    IMPLICIT NONE
    PRIVATE
    INTEGER, ALLOCATABLE, DIMENSION(:) :: first_set_of_atom
-   TYPE(bra_t), target :: bra, ket
+   TYPE(bra_t), TARGET :: bra, ket
    LOGICAL, SAVE :: first_call = .TRUE.
    TYPE(c_ptr), SAVE :: libGint_handle
    !$OMP THREADPRIVATE( first_set_of_atom, first_call )
@@ -64,31 +64,31 @@ MODULE libGint_wrapper
 CONTAINS
 ! **************************************************************************************************
 !> \brief Sets libGint internal enviroment, must be called at least once before libGint can be used
-!> \param actual_x_data[in]    pointer to hfx_data
+!> \param[in] actual_x_data    pointer to hfx_data
 ! **************************************************************************************************
    SUBROUTINE cp_libGint_init(actual_x_data)
-      implicit none
-      TYPE(hfx_type), POINTER :: actual_x_data
+      IMPLICIT NONE
+      TYPE(hfx_type), POINTER, INTENT(in) :: actual_x_data
 #if(__LIBGINT)
 !      IF (first_call) THEN
-         ! Init the offload library, creates an handle unique to this omp thread
-         CALL libgint_init(libGint_handle)
-         ! Comunicate the chosen potential and its parameters to libGint
-         libGint_select_potential:SELECT CASE(actual_x_data%potential_parameter%potential_type)
-         ! coulomb is the default assumed by libGint, so no more info is needed
-         CASE (do_potential_coulomb)
-         EXIT libGint_select_potential
-         ! truncated coulomb needs the C0 coefficients. We do not read or compute them,
-         ! they must be already saved in C0 from the t[runcated]_c[oulomb]_g0 module
-         CASE (do_potential_truncated)
-         CALL libgint_set_Potential_Truncated(libGint_handle, &
-                                              actual_x_data%potential_parameter%cutoff_radius, &
-                                              C0(:, :) )
-         ! Fail by default
-         CASE default
-         CPASSERT(.FALSE.) ! not (yet) implemented
-         END SELECT libGint_select_potential
-         first_call = .FALSE.
+      ! Init the offload library, creates an handle unique to this omp thread
+      CALL libgint_init(libGint_handle)
+      ! Comunicate the chosen potential and its parameters to libGint
+      libGint_select_potential:SELECT CASE(actual_x_data%potential_parameter%potential_type)
+      ! coulomb is the default assumed by libGint, so no more info is needed
+      CASE (do_potential_coulomb)
+      EXIT libGint_select_potential
+      ! truncated coulomb needs the C0 coefficients. We do not read or compute them,
+      ! they must be already saved in C0 from the t[runcated]_c[oulomb]_g0 module
+      CASE (do_potential_truncated)
+      CALL libgint_set_Potential_Truncated(libGint_handle, &
+                                           actual_x_data%potential_parameter%cutoff_radius, &
+                                           C0(:, :))
+      ! Fail by default
+      CASE default
+      CPASSERT(.FALSE.) ! not (yet) implemented
+      END SELECT libGint_select_potential
+      first_call = .FALSE.
 !      END IF
 #else
       MARK_USED(actual_x_data)
@@ -107,7 +107,7 @@ CONTAINS
 !> \param[in]  fac              Fraction of exact exchange
 !> \param[in]  memory_parameter Pointer to memory configuration
 !> \param[in]  do_periodic      Logical flag: whether to consider pbc
-!> \param[in]  cell             primitive simulation cell 
+!> \param[in]  cell             primitive simulation cell
 !> \param[in]  actual_x_data    HF exchange data
 !> \param[in]  nneighbors       Lattice points
 !> \param[in]  max_pgf          Maximum number of primitive Gaussians per shel
@@ -141,7 +141,7 @@ CONTAINS
       REAL(dp) :: ra(3)
       REAL(dp), DIMENSION(:, :), POINTER :: zeta
       REAL(dp), DIMENSION(:, :, :), POINTER :: gcc
-      TYPE(bra_t), pointer                               :: bra_p, ket_p
+      TYPE(bra_t), POINTER                               :: bra_p, ket_p
 
       ! Set the multiplicative factor fac (the fraction of exact exchange times the spin factor) for libGint
       CALL libGint_set_hf_fac(libGint_handle, fac)
@@ -165,7 +165,7 @@ CONTAINS
 
       ! Comunicate atomset and atom info to the engine
       jset = 1
-      if ( allocated(first_set_of_atom) ) deallocate(first_set_of_atom)
+      IF (ALLOCATED(first_set_of_atom)) DEALLOCATE (first_set_of_atom)
       ALLOCATE (first_set_of_atom(natom))
       DO iatom = 1, natom
          ikind = kind_of(iatom)
@@ -217,7 +217,7 @@ CONTAINS
 !> \param[in]  full_density_alpha       full density matrix array
 ! **************************************************************************************************
    SUBROUTINE libGint_set_density_A(full_density_alpha)
-      implicit none
+      IMPLICIT NONE
       REAL(dp), DIMENSION(:, :), POINTER :: full_density_alpha
 #if(__LIBGINT)
       CALL libgint_set_P(libGint_handle, full_density_alpha(:, 1))
@@ -234,7 +234,7 @@ CONTAINS
 !> \param[in]  full_density_beta        full density matrix array on the beta  channel
 ! **************************************************************************************************
    SUBROUTINE libGint_set_density_AB(full_density_alpha, full_density_beta)
-      implicit none
+      IMPLICIT NONE
       REAL(dp), DIMENSION(:, :), POINTER :: full_density_alpha, full_density_beta
 #if(__LIBGINT)
       CALL libgint_set_P_polarized(libGint_handle, full_density_alpha(:, 1), full_density_beta(:, 1))
@@ -253,7 +253,7 @@ CONTAINS
 !> \note assumes full_ks_alpha_from_gpu is already allocated with enough memory
 ! **************************************************************************************************
    SUBROUTINE libGint_get_fock_matrix_A(full_ks_alpha_from_gpu)
-      implicit none
+      IMPLICIT NONE
       REAL(dp), DIMENSION(:, :), POINTER :: full_ks_alpha_from_gpu
 #if(__LIBGINT)
       CALL libGint_get_K(libGint_handle, full_ks_alpha_from_gpu(:, 1))
@@ -271,8 +271,8 @@ CONTAINS
 !> \param[out]  full_ks_beta_from_gpu      location, already allocated, for the Fock matrix beta
 !> \note assumes full_ks_alpha_from_gpu and full_ks_beta_from_gpu are already allocated
 ! **************************************************************************************************
-SUBROUTINE libGint_get_fock_matrix_AB(full_ks_alpha_from_gpu, full_ks_beta_from_gpu)
-      implicit none
+   SUBROUTINE libGint_get_fock_matrix_AB(full_ks_alpha_from_gpu, full_ks_beta_from_gpu)
+      IMPLICIT NONE
       REAL(dp), DIMENSION(:, :), POINTER :: full_ks_alpha_from_gpu, full_ks_beta_from_gpu
 #if(__LIBGINT)
       CALL libgint_get_K_polarized(libGint_handle, full_ks_alpha_from_gpu(:, 1), full_ks_beta_from_gpu(:, 1))
@@ -285,32 +285,32 @@ SUBROUTINE libGint_get_fock_matrix_AB(full_ks_alpha_from_gpu, full_ks_beta_from_
 
 ! **************************************************************************************************
 !> \brief Assign two-electron integrals of a quartet/shell to libGint
-!> 
+!>
 !> First we build a list of ab primitives and cd primitives using build_pair_list_pbc_pgf
-!> These lists will contain (before screening) n_cell * npgf * npgf. 
+!> These lists will contain (before screening) n_cell * npgf * npgf.
 !> We loop over both and send ab(g) | cd(h) to libgint, which will loop internally over n
 !>
-!> \param[in]  iatom     index of atom I / A
-!> \param[in]  jatom     index of atom J / B
-!> \param[in]  katom     index of atom K / C
-!> \param[in]  latom     index of atom L / D
-!> \param[in]  iset      index of the set for atom iatom we are adding
-!> \param[in]  jset      index of the set for atom jatom we are adding
-!> \param[in]  kset      index of the set for atom katom we are adding
-!> \param[in]  lset      index of the set for atom latom we are adding
-!> \param[in]  ra        position of atom iatom
-!> \param[in]  rb        position of atom jatom
-!> \param[in]  rc        position of atom katom
-!> \param[in]  rd        position of atom latom
-!> \param[in]  npgfa     number of gaussians in set iset of atom iatom
-!> \param[in]  npgfb     number of gaussians in set jset of atom jatom
-!> \param[in]  npgfc     number of gaussians in set kset of atom katom
-!> \param[in]  npgfd     number of gaussians in set lset of atom latom
+!> \param[in]  iatom                index of atom I / A
+!> \param[in]  jatom                index of atom J / B
+!> \param[in]  katom                index of atom K / C
+!> \param[in]  latom                index of atom L / D
+!> \param[in]  iset                 index of the set for atom iatom we are adding
+!> \param[in]  jset                 index of the set for atom jatom we are adding
+!> \param[in]  kset                 index of the set for atom katom we are adding
+!> \param[in]  lset                 index of the set for atom latom we are adding
+!> \param[in]  ra                   position of atom iatom
+!> \param[in]  rb                   position of atom jatom
+!> \param[in]  rc                   position of atom katom
+!> \param[in]  rd                   position of atom latom
+!> \param[in]  npgfa                number of gaussians in set iset of atom iatom
+!> \param[in]  npgfb                number of gaussians in set jset of atom jatom
+!> \param[in]  npgfc                number of gaussians in set kset of atom katom
+!> \param[in]  npgfd                number of gaussians in set lset of atom latom
 !> \param[in]  potential_parameter  information about the potential
 !> \param[in]  screen1              screening information for AB pair
 !> \param[in]  screen2              screening information for CD pair
 !> \param[in]  log10_pmax           density screening factor
-!> \param[in]  log10_eps_schwartz   screening tolerance
+!> \param[in]  log10_eps_schwarz    screening tolerance
 !> \param[in]  pgf1                 screening information for each AB pair primitive
 !> \param[in]  pgf2                 screening information for each CD pair primitive
 !> \param[in]  neighbor_cells       array with lattice vectors
@@ -318,13 +318,14 @@ SUBROUTINE libGint_get_fock_matrix_AB(full_ks_alpha_from_gpu, full_ks_beta_from_
 !> \param[in]  do_periodic          flag for pbc
 !> \param[out] screened             whether the whole quartet was screened out
 ! **************************************************************************************************
+
    SUBROUTINE libGint_coulomb4(iatom, jatom, katom, latom, iset, jset, kset, lset, &
                                ra, rb, rc, rd, npgfa, npgfb, npgfc, npgfd, &
                                potential_parameter, &
                                screen1, screen2, log10_pmax, log10_eps_schwarz, &
                                pgf1, pgf2, &
                                neighbor_cells, cell, do_periodic, screened)
-      implicit none
+      IMPLICIT NONE
       INTEGER, INTENT(in) :: iatom, jatom, katom, latom, iset, jset, kset, lset
       REAL(dp), INTENT(IN)                               :: ra(3), rb(3), rc(3), rd(3)
       INTEGER, INTENT(IN)                                :: npgfa, npgfb, npgfc, npgfd
@@ -339,7 +340,7 @@ SUBROUTINE libGint_get_fock_matrix_AB(full_ks_alpha_from_gpu, full_ks_beta_from_
       LOGICAL, INTENT(out) :: screened
 
 #if(__LIBGINT)
-      TYPE(bra_t), pointer                               :: bra_p, ket_p
+      TYPE(bra_t), POINTER                               :: bra_p, ket_p
       LOGICAL :: cell_was_screened
       INTEGER  :: idx_n1, idx_n2, n1, n2, idx_ij, idx_kl, o_ij, n_ij, o_kl, n_kl !, n3
       INTEGER  :: ipgf, jpgf, kpgf, lpgf, iatom_set, jatom_set, katom_set, latom_set
@@ -451,10 +452,10 @@ SUBROUTINE libGint_get_fock_matrix_AB(full_ks_alpha_from_gpu, full_ks_beta_from_
    END SUBROUTINE libGint_coulomb4
 
 ! **************************************************************************************************
-!> \brief The previous coulomb_4 function assigned an integral between primitive gaussian. 
+!> \brief The previous coulomb_4 function assigned an integral between primitive gaussian.
 !>        Now we assign the nsgfa(iset)*b*c*d gcc integrals form this set,
 !>        along with the Pac Pad Pbc Pbd density to the Kbd Kbc Kad Kac Fock matrix
-!> 
+!>
 !> \param[in] symm_fac          simmetry factor from iatom=jatom and the like
 !> \param[in] iatom             index of atom A
 !> \param[in] jatom             index of atom B
@@ -472,13 +473,13 @@ SUBROUTINE libGint_get_fock_matrix_AB(full_ks_alpha_from_gpu, full_ks_beta_from_
 !> \param[in] offset_ad_set     matrix of sub_offset for sets in atomic_offset_ad
 !> \param[in] offset_bc_set     matrix of sub_offset for sets in atomic_offset_bc
 !> \param[in] offset_bd_set     matrix of sub_offset for sets in atomic_offset_bd
-!> \param[in] nsgfa             total number of (spherical, contracted) integrals for iset. 
+!> \param[in] nsgfa             total number of (spherical, contracted) integrals for iset.
 !>                              Used as leading dimension of the AC, AD sublock, depending on transposition
-!> \param[in] nsgfb             total number of (spherical, contracted) integrals for jset. 
+!> \param[in] nsgfb             total number of (spherical, contracted) integrals for jset.
 !>                              Used as leading dimension of the BC, BD sublock, depending on transposition
-!> \param[in] nsgfc             total number of (spherical, contracted) integrals for kset. 
+!> \param[in] nsgfc             total number of (spherical, contracted) integrals for kset.
 !>                              Used as leading dimension of the AC, BC sublock, depending on transposition
-!> \param[in] nsgfd             total number of (spherical, contracted) integrals for lset. 
+!> \param[in] nsgfd             total number of (spherical, contracted) integrals for lset.
 !>                              Used as leading dimension of the AD, BD sublock, depending on transposition
 !> \param[in] la_min            minumum angular moment in set iset of atom A
 !> \param[in] la_max            maximum angular moment in set iset of atom A
@@ -488,9 +489,9 @@ SUBROUTINE libGint_get_fock_matrix_AB(full_ks_alpha_from_gpu, full_ks_beta_from_
 !> \param[in] lc_max            maximum angular moment in set iset of atom C
 !> \param[in] ld_min            minumum angular moment in set iset of atom D
 !> \param[in] ld_max            maximum angular moment in set iset of atom D
-!> \param[in] nsgfl_a           matrix with the number of linear combinations of primitive gaussians 
+!> \param[in] nsgfl_a           matrix with the number of linear combinations of primitive gaussians
 !>                              for each angular moment for each set in atom A. We only read iset
-!> \param[in] nsgfl_b           matrix with the number of linear combinations of primitive gaussians 
+!> \param[in] nsgfl_b           matrix with the number of linear combinations of primitive gaussians
 !>                              for each angular moment for each set in atom B. We only read jset
 !> \param[in] nsgfl_c           matrix with the number of linear combinations of primitive gaussians
 !>                              for each angular moment for each set in atom C. We only read kset
@@ -503,21 +504,21 @@ SUBROUTINE libGint_get_fock_matrix_AB(full_ks_alpha_from_gpu, full_ks_beta_from_
 !>  - The routine assumes Fortran column major order and contiguous storage for the per set
 !>    density subblocks as described in the code comments.
 !>  - The code computes transposition flags to only use the lower part of P and K
-!> 
-!> 
+!>
+!>
 ! **************************************************************************************************
 
    SUBROUTINE libGint_update_fock_matrix( &
-         symm_fac, &
-         iatom, jatom, katom, latom, &
-         iset, jset, kset, lset, &
-         atomic_offset_ac, atomic_offset_ad, atomic_offset_bc, atomic_offset_bd, &
-         offset_ac_set, offset_ad_set, offset_bc_set, offset_bd_set, &
-         nsgfa, nsgfb, nsgfc, nsgfd, &
-         la_min, la_max, lb_min, lb_max, &
-         lc_min, lc_max, ld_min, ld_max, &
-         nsgfl_a, nsgfl_b, nsgfl_c, nsgfl_d)
-      implicit none
+      symm_fac, &
+      iatom, jatom, katom, latom, &
+      iset, jset, kset, lset, &
+      atomic_offset_ac, atomic_offset_ad, atomic_offset_bc, atomic_offset_bd, &
+      offset_ac_set, offset_ad_set, offset_bc_set, offset_bd_set, &
+      nsgfa, nsgfb, nsgfc, nsgfd, &
+      la_min, la_max, lb_min, lb_max, &
+      lc_min, lc_max, ld_min, ld_max, &
+      nsgfl_a, nsgfl_b, nsgfl_c, nsgfl_d)
+      IMPLICIT NONE
       REAL(dp) :: symm_fac
       INTEGER :: iatom, jatom, katom, latom
       INTEGER :: iset, jset, kset, lset

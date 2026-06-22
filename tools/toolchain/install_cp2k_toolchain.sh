@@ -1158,7 +1158,7 @@ package will not be used separately."
 fi
 
 #libGint installation requires cuda or hip enabled
-if [ "${with_libGint}" != "__DONTUSE__" ] && [ ${enable_cuda} != "__TRUE__" ] && [ ${enable_hip} != "__TRUE__" ]; then
+if [ "${with_libGint}" != "__DONTUSE__" ] && [ "${enable_cuda}" != "__TRUE__" ] && [ "${enable_hip}" != "__TRUE__" ]; then
   report_error "libGint requires the use of cuda or hip. Add --enable-cuda or --enable-hip"
   exit 1
 fi

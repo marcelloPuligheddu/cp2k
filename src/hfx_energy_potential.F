@@ -100,7 +100,7 @@ MODULE hfx_energy_potential
    use, intrinsic :: iso_c_binding, only: c_ptr
 
 !  libGint related modules
-   use cp2k_info, only : cp2k_flags
+   use cp2k_info, only: cp2k_flags
    use offload_api, only: offload_get_chosen_device, offload_set_chosen_device, offload_activate_chosen_device
    use libGint_wrapper, only: cp_libGint_init, libGint_update_env, libGint_set_density, libGint_coulomb4, &
                               libGint_update_fock_matrix, libGint_get_fock_matrix
@@ -496,21 +496,21 @@ CONTAINS
 
 ! Set the integral engine
 !$OMP MASTER
-      IF (para_env%is_source() .and. my_geo_change ) THEN
-         cp2k_was_compiled_with_cuda_offload = ( index( cp2k_flags(), "offload_cuda") .ne. 0 )
-         cp2k_was_compiled_with_libint       = ( index( cp2k_flags(), "libint") .ne. 0 )
-         cp2k_was_compiled_with_libgint      = ( index( cp2k_flags(), "libGint") .ne. 0 )
-         if ( general_parameter%hfx_library == hfx_library_is_libint .and. &
-              cp2k_was_compiled_with_cuda_offload .and.                    &
-              cp2k_was_compiled_with_libgint                       ) then
-              logger => cp_get_default_logger()
-              iw = cp_print_key_unit_nr(logger, hfx_section, "HF_INFO", &
-                                   extension=".scfLog")
-              if ( iw > 0 ) then
-               WRITE(iw,*) " HFX | You are computing the HFX on CPU on cp2k compiled with cuda support"
-               WRITE(iw,*) " HFX | Consider switching to HFX on GPU using the command"
-               WRITE(iw,*) " HFX | 'HFX_LIBRARY libGint' in the HF section of the input file"
-               WRITE(iw,*) " HFX | and set 'HFX_MEMORY' appropriately"
+      IF (para_env%is_source() .and. my_geo_change) THEN
+         cp2k_was_compiled_with_cuda_offload = (index(cp2k_flags(), "offload_cuda") /= 0)
+         cp2k_was_compiled_with_libint = (index(cp2k_flags(), "libint") /= 0)
+         cp2k_was_compiled_with_libgint = (index(cp2k_flags(), "libGint") /= 0)
+         if (general_parameter%hfx_library == hfx_library_is_libint .and. &
+             cp2k_was_compiled_with_cuda_offload .and. &
+             cp2k_was_compiled_with_libgint) then
+            logger => cp_get_default_logger()
+            iw = cp_print_key_unit_nr(logger, hfx_section, "HF_INFO", &
+                                      extension=".scfLog")
+            if (iw > 0) then
+               WRITE (iw, *) " HFX | You are computing the HFX on CPU on cp2k compiled with cuda support"
+               WRITE (iw, *) " HFX | Consider switching to HFX on GPU using the command"
+               WRITE (iw, *) " HFX | 'HFX_LIBRARY libGint' in the HF section of the input file"
+               WRITE (iw, *) " HFX | and set 'HFX_MEMORY' appropriately"
             end if
          end if
       end if
@@ -1021,7 +1021,7 @@ CONTAINS
       !! iatom and katom respectively. Therefore, we use flags like first_j_loop etc.
 
       !! LibGint follows the same patter, distributing integrals over mpi and openmp with a shared-over-mpi
-      !! density and fock matrix. The main differences are that the fock matrix is not in a valid state 
+      !! density and fock matrix. The main differences are that the fock matrix is not in a valid state
       !! until after the libGint_get_fock_matrix has returned -in approximately a thousand lines-,
       !! and the integrals are not saved in memory, but recomputed each cycle
 

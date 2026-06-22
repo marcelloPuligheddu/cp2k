@@ -74,50 +74,50 @@ CONTAINS
 !>
 ! **************************************************************************************************
    SUBROUTINE allocate_Bra(bra, max_npgf, max_ncell)
-      TYPE(bra_t), pointer                               :: bra
+      TYPE(bra_t), POINTER                               :: bra
       INTEGER                                            :: max_npgf, max_ncell
-      if ( allocated(bra%pgf_idx)  ) deallocate(bra%pgf_idx)  ! TODO add if n_prm changed
-      if ( allocated(bra%pgf_scr)  ) deallocate(bra%pgf_scr)  ! TODO add if n_prm changed
-      if ( allocated(bra%cell_idx) ) deallocate(bra%cell_idx) ! TODO add if n_prm changed
-      ALLOCATE (bra%pgf_idx( 3, max_npgf*max_npgf*max_ncell))
-      ALLOCATE (bra%pgf_scr( 5, max_npgf*max_npgf*max_ncell))
+
+      IF (ALLOCATED(bra%pgf_idx)) DEALLOCATE (bra%pgf_idx)  ! TODO add if n_prm changed
+      IF (ALLOCATED(bra%pgf_scr)) DEALLOCATE (bra%pgf_scr)  ! TODO add if n_prm changed
+      IF (ALLOCATED(bra%cell_idx)) DEALLOCATE (bra%cell_idx) ! TODO add if n_prm changed
+      ALLOCATE (bra%pgf_idx(3, max_npgf*max_npgf*max_ncell))
+      ALLOCATE (bra%pgf_scr(5, max_npgf*max_npgf*max_ncell))
       ALLOCATE (bra%cell_idx(3, max_ncell))
    END SUBROUTINE allocate_Bra
 
 ! **************************************************************************************************
-!> \brief Builds a screened list of primitives from centers A and B, intercing with another shell
-!> 
+!> \brief Builds a screened list of primitives from centers A and B, intersecting with another shell
+!>
 !> This subroutine populates the `Bra_t` structure with indices and screening data
 !> for primitive Gaussian pairs (ipgf,jpgf,n3) that pass the Schwarz screening criterion
-!>
-!> \details
-!> Loops over all cells, shifting the B shell position accordingly and 
-! screening primitive pairs (ipgf, jpgf) using both coarse and fine screening thresholds
-!> Only pairs satisfying the screening condition are stored.
 !>
 !> \param[in]  npgfa              Number of primitives in shell A
 !> \param[in]  npgfb              Number of primitives in shell B
 !> \param[out] bra                Pointer to Bra_t structure to populate
-!> \param[in]  screen1(2)         Screening coefficients for shell AB based on most diffuse pgf
-!> \param[in]  screen2(2)         Screening coefficients for other shell pair most diffuse pgf
-!> \param[in]  pgf(:,:)           Screening coeeficents for primitive gaussians
+!> \param[in]  screen1            Screening coeffiecients for the AB pair based on most diffuse pgf
+!> \param[in]  screen2            Screening coeffiecients for the CD pair based on most diffuse pgf
+!> \param[in]  pgf                Screening coeeficents for primitive gaussians
 !> \param[in]  log10_pmax         Log10 of maximum integral prefactor
 !> \param[in]  log10_eps_schwarz  Log10 of Schwarz screening threshold
-!> \param[in]  ra(3)              Cartesian coordinates of center A
-!> \param[in]  rb(3)              Cartesian coordinates of center B
+!> \param[in]  ra                 Cartesian coordinates of center A
+!> \param[in]  rb                 Cartesian coordinates of center B
 !> \param[out] nelements          Total number of valid primitives found
-!> \param[in]  neighbor_cells(:)  Array of lattice vectors
+!> \param[in]  neighbor_cells     Array of lattice vectors
 !> \param[in]  do_periodic        Logical flag for periodic boundary conditions on B
+!>
+!> \note Loops over all cells, shifting the B shell position accordingly
+!>       Only pairs satisfying the screening condition are stored.
 !>
 !> \note Each valid cell contributes a block of pairs stored contiguously in
 !>       bra%pgf_idx, with cell metadata stored in bra%cell_idx
+!> \note screening primitive pairs (ipgf, jpgf) using both coarse and fine screening thresholds
 ! **************************************************************************************************
    SUBROUTINE build_pair_list_pbc_pgf(npgfa, npgfb, bra, screen1, screen2, pgf, &
                                       log10_pmax, log10_eps_schwarz, ra, rb, nelements, &
                                       neighbor_cells, do_periodic)
 
       INTEGER, INTENT(IN)                                :: npgfa, npgfb
-      TYPE(bra_t), pointer                               :: bra
+      TYPE(bra_t), POINTER                               :: bra
       REAL(dp), INTENT(IN)                               :: screen1(2), screen2(2)
       TYPE(hfx_screen_coeff_type), DIMENSION(:, :), &
          POINTER                                         :: pgf
@@ -157,7 +157,7 @@ CONTAINS
                IF (pgf_max + screen2(2) + log10_pmax < log10_eps_schwarz) CYCLE
                ! This pair passed screening. Add it to the bra.
                element_idx = element_idx + 1
-               bra%pgf_idx(:, element_idx) = (/ipgf, jpgf, cell_idx/)
+               bra%pgf_idx(:, element_idx) = [ipgf, jpgf, cell_idx]
                bra%pgf_scr(1, element_idx) = pgf_max
                element_cnt = element_cnt + 1
             END DO
@@ -166,7 +166,7 @@ CONTAINS
          ! If this cell produced any pair, add this cell to the bra
          IF (element_cnt == 0) CYCLE
          cell_cnt = cell_cnt + 1
-         bra%cell_idx(:, cell_cnt) = (/cell_idx, element_cnt, element_off/)
+         bra%cell_idx(:, cell_cnt) = [cell_idx, element_cnt, element_off]
          element_off = element_off + element_cnt
 
       END DO ! cell

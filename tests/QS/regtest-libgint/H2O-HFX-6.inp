@@ -11,7 +11,7 @@
     BASIS_SET_FILE_NAME GTH_BASIS_SETS
     POTENTIAL_FILE_NAME POTENTIAL
     &MGRID
-      CUTOFF  80
+      CUTOFF 80
       REL_CUTOFF 40
     &END MGRID
     &QS
@@ -20,17 +20,17 @@
       WF_INTERPOLATION PS
     &END QS
     &SCF
+      EPS_SCF 1.0E-8
+      IGNORE_CONVERGENCE_FAILURE
       MAX_SCF 3
       SCF_GUESS ATOMIC
       &OT ON
         MINIMIZER DIIS
       &END OT
-      EPS_SCF      1.0E-8
       &PRINT
         &RESTART OFF
         &END RESTART
       &END PRINT
-    IGNORE_CONVERGENCE_FAILURE
     &END SCF
     &XC
       &HF
@@ -60,7 +60,7 @@
     &COORD
       O       2.280398       9.146539       5.088696
       H       1.762019       9.820429       5.528454
-      H       3.095987       9.107088       5.588186 
+      H       3.095987       9.107088       5.588186
       O       1.251703       2.406261       7.769908
       H       0.554129       2.982634       8.082024
       H       1.771257       2.954779       7.182181

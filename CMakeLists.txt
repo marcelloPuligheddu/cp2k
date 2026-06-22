@@ -839,7 +839,6 @@ if(CP2K_USE_LIBGINT)
   find_package(LibGint REQUIRED)
 endif()
 
-
 if(CP2K_USE_LIBFCI)
   find_package(LibFCI REQUIRED)
 endif()
@@ -1228,7 +1227,6 @@ if(CP2K_USE_LIBGINT)
           "   - libraries: ${CP2K_LIBGINT_LINK_LIBRARIES}\n\n")
 endif()
 
-
 if(CP2K_USE_LIBFCI)
   message(" - LibFCI\n"
           "   - include directories: ${CP2K_LIBFCI_INCLUDE_DIRS}\n"
@@ -1357,7 +1355,6 @@ endif()
 if(NOT CP2K_USE_LIBGINT)
   message("   - LibGint")
 endif()
-
 
 if(NOT CP2K_USE_LIBFCI)
   message("   - LibFCI")
