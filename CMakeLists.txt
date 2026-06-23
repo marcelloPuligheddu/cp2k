@@ -132,6 +132,7 @@ option(CP2K_USE_HDF5 "Enable HDF5 support" ${CP2K_USE_EVERYTHING})
 option(CP2K_USE_LIBFCI "Enable LibFCI active-space solver support"
        ${CP2K_USE_EVERYTHING})
 option(CP2K_USE_LIBINT2 "Enable Libint2 support" ${CP2K_USE_EVERYTHING})
+option(CP2K_USE_LIBGINT "Enable LibGint support" ${CP2K_USE_EVERYTHING})
 option(CP2K_USE_LIBTORCH "Enable LibTorch support" ${CP2K_USE_EVERYTHING})
 option(CP2K_USE_OPENPMD "Enable support for I/O via openPMD" OFF)
 option(CP2K_USE_LIBXC "Enable LibXC support" ${CP2K_USE_EVERYTHING})
@@ -834,6 +835,11 @@ if(CP2K_USE_LIBINT2)
   include_directories(BEFORE ${CP2K_LIBINT2_INCLUDE_DIRS})
 endif()
 
+if(CP2K_USE_LIBGINT)
+  find_package(LibGint REQUIRED)
+endif()
+
+
 if(CP2K_USE_LIBFCI)
   find_package(LibFCI REQUIRED)
 endif()
@@ -1216,6 +1222,13 @@ if(CP2K_USE_LIBINT2)
           "   - libraries: ${CP2K_LIBINT2_LINK_LIBRARIES}\n\n")
 endif()
 
+if(CP2K_USE_LIBGINT)
+  message(" - LibGint\n"
+          "   - include directories: ${CP2K_LIBGINT_INCLUDE_DIRS}\n"
+          "   - libraries: ${CP2K_LIBGINT_LINK_LIBRARIES}\n\n")
+endif()
+
+
 if(CP2K_USE_LIBFCI)
   message(" - LibFCI\n"
           "   - include directories: ${CP2K_LIBFCI_INCLUDE_DIRS}\n"
@@ -1340,6 +1353,11 @@ endif()
 if(NOT CP2K_USE_LIBINT2)
   message("   - Libint2")
 endif()
+
+if(NOT CP2K_USE_LIBGINT)
+  message("   - LibGint")
+endif()
+
 
 if(NOT CP2K_USE_LIBFCI)
   message("   - LibFCI")

@@ -359,6 +359,8 @@ Specific options of --with-PKG:
   --with-cusolvermp       NVIDIA cusolverMp: CUDA library for distributed dense
                           linear algebra.
                           Default = no
+  --with-libGint          Enable the use of libGint for the calculation of the Hartree-Fock exchange on (nvidia) GPUs
+                          Default = no
 
 FURTHER INSTRUCTIONS
 
@@ -477,7 +479,7 @@ math_list="mkl acml openblas"
 lib_list="fftw libint libxc gauxc libxsmm libxs libxstream cosma scalapack elpa dbcsr
           cusolvermp plumed spfft spla gsl spglib hdf5 libvdwxc sirius
           libvori libtorch deepmd ace dftd4 tblite pugixml libsmeagol
-          fmt trexio libfci greenx gmp mcl"
+          fmt trexio libfci greenx gmp mcl libGint"
 package_list="${tool_list} ${mpi_list} ${math_list} ${lib_list}"
 # ------------------------------------------------------------------------
 
@@ -523,7 +525,7 @@ with_dftd4="__DONTUSE__"
 with_tblite="__INSTALL__"
 with_libsmeagol="__DONTUSE__"
 with_mcl="__DONTUSE__"
-
+with_libGint="__DONTUSE__"
 # the math and mpi libraries are chosen by their respective modes.
 # default math library settings, MATH_MODE picks the math library
 # to use, and with_* defines the default method of installation if it
@@ -892,6 +894,9 @@ Otherwise use option no."
     --with-gsl*)
       with_gsl=$(read_with "${1}")
       ;;
+    --with-libGint*)
+      with_libGint=$(read_with "${1}")
+      ;;
     --with-fmt*)
       with_fmt=$(read_with "${1}")
       ;;
@@ -1152,7 +1157,13 @@ package will not be used separately."
   fi
 fi
 
-# Several packages require cmake.
+#libGint installation requires cuda or hip enabled
+if [ "${with_libGint}" != "__DONTUSE__" ] && [ ${enable_cuda} != "__TRUE__" ] && [ ${enable_hip} != "__TRUE__" ]; then
+  report_error "libGint requires the use of cuda or hip. Add --enable-cuda or --enable-hip"
+  exit 1
+fi
+
+# several packages require cmake.
 if [ "${with_spglib}" = "__INSTALL__" ] ||
   [ "${with_libvori}" = "__INSTALL__" ] ||
   [ "${with_scalapack}" = "__INSTALL__" ] ||
